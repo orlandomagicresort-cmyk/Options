@@ -1259,12 +1259,16 @@ def dashboard_page(user):
             tot_mkt = float(out["Total Market Value"].sum())
             tot_pct = (tot_mkt / denom * 100.0) if denom else 0.0
 
-            # Allocate Cash and ITM into Stock Value and LEAP Value for the TOTAL row only.
-            # (Per-ticker rows remain Stocks + LEAPs only, shorts ignored for value.)
+            # Allocate Cash and ITM into Stock Value and LEAP Value, and show them as rows.
+            # Per-ticker rows remain Stocks + LEAPs only (short value ignored).
+            # We allocate Cash/ITM between Stock vs LEAP columns based on their invested weights.
             try:
-                itm_val = -float(itm_liability_usd) if ('itm_liability_usd' in locals() or 'itm_liability_usd' in globals()) else 0.0
+                itm_val_raw = float(itm_liability_usd) if ('itm_liability_usd' in locals() or 'itm_liability_usd' in globals()) else 0.0
             except Exception:
-                itm_val = 0.0
+                itm_val_raw = 0.0
+            # ITM is a liability (deducted). Ensure it is negative in the table.
+            itm_val = -abs(itm_val_raw) if itm_val_raw != 0 else 0.0
+
             try:
                 cash_val = float(cash_usd) if ('cash_usd' in locals() or 'cash_usd' in globals()) else float(get_cash_balance(user_id))
             except Exception:
@@ -1273,28 +1277,57 @@ def dashboard_page(user):
                 except Exception:
                     cash_val = 0.0
 
-            invested_val = float(tot_stock + tot_leap_val)
-            if invested_val and invested_val != 0:
-                leap_w = float(tot_leap_val) / invested_val
-                stock_w = float(tot_stock) / invested_val
-            else:
-                leap_w = 0.0
-                stock_w = 0.0
+            # Invested denominator (tickers only): used for allocation weights
+            invested_val = float(tot_stock) + float(tot_leap_val)
+            alloc_denom = invested_val if invested_val else 0.0
+            w_stock = (float(tot_stock) / alloc_denom) if alloc_denom else 0.0
+            w_leap = (float(tot_leap_val) / alloc_denom) if alloc_denom else 0.0
 
-            # Allocate cash + ITM (liability) proportionally between stocks and LEAPs
-            alloc_stock = float(cash_val + itm_val) * stock_w
-            alloc_leap = float(cash_val + itm_val) * leap_w
+            # Allocate amounts into Stock/LEAP columns
+            cash_stock = float(cash_val) * w_stock
+            cash_leap = float(cash_val) * w_leap
+            itm_stock = float(itm_val) * w_stock
+            itm_leap = float(itm_val) * w_leap
 
-            tot_stock_adj = float(tot_stock) + alloc_stock
-            tot_leap_val_adj = float(tot_leap_val) + alloc_leap
+            # Portfolio denominator for % column: tickers + cash + itm (still ignores short value)
+            port_denom = invested_val + float(cash_val) + float(itm_val)
+            if not port_denom:
+                port_denom = invested_val  # fallback (avoid divide-by-zero if cash cancels itm)
 
-            # TOTAL market value includes Cash and ITM
+            def _pct(v):
+                try:
+                    return (float(v) / float(port_denom) * 100.0) if port_denom else 0.0
+                except Exception:
+                    return 0.0
+
+            # Add Cash row (same formatting as tickers)
+            total_html += (
+                f"<tr><td>Cash</td>"
+                f"<td></td>"
+                f"<td>${cash_stock:,.2f}</td>"
+                f"<td></td>"
+                f"<td>${cash_leap:,.2f}</td>"
+                f"<td></td>"
+                f"<td>${float(cash_val):,.2f}</td>"
+                f"<td>{_pct(cash_val):,.2f}%</td></tr>"
+            )
+
+            # Add ITM row (same formatting as tickers)
+            total_html += (
+                f"<tr><td>ITM</td>"
+                f"<td></td>"
+                f"<td>${itm_stock:,.2f}</td>"
+                f"<td></td>"
+                f"<td>${itm_leap:,.2f}</td>"
+                f"<td></td>"
+                f"<td>${float(itm_val):,.2f}</td>"
+                f"<td>{_pct(itm_val):,.2f}%</td></tr>"
+            )
+
+            # TOTAL row should be LAST, and should include Cash + ITM allocations
+            tot_stock_adj = float(tot_stock) + cash_stock + itm_stock
+            tot_leap_val_adj = float(tot_leap_val) + cash_leap + itm_leap
             tot_mkt_adj = invested_val + float(cash_val) + float(itm_val)
-
-            # Total % should remain 100% relative to Stocks+LEAPs allocation table
-            tot_pct = 100.0 if denom else 0.0
-
-            # Total row should be the LAST row
 
             total_html += (
                 f"<tr class='total-row'><td>Total</td>"
@@ -1304,9 +1337,8 @@ def dashboard_page(user):
                 f"<td>${tot_leap_val_adj:,.2f}</td>"
                 f"<td>{tot_short_ct:g}</td>"
                 f"<td>${tot_mkt_adj:,.2f}</td>"
-                f"<td>{tot_pct:,.2f}%</td></tr>"
+                f"<td>{100.0:,.2f}%</td></tr>"
             )
-
             total_html += "</tbody></table>"
             st.markdown(total_html, unsafe_allow_html=True)
         else:
