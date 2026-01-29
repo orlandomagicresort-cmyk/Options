@@ -348,6 +348,69 @@ def get_live_stock_price(symbol):
         # If it fails, return 0 so the dashboard falls back to your manual price
         return 0.0
 
+
+@st.cache_data(ttl=300)
+def _yahoo_option_chain(symbol: str, expiry: str):
+    """Return (calls_df, puts_df) for a given symbol/expiry from Yahoo Finance via yfinance."""
+    t = yf.Ticker(symbol)
+    chain = t.option_chain(expiry)
+    return chain.calls, chain.puts
+
+def _clean_symbol_for_yahoo(symbol: str) -> str:
+    """Best-effort symbol cleaning to avoid yfinance 'delisted' issues."""
+    if not symbol:
+        return ""
+    s = str(symbol)
+    m = re.search(r'\((.*?)\)', s)
+    if m:
+        s = m.group(1)
+    if ":" in s:
+        s = s.split(":")[-1]
+    return s.strip().upper()
+
+def get_yahoo_option_mid_price(symbol: str, expiry, strike, right: str):
+    """Get Yahoo mid price ( (bid+ask)/2 ) for an option contract, with sensible fallbacks.
+
+    Returns float or None if not found.
+    """
+    sym = _clean_symbol_for_yahoo(symbol)
+    exp = _iso_date(expiry)
+    try:
+        k = float(strike)
+    except Exception:
+        return None
+    if not sym or not exp:
+        return None
+
+    try:
+        calls, puts = _yahoo_option_chain(sym, exp)
+        df = calls if str(right).upper().startswith("C") else puts
+        if df is None or df.empty or "strike" not in df.columns:
+            return None
+
+        diffs = (df["strike"].astype(float) - k).abs()
+        idx = diffs.idxmin()
+        if float(diffs.loc[idx]) > 0.001:  # require an exact-ish match
+            return None
+
+        row = df.loc[idx]
+        bid = float(row.get("bid") or 0.0)
+        ask = float(row.get("ask") or 0.0)
+        last = float(row.get("lastPrice") or 0.0)
+
+        if bid > 0 and ask > 0:
+            return round((bid + ask) / 2.0, 4)
+        if last > 0:
+            return round(last, 4)
+        if bid > 0:
+            return round(bid, 4)
+        if ask > 0:
+            return round(ask, 4)
+        return None
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=3600)
 def get_usd_to_cad_rate():
     try:
@@ -566,12 +629,47 @@ def get_holdings_for_symbol(user_id, symbol):
     except: return []
 
 def get_locked_collateral(user_id):
+    """Returns {asset_id: contracts_used} for open options with linked collateral.
+
+    NOTE: Supabase may return ids as int or str depending on schema; we normalize keys to str.
+    """
     try:
-        res = supabase.table("options").select("linked_asset_id, contracts").eq("user_id", user_id).eq("status", "open").not_.is_("linked_asset_id", "null").execute()
+        res = (
+            supabase.table("options")
+            .select("linked_asset_id, contracts")
+            .eq("user_id", user_id)
+            .eq("status", "open")
+            .not_.is_("linked_asset_id", "null")
+            .execute()
+        )
         locked = {}
-        for r in res.data: locked[r['linked_asset_id']] = locked.get(r['linked_asset_id'], 0) + r['contracts']
+        for r in (res.data or []):
+            aid = r.get('linked_asset_id')
+            if aid is None:
+                continue
+            key = str(aid)
+            locked[key] = locked.get(key, 0) + int(r.get('contracts', 0) or 0)
         return locked
-    except: return {}
+    except:
+        return {}
+
+
+def get_open_short_call_contracts(user_id, symbol):
+    """Total open short CALL contracts for a ticker (used to infer collateral usage when linked_asset_id is missing)."""
+    try:
+        res = (
+            supabase.table("options")
+            .select("contracts")
+            .eq("user_id", user_id)
+            .eq("symbol", symbol)
+            .eq("status", "open")
+            .eq("type", "CALL")
+            .execute()
+        )
+        return int(sum(int(r.get("contracts", 0) or 0) for r in (res.data or [])))
+    except:
+        return 0
+
 # --------------------------------------------------------------------------------
 # 6. DASHBOARD & PAGES
 # --------------------------------------------------------------------------------
@@ -833,18 +931,193 @@ def dashboard_page(user):
     fy_profit = ytd_profit * (365.0 / days_elapsed)
     fy_pct = ((1.0 + ytd_pct) ** (365.0 / days_elapsed) - 1.0) if ytd_pct > -1 else 0.0
 
-    # Lifetime: current equity - total net deposits (USD); % vs total net deposits
-    try:
-        tx_res = supabase.table("transactions").select("amount,type,currency")\
-            .eq("user_id", user.id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
-        tx = pd.DataFrame(tx_res.data)
-        life_flow = float(tx[tx["currency"] == "USD"]["amount"].sum()) if not tx.empty else 0.0
-    except Exception:
-        life_flow = 0.0
-    life_base = life_flow
-    life_profit = net_liq_usd - life_base
-    life_pct = (life_profit / life_base) if life_base != 0 else 0.0
-    # Summary table (%, US$, CA$)
+
+    # Lifetime: compound the *Weekly %* from the Weekly Snapshot calculation (flow-normalized)
+    # This compounds week-over-week and therefore ignores deposits/withdrawals (they are normalized out in Weekly %).
+    def _lifetime_compound_from_weekly_snapshot_pct():
+        try:
+            hist_df = get_portfolio_history(user.id)
+            if hist_df is None or hist_df.empty:
+                return None
+
+            hist_df = normalize_columns(hist_df)
+            if "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+                return None
+
+            hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
+            hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
+            hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
+            hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
+            if hist_df.empty:
+                return None
+
+            # Transactions needed to compute Weekly % (flow-normalized)
+            tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")                .eq("user_id", user.id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+            tx_df = pd.DataFrame(tx_res.data)
+            if not tx_df.empty:
+                tx_df = normalize_columns(tx_df)
+                tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+                tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce")
+                tx_df = tx_df.dropna(subset=["transaction_date", "amount"])
+                # Keep USD flows only for USD equity snapshots
+                if "currency" in tx_df.columns:
+                    tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+            else:
+                tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
+
+            weekly_rets = []
+            weekly_profits = []
+            for i in range(len(hist_df)):
+                curr_date = hist_df.iloc[i]["snapshot_date"]
+                curr_eq = float(hist_df.iloc[i]["total_equity"])
+
+                if i == 0:
+                    prev_date = pd.Timestamp.min
+                    prev_eq = 0.0
+                else:
+                    prev_date = hist_df.iloc[i-1]["snapshot_date"]
+                    prev_eq = float(hist_df.iloc[i-1]["total_equity"])
+
+                net_flow = 0.0
+                if not tx_df.empty:
+                    mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
+                    net_flow = float(tx_df.loc[mask, "amount"].sum())
+
+                base_capital = prev_eq + net_flow
+                weekly_profit = curr_eq - base_capital
+
+                if i == 0 or base_capital == 0:
+                    weekly_ret = 0.0
+                else:
+                    weekly_ret = weekly_profit / base_capital
+
+                weekly_rets.append(float(weekly_ret))
+                weekly_profits.append(float(weekly_profit))
+
+            # Compound Weekly % week-over-week (skip first row which is always 0)
+            prod = 1.0
+            for r in weekly_rets[1:]:
+                # guard against NaN/inf
+                if r is None or (isinstance(r, float) and (math.isinf(r) or math.isnan(r))):
+                    r = 0.0
+                prod *= (1.0 + float(r))
+            life_pct_local = float(prod - 1.0)
+
+            # Lifetime profit dollars: sum of flow-normalized weekly P/L values (ignores deposits/withdrawals).
+            # This matches your request to "just add the weekly P/L" week-over-week.
+            life_profit_local = float(sum(weekly_profits[1:])) if len(weekly_profits) > 1 else 0.0
+
+            return life_profit_local, life_pct_local
+
+        except Exception:
+            return None
+
+    def _rolling_52w_from_weekly_snapshot_pct():
+        """Return (profit_usd, pct) for trailing 52 weeks based on the same Weekly % logic used in the History tab.
+        Uses portfolio_history weekly snapshots and flow-normalizes weekly returns using DEPOSIT/WITHDRAWAL transactions.
+        """
+        try:
+            hist_df = get_portfolio_history(user.id)
+            if hist_df is None or hist_df.empty:
+                return None
+
+            hist_df = normalize_columns(hist_df)
+            if "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+                return None
+
+            hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
+            hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
+            hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
+            hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
+            if len(hist_df) < 2:
+                return 0.0, 0.0
+
+            # Transactions needed to compute Weekly % (flow-normalized)
+            tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")                .eq("user_id", user.id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+            tx_df = pd.DataFrame(tx_res.data)
+            if not tx_df.empty:
+                tx_df = normalize_columns(tx_df)
+                tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+                tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce")
+                tx_df = tx_df.dropna(subset=["transaction_date", "amount"])
+                if "currency" in tx_df.columns:
+                    tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+            else:
+                tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
+
+            weekly_rets = []
+            weekly_profits = []
+            weekly_flows = []
+            for i in range(len(hist_df)):
+                curr_date = hist_df.iloc[i]["snapshot_date"]
+                curr_eq = float(hist_df.iloc[i]["total_equity"])
+
+                if i == 0:
+                    prev_date = pd.Timestamp.min
+                    prev_eq = 0.0
+                else:
+                    prev_date = hist_df.iloc[i-1]["snapshot_date"]
+                    prev_eq = float(hist_df.iloc[i-1]["total_equity"])
+
+                net_flow = 0.0
+                if not tx_df.empty:
+                    mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
+                    net_flow = float(tx_df.loc[mask, "amount"].sum())
+
+                base_capital = prev_eq + net_flow
+                weekly_profit = curr_eq - base_capital
+
+                if i == 0 or base_capital == 0:
+                    weekly_ret = 0.0
+                else:
+                    weekly_ret = weekly_profit / base_capital
+
+                weekly_rets.append(float(weekly_ret))
+                weekly_profits.append(float(weekly_profit))
+                weekly_flows.append(float(net_flow))
+
+            # Trailing 52 weeks: compound last 52 weekly returns ending at last snapshot
+            end_i = len(hist_df) - 1
+            start_k = max(1, end_i - 51)  # matches History tab logic
+            window_rets = [float(weekly_rets[k]) for k in range(start_k, end_i + 1)]
+            prod = 1.0
+            for r in window_rets:
+                if r is None or (isinstance(r, float) and (math.isinf(r) or math.isnan(r))):
+                    r = 0.0
+                prod *= (1.0 + float(r))
+            pct_52w = float(prod - 1.0) if window_rets else 0.0
+
+            # Dollar profit over same window: sum of flow-normalized weekly P/L values in the window.
+            # This ignores deposits/withdrawals by construction (weekly_profit = curr_eq - (prev_eq + net_flow)).
+            profit_52w = float(sum(weekly_profits[start_k:end_i + 1])) if (end_i >= start_k) else 0.0
+            return profit_52w, pct_52w
+
+        except Exception:
+            return None
+
+    _life = _lifetime_compound_from_weekly_snapshot_pct()
+
+    if _life is not None:
+        life_profit, life_pct = _life
+    else:
+        # Fallback: previous behavior (vs total net deposits)
+        try:
+            tx_res = supabase.table("transactions").select("amount,type,currency")\
+                .eq("user_id", user.id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+            tx = pd.DataFrame(tx_res.data)
+            life_flow = float(tx[tx["currency"] == "USD"]["amount"].sum()) if not tx.empty else 0.0
+        except Exception:
+            life_flow = 0.0
+        life_base = life_flow
+        life_profit = net_liq_usd - life_base
+        life_pct = (life_profit / life_base) if life_base != 0 else 0.0
+    
+    _52w = _rolling_52w_from_weekly_snapshot_pct()
+    if _52w is not None:
+        perf_52w_profit, perf_52w_pct = _52w
+    else:
+        perf_52w_profit, perf_52w_pct = 0.0, 0.0
+# Summary table (%, US$, CA$)
     def _fmt_money(x): return f"${x:,.2f}"
     def _fmt_pct(x): return f"{x*100:.2f}%"
 
@@ -852,6 +1125,7 @@ def dashboard_page(user):
         ("WTD", wtd_pct, wtd_profit, wtd_profit * fx),
         ("MTD", mtd_pct, mtd_profit, mtd_profit * fx),
         ("YTD", ytd_pct, ytd_profit, ytd_profit * fx),
+        ("52W", perf_52w_pct, perf_52w_profit, perf_52w_profit * fx),
         ("Lifetime", life_pct, life_profit, life_profit * fx),
         ("FY Run Rate", fy_pct, fy_profit, fy_profit * fx),
     ]
@@ -901,6 +1175,136 @@ def dashboard_page(user):
     else:
         stocks_df = pd.DataFrame()
         leaps_df = pd.DataFrame()
+
+    
+    # --- Total Holdings by Ticker (Stocks + Long LEAPS; Shorts shown as contracts only) ---
+    st.subheader("Total Holdings")
+    try:
+        totals = {}
+
+        # Stocks
+        if not stocks_df.empty:
+            tmp_s = stocks_df.copy()
+            tmp_s['sym'] = tmp_s.get('symbol', tmp_s.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
+            tmp_s['shares'] = pd.to_numeric(tmp_s.get('quantity', 0), errors='coerce').fillna(0.0)
+            tmp_s['stock_val'] = pd.to_numeric(tmp_s.get('market_value', 0), errors='coerce').fillna(0.0)
+
+            for sym, g in tmp_s.groupby('sym'):
+                totals.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                       "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                       "Short Contracts": 0.0})
+                totals[sym]["Shares"] += float(g['shares'].sum())
+                totals[sym]["Stock Value"] += float(g['stock_val'].sum())
+
+        # Long LEAPS (Options assets)
+        if not leaps_df.empty:
+            tmp_l = leaps_df.copy()
+            tmp_l['sym'] = tmp_l.get('symbol', tmp_l.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
+            tmp_l['contracts'] = pd.to_numeric(tmp_l.get('quantity', 0), errors='coerce').fillna(0.0)
+            tmp_l['px'] = pd.to_numeric(tmp_l.get('current_price', tmp_l.get('last_price', 0)), errors='coerce').fillna(0.0)
+            tmp_l['leap_val'] = tmp_l['contracts'] * 100.0 * tmp_l['px']
+
+            for sym, g in tmp_l.groupby('sym'):
+                totals.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                       "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                       "Short Contracts": 0.0})
+                totals[sym]["LEAP Contracts"] += float(g['contracts'].sum())
+                totals[sym]["LEAP Value"] += float(g['leap_val'].sum())
+
+        # Short options (contracts only; ignore value)
+        if grouped_options:
+            by_sym_short = {}
+            for r in grouped_options.values():
+                sym = str(r.get('symbol', 'UNK')).upper().strip()
+                by_sym_short[sym] = by_sym_short.get(sym, 0.0) + float(r.get('qty', 0.0) or 0.0)
+            for sym, ct in by_sym_short.items():
+                totals.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                       "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                       "Short Contracts": 0.0})
+                totals[sym]["Short Contracts"] += float(ct)
+
+        if totals:
+            out = pd.DataFrame(list(totals.values()))
+            out["Total Market Value"] = out["Stock Value"] + out["LEAP Value"]
+
+            denom = float(out["Total Market Value"].sum())
+            if denom and denom != 0:
+                out["% of Portfolio"] = out["Total Market Value"] / denom
+            else:
+                out["% of Portfolio"] = 0.0
+
+            out = out.sort_values("Ticker")
+
+            total_html = "<table class='finance-table'><thead><tr>" \
+                         "<th>Ticker</th><th>Shares</th><th>Stock Value</th><th>LEAP Contracts</th><th>LEAP Value</th>" \
+                         "<th>Short Contracts</th><th>Total Market Value</th><th>% of Portfolio</th></tr></thead><tbody>"
+
+            for _, r in out.iterrows():
+                total_html += (
+                    f"<tr><td>{r['Ticker']}</td>"
+                    f"<td>{float(r['Shares']):g}</td>"
+                    f"<td>${float(r['Stock Value']):,.2f}</td>"
+                    f"<td>{float(r['LEAP Contracts']):g}</td>"
+                    f"<td>${float(r['LEAP Value']):,.2f}</td>"
+                    f"<td>{float(r['Short Contracts']):g}</td>"
+                    f"<td>${float(r['Total Market Value']):,.2f}</td>"
+                    f"<td>{float(r['% of Portfolio'])*100:,.2f}%</td></tr>"
+                )
+
+            tot_shares = float(out["Shares"].sum())
+            tot_stock = float(out["Stock Value"].sum())
+            tot_leap_ct = float(out["LEAP Contracts"].sum())
+            tot_leap_val = float(out["LEAP Value"].sum())
+            tot_short_ct = float(out["Short Contracts"].sum())
+            tot_mkt = float(out["Total Market Value"].sum())
+            tot_pct = (tot_mkt / denom * 100.0) if denom else 0.0
+
+            total_html += (
+                f"<tr class='total-row'><td>Total</td>"
+                f"<td>{tot_shares:g}</td>"
+                f"<td>${tot_stock:,.2f}</td>"
+                f"<td>{tot_leap_ct:g}</td>"
+                f"<td>${tot_leap_val:,.2f}</td>"
+                f"<td>{tot_short_ct:g}</td>"
+                f"<td>${tot_mkt:,.2f}</td>"
+                f"<td>{tot_pct:,.2f}%</td></tr>"
+            )
+
+            # Add ITM and Cash footer rows (blank columns except Total Market Value and %)
+            try:
+                itm_val = -float(itm_liability_usd) if 'itm_liability_usd' in locals() or 'itm_liability_usd' in globals() else 0.0
+            except Exception:
+                itm_val = 0.0
+            try:
+                cash_val = float(cash_usd) if 'cash_usd' in locals() or 'cash_usd' in globals() else float(get_cash_balance(user_id))
+            except Exception:
+                try:
+                    cash_val = float(get_cash_balance(user_id))
+                except Exception:
+                    cash_val = 0.0
+
+            itm_pct = (itm_val / denom * 100.0) if denom else 0.0
+            cash_pct = (cash_val / denom * 100.0) if denom else 0.0
+
+            total_html += (
+                f"<tr class='total-row'><td>ITM</td>"
+                f"<td></td><td></td><td></td><td></td><td></td>"
+                f"<td>${itm_val:,.2f}</td>"
+                f"<td>{itm_pct:,.2f}%</td></tr>"
+            )
+            total_html += (
+                f"<tr class='total-row'><td>Cash</td>"
+                f"<td></td><td></td><td></td><td></td><td></td>"
+                f"<td>${cash_val:,.2f}</td>"
+                f"<td>{cash_pct:,.2f}%</td></tr>"
+            )
+
+            total_html += "</tbody></table>"
+            st.markdown(total_html, unsafe_allow_html=True)
+        else:
+            st.info("No holdings to summarize.")
+    except Exception as e:
+        st.warning(f"Total Holdings summary unavailable: {e}")
 
     st.subheader("Stock Holdings (USD)")
     if not stocks_df.empty:
@@ -1686,7 +2090,7 @@ def import_page(user):
             try:
                 df = pd.read_csv(f_lp)
                 df.columns = [c.strip().lower() for c in df.columns]
-                rename_map = {'quantity': 'qty', 'contracts': 'qty', 'symbol': 'ticker', 'stock': 'ticker', 'cost': 'price', 'premium': 'price', 'commission': 'fees', 'comm': 'fees', 'expiration_date': 'expiration', 'expiry': 'expiration', 'exp': 'expiration', 'strike_price': 'strike'}
+                rename_map = {'quantity': 'qty', 'contracts': 'qty', 'symbol': 'ticker', 'stock': 'ticker', 'cost': 'price', 'premium': 'price', 'commission': 'fees', 'comm': 'fees', 'expiration_date': 'expiration', 'expiry': 'expiration', 'exp': 'expiration', 'strike_price': 'strike', 'option type': 'type', 'option_type': 'type', 'opt_type': 'type', 'right': 'type', 'put/call': 'type', 'call/put': 'type'}
                 df.rename(columns=rename_map, inplace=True)
                 df['date_parsed'] = pd.to_datetime(df['date'], errors='coerce')
                 
@@ -1713,7 +2117,7 @@ def import_page(user):
             try:
                 df = pd.read_csv(f_op)
                 df.columns = [c.strip().lower() for c in df.columns]
-                rename_map = {'quantity': 'qty', 'contracts': 'qty', 'symbol': 'ticker', 'stock': 'ticker', 'cost': 'price', 'premium': 'price', 'commission': 'fees', 'comm': 'fees', 'expiration_date': 'expiration', 'expiry': 'expiration', 'exp': 'expiration', 'strike_price': 'strike'}
+                rename_map = {'quantity': 'qty', 'contracts': 'qty', 'symbol': 'ticker', 'stock': 'ticker', 'cost': 'price', 'premium': 'price', 'commission': 'fees', 'comm': 'fees', 'expiration_date': 'expiration', 'expiry': 'expiration', 'exp': 'expiration', 'strike_price': 'strike', 'option type': 'type', 'option_type': 'type', 'opt_type': 'type', 'right': 'type', 'put/call': 'type', 'call/put': 'type'}
                 df.rename(columns=rename_map, inplace=True)
                 df['date_parsed'] = pd.to_datetime(df['date'], errors='coerce')
                 
@@ -1824,8 +2228,9 @@ def import_page(user):
                     'commission': 'fees', 'comm': 'fees',
                     'expiration_date': 'expiration', 'expiry': 'expiration', 'exp': 'expiration',
                     'strike_price': 'strike',
-                    'type': 'category', 'class': 'category', # Map 'Type' to Category
-                    'option_type': 'opt_type', 'right': 'opt_type' # Call/Put
+                    'type': 'category', 'class': 'category',  # Map 'Type' to Category
+                    'option_type': 'opt_type', 'option type': 'opt_type', 'opt_type': 'opt_type',
+                    'right': 'opt_type', 'put/call': 'opt_type', 'call/put': 'opt_type'  # Call/Put
                 }
                 # Be careful not to overwrite 'type' if it refers to Call/Put vs Asset Class
                 # Heuristic: If 'category' column exists, use it. If not, look for 'class'.
@@ -1944,25 +2349,143 @@ def cash_management_page(user):
             log_transaction(user.id, f"{txn_type} (CAD Basis)", f_cad, db_type, rel_sym, txn_date, currency="CAD")
         st.success(f"Processed {txn_type}")
 
+
 def pricing_page(user):
-    st.header("📈 Update LEAP Prices")
+    st.header("📈 Update LEAP Prices (Yahoo Mid)")
+
     assets, _ = get_portfolio_data(user.id)
-    if not assets.empty:
-        leaps = assets[assets['type'].str.contains("LONG|LEAP", case=False, na=False)].copy()
-        if not leaps.empty:
-            leaps['ticker'] = leaps.get('ticker', leaps['symbol'])
-            leaps['sort_ticker'] = leaps['ticker'].astype(str).str.upper()
-            leaps.sort_values(by=['sort_ticker', 'expiration', 'strike_price'], inplace=True)
-            leaps['type_disp'] = leaps['type'].str.replace('LONG_', 'LEAP ').replace('LEAP_', 'LEAP ').str.title()
-            leaps['expiration'] = leaps['expiration'].apply(format_date_custom)
-            
-            edited_df = st.data_editor(leaps[['id', 'ticker', 'expiration', 'strike_price', 'type_disp', 'last_price']], column_config={"id": None, "ticker": "Ticker", "expiration": "Exp", "strike_price": st.column_config.NumberColumn("Strike", format="$%.2f"), "last_price": st.column_config.NumberColumn("Price (USD)", format="$%.2f", required=True)}, hide_index=True, key="leap_editor", use_container_width=True)
-            
-            if st.button("Save Updated Prices", type="primary"):
-                for _, row in edited_df.iterrows(): supabase.table("assets").update({"last_price": row['last_price']}).eq("id", row['id']).execute()
-                st.success("Prices updated."); st.rerun()
-        else: st.info("No LEAP positions found.")
-    else: st.info("No assets found.")
+    if assets.empty:
+        st.info("No assets found.")
+        return
+
+    leaps = assets[assets['type'].str.contains("LONG|LEAP", case=False, na=False)].copy()
+    if leaps.empty:
+        st.info("No LEAP positions found.")
+        return
+
+    # Keep raw fields for pricing lookups
+    leaps['ticker'] = leaps.get('ticker', leaps.get('symbol', ''))
+    leaps['ticker_clean'] = leaps['ticker'].astype(str)
+    leaps['exp_iso'] = leaps.get('expiration', '').apply(_iso_date)
+    leaps['exp_disp'] = leaps['exp_iso'].apply(format_date_custom)
+
+    # Determine option right from asset type
+    def _right_from_type(t):
+        s = str(t).upper()
+        return "PUT" if "PUT" in s else "CALL"
+    leaps['right'] = leaps['type'].apply(_right_from_type)
+
+    leaps['sort_ticker'] = leaps['ticker_clean'].astype(str).str.upper()
+    leaps.sort_values(by=['sort_ticker', 'exp_iso', 'strike_price'], inplace=True)
+
+    leaps['type_disp'] = (
+        leaps['type'].astype(str)
+        .str.replace('LONG_', 'LEAP ', regex=False)
+        .str.replace('LEAP_', 'LEAP ', regex=False)
+        .str.title()
+    )
+
+    # Controls
+    c1, c2, c3 = st.columns([1.4, 1.4, 2.2])
+    with c1:
+        auto_refresh = st.checkbox("Auto-refresh from Yahoo (once/day)", value=True)
+    with c2:
+        auto_save = st.checkbox("Auto-save refreshed prices to DB", value=True)
+    with c3:
+        st.caption("Uses Yahoo option chain **bid/ask mid** when available (fallback: lastPrice, bid, ask).")
+
+    refresh_now = st.button("🔄 Refresh Yahoo Mid Prices", type="primary")
+
+    # One-per-day guard
+    today_key = f"leap_mid_autorefresh_{user.id}"
+    today_iso = date.today().isoformat()
+
+    def _refresh_and_optionally_save(df_in: pd.DataFrame, do_save: bool) -> pd.DataFrame:
+        df = df_in.copy()
+        mids = []
+        changed = 0
+
+        with st.spinner("Fetching Yahoo option mid prices..."):
+            prog = st.progress(0)
+            rows = list(df.itertuples(index=False))
+            total = max(len(rows), 1)
+
+            for i, r in enumerate(rows, start=1):
+                sym = getattr(r, "ticker_clean", "")
+                exp = getattr(r, "exp_iso", "")
+                strike = getattr(r, "strike_price", None)
+                right = getattr(r, "right", "CALL")
+
+                mid = get_yahoo_option_mid_price(sym, exp, strike, right)
+                mids.append(mid)
+
+                prog.progress(i / total)
+
+        df["yahoo_mid"] = mids
+
+        # Choose new price: Yahoo mid if available else keep existing last_price
+        df["current_db_price"] = df.get("last_price", 0.0).apply(clean_number)
+        df["new_price"] = df.apply(
+            lambda r: r["yahoo_mid"] if (r["yahoo_mid"] is not None and not pd.isna(r["yahoo_mid"])) else r["current_db_price"],
+            axis=1
+        ).astype(float)
+
+        if do_save:
+            for _, row in df.iterrows():
+                new_p = float(row["new_price"])
+                old_p = float(row["current_db_price"])
+                if abs(new_p - old_p) > 1e-9:
+                    supabase.table("assets").update({"last_price": new_p}).eq("id", row["id"]).execute()
+                    changed += 1
+
+            st.success(f"✅ Saved {changed} updated LEAP prices to the database.")
+        return df
+
+    should_refresh = refresh_now or (auto_refresh and st.session_state.get(today_key) != today_iso)
+
+    if should_refresh:
+        out_df = _refresh_and_optionally_save(leaps, auto_save)
+        st.session_state[today_key] = today_iso
+    else:
+        # Show without hitting Yahoo
+        out_df = leaps.copy()
+        out_df["yahoo_mid"] = None
+        out_df["current_db_price"] = out_df.get("last_price", 0.0).apply(clean_number)
+        out_df["new_price"] = out_df["current_db_price"]
+
+    # Display
+    show = out_df[[
+        "id", "ticker_clean", "exp_disp", "strike_price", "right", "type_disp",
+        "current_db_price", "yahoo_mid", "new_price"
+    ]].copy()
+
+    show.rename(columns={
+        "ticker_clean": "Ticker",
+        "exp_disp": "Exp",
+        "strike_price": "Strike",
+        "right": "Right",
+        "type_disp": "Type",
+        "current_db_price": "DB Price",
+        "yahoo_mid": "Yahoo Mid",
+        "new_price": "Lead Price (New)"
+    }, inplace=True)
+
+    st.dataframe(
+        show,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "id": None,
+            "Strike": st.column_config.NumberColumn("Strike", format="$%.2f"),
+            "DB Price": st.column_config.NumberColumn("DB Price", format="$%.4f"),
+            "Yahoo Mid": st.column_config.NumberColumn("Yahoo Mid", format="$%.4f"),
+            "Lead Price (New)": st.column_config.NumberColumn("Lead Price (New)", format="$%.4f"),
+        }
+    )
+
+    st.caption("Tip: If a contract can't be found on Yahoo for that expiry/strike, the app keeps the stored DB price.")
+
+
 
 def safe_reverse_ledger_transaction(transaction_id):
     res = supabase.table("transactions").select("*").eq("id", transaction_id).execute()
@@ -2094,7 +2617,26 @@ def ledger_page(user):
 
 def trade_entry_page(user):
     st.header("⚡ Smart Trade Entry")
-    if 'txn_success_msg' in st.session_state: st.success(st.session_state['txn_success_msg']); del st.session_state['txn_success_msg']
+
+    # Helper: default option expiry is the next Friday from the selected trade date
+    def _next_friday(d: date) -> date:
+        days_ahead = (4 - d.weekday()) % 7
+        if days_ahead == 0:
+            days_ahead = 7
+        return d + timedelta(days=days_ahead)
+
+    # If a trade was just submitted, reset widgets so the page returns to the "landing" state
+    if st.session_state.get("te_reset_pending"):
+        for k in ["te_trade_date", "te_tick_sel", "te_man_sell", "te_man_buy", "te_exp_date", "te_pos_mode"]:
+            if k in st.session_state:
+                del st.session_state[k]
+        del st.session_state["te_reset_pending"]
+
+    if 'txn_success_msg' in st.session_state:
+        st.success(st.session_state['txn_success_msg'])
+        # Scroll back to the top so it feels like returning to the Enter Trade landing view
+        st.markdown('<script>window.scrollTo(0,0);</script>', unsafe_allow_html=True)
+        del st.session_state['txn_success_msg']
     trade_cat = st.radio("1. Type", ["Stock Trade", "Option Trade"], horizontal=True)
     c1, c2 = st.columns([1, 2])
     with c1: action = st.radio("2. Action", ["Buy", "Sell"], horizontal=True)
@@ -2122,23 +2664,66 @@ def trade_entry_page(user):
             
             if st.button("Submit Stock Trade", type="primary"):
                 update_asset_position(user.id, symbol, qty, price, action, trade_date, "STOCK", fees=fees)
-                st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} (Fees: ${fees})."; st.rerun()
+                st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} (Fees: ${fees})."; st.session_state['te_reset_pending'] = True; st.session_state['te_reset_pending'] = True; st.rerun()
         else:
             c1, c2, c3 = st.columns(3)
-            exp_date = c1.date_input("Exp Date", value=(trade_date + timedelta(days=30)), key="te_exp_date"); strike = c2.number_input("Strike", value=def_p, step=0.5); opt_type = c3.selectbox("Type", ["CALL", "PUT"])
+            exp_date = c1.date_input("Exp Date", value=_next_friday(trade_date), key="te_exp_date"); strike = c2.number_input("Strike", value=def_p, step=0.5); opt_type = c3.selectbox("Type", ["CALL", "PUT"])
             pos_mode = st.radio("Option Position", ["Short (Sell Premium)", "Long (LEAP / Bought Option)"], horizontal=True, key="te_pos_mode")
             linked_id = None; max_allowed = None
             if pos_mode.startswith("Short") and action == "Sell" and opt_type == "CALL":
                 holdings_data = get_holdings_for_symbol(user.id, symbol); locked_map = get_locked_collateral(user.id)
+
+                # If some open short calls were imported without a linked_asset_id, infer collateral already consumed
+                total_open_calls = get_open_short_call_contracts(user.id, symbol)
+                linked_total = sum(int(locked_map.get(str(h.get('id')), 0) or 0) for h in holdings_data)
+                unlinked_calls = max(0, int(total_open_calls) - int(linked_total))
+
+                # Allocate unlinked short calls to shares first, then LEAPs (conservative availability)
+                stock_holdings = [h for h in holdings_data if "STOCK" in str(h.get('type','')).upper()]
+                leap_holdings  = [h for h in holdings_data if ("LONG_" in str(h.get('type','')).upper()) or ("LEAP_" in str(h.get('type','')).upper())]
+                unlinked_used = {}
+
+                remaining = unlinked_calls
+                for h in stock_holdings:
+                    hid = str(h.get('id'))
+                    qty = float(h.get('quantity', 0) or 0)
+                    max_contracts = int(qty // 100)
+                    take = min(remaining, max_contracts)
+                    if take > 0:
+                        unlinked_used[hid] = unlinked_used.get(hid, 0) + take
+                        remaining -= take
+                    if remaining <= 0:
+                        break
+
+                for h in leap_holdings:
+                    if remaining <= 0:
+                        break
+                    hid = str(h.get('id'))
+                    qty = int(float(h.get('quantity', 0) or 0))
+                    take = min(remaining, qty)
+                    if take > 0:
+                        unlinked_used[hid] = unlinked_used.get(hid, 0) + take
+                        remaining -= take
+
                 valid_opts = {"None (Unsecured)": {"id": None, "limit": float('inf')}}; coll_found = False
                 for h in holdings_data:
-                    h_type = h.get('type', ''); h_qty = h.get('quantity', 0); h_id = h['id']; used = locked_map.get(h_id, 0)
-                    if "STOCK" in h_type: 
-                        avail = h_qty - (used * 100); poss = int(avail // 100)
-                        if poss > 0: coll_found = True; valid_opts[f"Shares: {int(avail)} avail"] = {"id": h_id, "limit": poss}
-                    elif "LONG_" in h_type or "LEAP_" in h_type: 
-                        avail = int(h_qty - used)
-                        if avail > 0: coll_found = True; valid_opts[f"LEAP ${float(h.get('strike_price',0)):.2f}: {avail} avail"] = {"id": h_id, "limit": avail}
+                    h_type = str(h.get('type', '')).upper()
+                    h_qty = float(h.get('quantity', 0) or 0)
+                    h_id = h.get('id')
+                    linked_used = int(locked_map.get(str(h_id), 0) or 0)
+                    inferred_used = int(unlinked_used.get(str(h_id), 0) or 0)
+                    used_total = linked_used + inferred_used
+                    if "STOCK" in h_type:
+                        avail_shares = int(max(0, int(h_qty) - (used_total * 100)))
+                        poss = int(avail_shares // 100)
+                        if poss > 0:
+                            coll_found = True
+                            valid_opts[f"Shares: {avail_shares} avail"] = {"id": h_id, "limit": poss}
+                    elif "LONG_" in h_type or "LEAP_" in h_type:
+                        avail = int(max(0, int(h_qty) - used_total))
+                        if avail > 0:
+                            coll_found = True
+                            valid_opts[f"LEAP ${float(h.get('strike_price',0)):.2f}: {avail} avail"] = {"id": h_id, "limit": avail}
                 if coll_found:
                     sel_lbl = st.selectbox("Link Collateral", list(valid_opts.keys()))
                     linked_id = valid_opts[sel_lbl]["id"]; max_allowed = valid_opts[sel_lbl]["limit"]
@@ -2159,7 +2744,7 @@ def trade_entry_page(user):
                      update_asset_position(user.id, symbol, qty, prem, action, trade_date, f"LEAP_{opt_type}", exp_date, strike, fees=fees)
                  else:
                      # Short option liability tracked in options table
-                     update_short_option_position(user.id, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike, fees=fees)
+                     update_short_option_position(user.id, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike, fees=fees, linked_asset_id_override=linked_id)
 
                  mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
                  st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."; st.rerun()
