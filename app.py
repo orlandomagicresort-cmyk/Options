@@ -1259,44 +1259,52 @@ def dashboard_page(user):
             tot_mkt = float(out["Total Market Value"].sum())
             tot_pct = (tot_mkt / denom * 100.0) if denom else 0.0
 
-            total_html += (
-                f"<tr class='total-row'><td>Total</td>"
-                f"<td>{tot_shares:g}</td>"
-                f"<td>${tot_stock:,.2f}</td>"
-                f"<td>{tot_leap_ct:g}</td>"
-                f"<td>${tot_leap_val:,.2f}</td>"
-                f"<td>{tot_short_ct:g}</td>"
-                f"<td>${tot_mkt:,.2f}</td>"
-                f"<td>{tot_pct:,.2f}%</td></tr>"
-            )
-
-            # Add ITM and Cash footer rows (blank columns except Total Market Value and %)
+            # Allocate Cash and ITM into Stock Value and LEAP Value for the TOTAL row only.
+            # (Per-ticker rows remain Stocks + LEAPs only, shorts ignored for value.)
             try:
-                itm_val = -float(itm_liability_usd) if 'itm_liability_usd' in locals() or 'itm_liability_usd' in globals() else 0.0
+                itm_val = -float(itm_liability_usd) if ('itm_liability_usd' in locals() or 'itm_liability_usd' in globals()) else 0.0
             except Exception:
                 itm_val = 0.0
             try:
-                cash_val = float(cash_usd) if 'cash_usd' in locals() or 'cash_usd' in globals() else float(get_cash_balance(user_id))
+                cash_val = float(cash_usd) if ('cash_usd' in locals() or 'cash_usd' in globals()) else float(get_cash_balance(user_id))
             except Exception:
                 try:
                     cash_val = float(get_cash_balance(user_id))
                 except Exception:
                     cash_val = 0.0
 
-            itm_pct = (itm_val / denom * 100.0) if denom else 0.0
-            cash_pct = (cash_val / denom * 100.0) if denom else 0.0
+            invested_val = float(tot_stock + tot_leap_val)
+            if invested_val and invested_val != 0:
+                leap_w = float(tot_leap_val) / invested_val
+                stock_w = float(tot_stock) / invested_val
+            else:
+                leap_w = 0.0
+                stock_w = 0.0
+
+            # Allocate cash + ITM (liability) proportionally between stocks and LEAPs
+            alloc_stock = float(cash_val + itm_val) * stock_w
+            alloc_leap = float(cash_val + itm_val) * leap_w
+
+            tot_stock_adj = float(tot_stock) + alloc_stock
+            tot_leap_val_adj = float(tot_leap_val) + alloc_leap
+
+            # TOTAL market value includes Cash and ITM
+            tot_mkt_adj = invested_val + float(cash_val) + float(itm_val)
+
+            # Total % should remain 100% relative to Stocks+LEAPs allocation table
+            tot_pct = 100.0 if denom else 0.0
+
+            # Total row should be the LAST row
 
             total_html += (
-                f"<tr class='total-row'><td>ITM</td>"
-                f"<td></td><td></td><td></td><td></td><td></td>"
-                f"<td>${itm_val:,.2f}</td>"
-                f"<td>{itm_pct:,.2f}%</td></tr>"
-            )
-            total_html += (
-                f"<tr class='total-row'><td>Cash</td>"
-                f"<td></td><td></td><td></td><td></td><td></td>"
-                f"<td>${cash_val:,.2f}</td>"
-                f"<td>{cash_pct:,.2f}%</td></tr>"
+                f"<tr class='total-row'><td>Total</td>"
+                f"<td>{tot_shares:g}</td>"
+                f"<td>${tot_stock_adj:,.2f}</td>"
+                f"<td>{tot_leap_ct:g}</td>"
+                f"<td>${tot_leap_val_adj:,.2f}</td>"
+                f"<td>{tot_short_ct:g}</td>"
+                f"<td>${tot_mkt_adj:,.2f}</td>"
+                f"<td>{tot_pct:,.2f}%</td></tr>"
             )
 
             total_html += "</tbody></table>"
