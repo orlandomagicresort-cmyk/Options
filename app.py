@@ -7,6 +7,7 @@ from supabase import create_client, Client
 from datetime import datetime, date, timedelta
 import math
 import os
+import uuid
 
 def force_light_mode():
     st.markdown("""
@@ -57,7 +58,18 @@ def force_light_mode():
         h1, h2, h3, h4, h5, h6 {
             color: #000000 !important;
         }
-        </style>
+        
+        /* --- SIDEBAR TEXT (Readable) --- */
+        [data-testid="stSidebar"] * { color: #111111 !important; }
+        [data-testid="stSidebar"] a, [data-testid="stSidebar"] a * { color: #111111 !important; }
+        [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+            color: #111111 !important; font-weight: 700 !important;
+        }
+        [data-testid="stSidebar"] [aria-selected="true"] {
+            background: rgba(0,0,0,0.06) !important;
+            border-radius: 8px;
+        }
+    </style>
     """, unsafe_allow_html=True)
 
 
@@ -457,10 +469,15 @@ def get_baseline_snapshot(user_id):
         return None
     except: return None
 
-def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, currency="USD"):
+def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, currency="USD", txg: str | None = None):
     # 1. Force Amount to Float (prevents Numpy errors)
     try: safe_amount = float(amount)
     except: safe_amount = 0.0
+
+    # Optional transaction group tag (used for grouped Ledger transactions)
+    if txg:
+        if f"TXG:{txg}" not in str(description):
+            description = f"{description} | TXG:{txg}"
     
     # 2. Force Date to ISO String (YYYY-MM-DD) - Prevents timestamp mismatch
     if isinstance(date_obj, datetime):
@@ -491,7 +508,7 @@ def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, 
 # --------------------------------------------------------------------------------
 # 5. CORE LOGIC
 # --------------------------------------------------------------------------------
-def update_asset_position(user_id, symbol, quantity, price, action, date_obj, asset_type="STOCK", expiration=None, strike=None, fees=0.0):
+def update_asset_position(user_id, symbol, quantity, price, action, date_obj, asset_type="STOCK", expiration=None, strike=None, fees=0.0, txg: str | None = None):
     cost = quantity * price
     multiplier = 100 if "LEAP" in asset_type or "OPTION" in asset_type else 1
     txn_gross = cost * multiplier
@@ -509,7 +526,7 @@ def update_asset_position(user_id, symbol, quantity, price, action, date_obj, as
     desc_label += f" @ ${price:,.2f}"
     if fees > 0: desc_label += f" (Fees: ${fees:.2f})"
     
-    log_transaction(user_id, desc_label, cash_impact, "TRADE_" + asset_type, symbol, date_obj, currency="USD")
+    log_transaction(user_id, desc_label, cash_impact, "TRADE_" + asset_type, symbol, date_obj, currency="USD", txg=txg)
     
     query = supabase.table("assets").select("*").eq("user_id", user_id).eq("ticker", symbol)
     if "LEAP" in asset_type: query = query.like("type", "LEAP%").eq("strike_price", strike).eq("expiration", str(expiration))
@@ -538,7 +555,7 @@ def update_asset_position(user_id, symbol, quantity, price, action, date_obj, as
         if expiration: data["expiration"] = str(expiration)
         supabase.table("assets").insert(data).execute()
 
-def update_short_option_position(user_id, symbol, quantity, price, action, date_obj, opt_type, expiration, strike, fees=0.0, linked_asset_id_override=None):
+def update_short_option_position(user_id, symbol, quantity, price, action, date_obj, opt_type, expiration, strike, fees=0.0, linked_asset_id_override=None, txg: str | None = None):
     premium = quantity * price * 100
     exp_iso = _iso_date(expiration)
     
@@ -554,7 +571,7 @@ def update_short_option_position(user_id, symbol, quantity, price, action, date_
     desc = f"{action} {quantity} {symbol} {formatted_exp} ${strike} {opt_type}"
     if fees > 0: desc += f" (Fees: ${fees:.2f})"
     
-    log_transaction(user_id, desc, cash_impact, "OPTION_PREMIUM", symbol, date_obj, currency="USD")
+    log_transaction(user_id, desc, cash_impact, "OPTION_PREMIUM", symbol, date_obj, currency="USD", txg=txg)
     
     if action == "Sell":
         linked_asset_id = None
@@ -1731,20 +1748,31 @@ def option_details_page(user):
                         
                         # 1. ASSIGNMENT
                         if "Assignment" in action_choice:
+                            # Group id for this multi-step transaction (used by Ledger)
+                            txg = uuid.uuid4().hex[:12]
+
+                            # Mark all constituent option rows as assigned
+                            option_ids = []
                             for item in sel_row['constituents']:
+                                option_ids.append(str(item['id']))
                                 supabase.table("options").update({"status": "assigned"}).eq("id", item['id']).execute()
-                            
+
                             trade_date = date.today()
                             total_shares = sel_row['qty'] * 100
-                            
-                            if sel_row['type'] == "PUT": 
-                                update_asset_position(user.id, sel_row['symbol'], total_shares, sel_row['strike'], "Buy", trade_date, "STOCK")
+
+                            # 1) Ledger: expire the option (cash impact $0), include option ids for reliable rollback
+                            formatted_exp = format_date_custom(_iso_date(sel_row['expiration']))
+                            expire_desc = f"Expire {sel_row['type']} {sel_row['symbol']} {formatted_exp} ${float(sel_row['strike'])} (Assigned) OID:{','.join(option_ids)}"
+                            log_transaction(user.id, expire_desc, 0.0, "OPTION_EXPIRE", sel_row['symbol'], trade_date, currency="USD", txg=txg)
+
+                            # 2) Stock trade (Buy shares for PUT assignment / Sell shares for CALL assignment)
+                            if sel_row['type'] == "PUT":
+                                update_asset_position(user.id, sel_row['symbol'], total_shares, sel_row['strike'], "Buy", trade_date, "STOCK", txg=txg)
                                 st.success(f"Assigned on PUT. Bought {total_shares} shares.")
-                                
-                            elif sel_row['type'] == "CALL": 
-                                update_asset_position(user.id, sel_row['symbol'], total_shares, sel_row['strike'], "Sell", trade_date, "STOCK")
+                            elif sel_row['type'] == "CALL":
+                                update_asset_position(user.id, sel_row['symbol'], total_shares, sel_row['strike'], "Sell", trade_date, "STOCK", txg=txg)
                                 st.success(f"Assigned on CALL. Sold {total_shares} shares.")
-                            
+
                             st.cache_data.clear()
                             st.rerun()
                                 
@@ -1796,6 +1824,7 @@ def option_details_page(user):
                                         break
 
                             txn_date_today = date.today()
+                            txg = uuid.uuid4().hex[:12]
 
                             # A) BTC: Buy-to-close existing contract(s) -> logs negative cash impact
                             update_short_option_position(
@@ -1808,7 +1837,8 @@ def option_details_page(user):
                                 sel_row['type'],
                                 sel_row['expiration'],
                                 float(sel_row['strike']),
-                                fees=0.0
+                                fees=0.0,
+                                txg=txg
                             )
 
                             # B) STO: Sell-to-open new contract -> logs positive cash impact
@@ -1823,7 +1853,8 @@ def option_details_page(user):
                                 new_exp,
                                 float(new_strike),
                                 fees=0.0,
-                                linked_asset_id_override=inherited_link_id
+                                linked_asset_id_override=inherited_link_id,
+                                txg=txg
                             )
 
                             st.success(f"Rolled {qty_safe} contracts. Net Cash: ${(float(new_premium) - float(btc_price)) * qty_safe * 100:+,.2f}")
@@ -2555,115 +2586,304 @@ def safe_reverse_ledger_transaction(transaction_id):
 
 def ledger_page(user):
     st.header("📜 Transaction Ledger")
-    
+
     # --- Date Filtering ---
     c1, c2 = st.columns(2)
-    with c1: start_date = st.date_input("From Date", value=(date.today() - timedelta(days=365)))
-    with c2: end_date = st.date_input("To Date", value=date.today())
+    with c1:
+        start_date = st.date_input("From Date", value=(date.today() - timedelta(days=365)))
+    with c2:
+        end_date = st.date_input("To Date", value=date.today())
 
-    try:
-        # 1. Fetch ALL data sorted by Date Ascending (Oldest First)
-        # We need full history to calculate the Running Balance correctly
-        qb = supabase.table("transactions")\
-            .select("*")\
-            .eq("user_id", user.id)\
-            .order("transaction_date", desc=False)
-        rows = _fetch_all(qb)
-        df = pd.DataFrame(rows)
-        
-        if not df.empty:
-            # 2. Calculate Running Balance
-            df['running_balance'] = df['amount'].cumsum()
+    # -------- Helpers --------
+    _txg_re = re.compile(r"\bTXG:([A-Za-z0-9_\-]+)\b")
+    _oid_re = re.compile(r"\bOID:([A-Za-z0-9_,\-]+)\b")
 
-            # 3. Helper: Clean Symbol (3-4 digits)
-            def get_clean_symbol(s):
-                if not s or s == "None": return ""
-                s = str(s).upper()
-                if "CASH" in s: return "USD"
-                # Handle "NVIDIA (NVDA)" or "XNYS:NVDA"
-                if "(" in s: return s.split("(")[1].replace(")", "")
-                if ":" in s: return s.split(":")[-1]
-                return s[:5].strip() 
+    def _to_date(v):
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        s = str(v or "").strip()
+        if not s:
+            return None
+        s = s.split("T")[0].split(" ")[0]
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except Exception:
+                pass
+        return None
 
-            # 4. Helper: Clean Action (Short & concise)
-            def get_clean_action(row):
-                desc = str(row.get('description', '')).title()
-                type_ = str(row.get('type', '')).upper()
-                
-                # Priority Keywords
-                if "Roll" in desc: return "Roll"
-                if "Assign" in desc: return "Assign"
-                if "Expire" in desc: return "Expire"
-                if "Dividend" in desc or "DIVIDEND" in type_: return "Dividend"
-                if "Interest" in desc: return "Interest"
-                if "Deposit" in desc: return "Deposit"
-                if "Withdraw" in desc: return "Withdraw"
-                
-                # Fallback: First word of description (usually "Buy", "Sell")
-                return desc.split(' ')[0]
+    def _extract_txg(desc: str):
+        m = _txg_re.search(str(desc or ""))
+        return m.group(1) if m else None
 
-            df['display_symbol'] = df['related_symbol'].apply(get_clean_symbol)
-            df['display_action'] = df.apply(get_clean_action, axis=1)
+    def _extract_oids(desc: str):
+        m = _oid_re.search(str(desc or ""))
+        if not m:
+            return []
+        raw = m.group(1)
+        return [x.strip() for x in raw.split(",") if x.strip()]
 
-            # 5. ROBUST DATE FILTERING
-            # Convert string dates (which might contain timestamps) to Date Objects
-            df['dt_temp'] = pd.to_datetime(df['transaction_date'])
-            
-            # Filter based on Date Only (ignores time component)
-            mask = (df['dt_temp'].dt.date >= start_date) & (df['dt_temp'].dt.date <= end_date)
-            display_df = df[mask].copy()
+    def _friendly_action_group(gdf: pd.DataFrame) -> str:
+        types = set([str(x).upper() for x in gdf.get("type", [])])
+        descs = " ".join([str(x or "") for x in gdf.get("description", [])]).upper()
 
-            # 6. Sort Descending for Display (Newest on Top)
-            display_df = display_df.sort_values(by='transaction_date', ascending=False)
-            
-            st.caption(f"Showing {len(display_df)} transactions.")
+        if "ROLL" in descs:
+            return "Roll"
+        # Roll heuristic: OPTION_PREMIUM group with both Buy and Sell
+        if any("OPTION_PREMIUM" in t for t in types):
+            d = descs
+            if (" BUY " in d or d.startswith("BUY")) and (" SELL " in d or d.startswith("SELL")):
+                return "Roll"
 
-            # --- TABLE HEADER ---
-            h_date, h_sym, h_act, h_amt, h_bal, h_del = st.columns([2, 1.5, 1.5, 2, 2, 1])
-            h_date.markdown("**Date**")
-            h_sym.markdown("**Symbol**")
-            h_act.markdown("**Action**")
-            h_amt.markdown("**Amount**")
-            h_bal.markdown("**Balance**")
-            h_del.markdown("**Del**")
-            st.divider()
-            
-            # --- TABLE ROWS ---
-            for index, row in display_df.iterrows():
-                c_date, c_sym, c_act, c_amt, c_bal, c_del = st.columns([2, 1.5, 1.5, 2, 2, 1])
-                
-                # Date
-                c_date.write(format_date_custom(row['transaction_date']))
-                
-                # Symbol
-                c_sym.write(row['display_symbol'])
-                
-                # Action
-                c_act.write(row['display_action'])
-                
-                # Amount
-                amt = row['amount']
-                color = "green" if amt >= 0 else "red"
-                c_amt.markdown(f":{color}[${amt:,.2f}]")
-                
-                # Balance
-                bal = row['running_balance']
-                c_bal.markdown(f"**${bal:,.2f}**")
-                
-                # Delete
-                if st.session_state.delete_confirm_id == row['id']:
-                    if c_del.button("Confirm", key=f"confirm_{row['id']}", type="primary"):
-                        safe_reverse_ledger_transaction(row['id'])
-                        st.session_state.delete_confirm_id = None
-                        st.cache_data.clear()
-                        st.rerun()
+        if "ASSIGN" in descs or "ASSIGNED" in descs:
+            return "Assignment"
+        if any("OPTION_EXPIRE" in t for t in types) and any(t.startswith("TRADE_STOCK") or t.startswith("TRADE_") for t in types):
+            return "Assignment"
+
+        if any("DEPOSIT" in t for t in types):
+            return "Deposit"
+        if any("WITHDRAWAL" in t for t in types):
+            return "Withdrawal"
+        if any("DIVIDEND" in t for t in types):
+            return "Dividend"
+        if any("INTEREST" in t for t in types):
+            return "Interest"
+
+        # single-row fallback
+        if len(gdf) == 1:
+            t0 = str(gdf.iloc[0].get("type", "")).upper()
+            d0 = str(gdf.iloc[0].get("description", ""))
+            if t0.startswith("TRADE_"):
+                return "Trade"
+            if "OPTION_PREMIUM" in t0:
+                return "Option Trade"
+            if "OPTION_EXPIRE" in t0:
+                return "Expire Option"
+            return d0.split(" ")[0] if d0 else "Transaction"
+
+        return "Transaction"
+
+    def _friendly_action_step(row: dict) -> str:
+        t = str(row.get("type", "")).upper()
+        d = str(row.get("description", "")).upper()
+        if "OPTION_EXPIRE" in t or "EXPIRE" in d:
+            return "Expire Option"
+        if "OPTION_PREMIUM" in t:
+            if d.startswith("BUY"):
+                return "Buy to Close"
+            if d.startswith("SELL"):
+                return "Sell to Open"
+            return "Option Premium"
+        if t.startswith("TRADE_"):
+            if d.startswith("BUY"):
+                return "Buy Shares" if "STOCK" in t else "Buy Asset"
+            if d.startswith("SELL"):
+                return "Sell Shares" if "STOCK" in t else "Sell Asset"
+            return "Asset Trade"
+        return row.get("type") or "Step"
+
+    def _reverse_transaction_row(row: dict):
+        """Best-effort rollback of portfolio state for a transaction row."""
+        tid = row.get("id")
+        ttype = str(row.get("type", "")).upper()
+        desc = str(row.get("description", ""))
+        rel = str(row.get("related_symbol", "") or "").upper()
+
+        # 1) Assignment expire: restore option statuses via OID list (most reliable)
+        if "OPTION_EXPIRE" in ttype:
+            oids = _extract_oids(desc)
+            if oids:
+                try:
+                    supabase.table("options").update({"status": "open"}).in_("id", oids).execute()
+                except Exception:
+                    pass
+            return
+
+        # 2) Stock/LEAP trades: reverse asset quantity
+        if ttype.startswith("TRADE_"):
+            try:
+                parts = desc.split()
+                action = parts[0]
+                qty = float(parts[1])
+                ticker = rel or str(parts[2]).upper()
+
+                asset_type = ttype.replace("TRADE_", "")
+                q = supabase.table("assets").select("*").eq("user_id", row["user_id"]).eq("ticker", ticker)
+                if "LEAP" in asset_type:
+                    # try to parse expiration/strike from description
+                    exp = None
+                    strike = None
+                    mexp = re.search(r"(\d{4}-[A-Za-z]{3}-\d{2})", desc)
+                    if mexp:
+                        exp = mexp.group(1)
+                    mstr = re.search(r"\$(\d+(?:\.\d+)?)", desc)
+                    if mstr:
+                        strike = float(mstr.group(1))
+                    q = q.like("type", "LEAP%")
+                    if strike is not None:
+                        q = q.eq("strike_price", strike)
+                    if exp:
+                        q = q.eq("expiration", exp)
                 else:
-                    if c_del.button("✖", key=f"trash_{row['id']}"):
-                        st.session_state.delete_confirm_id = row['id']
-                        st.rerun()
+                    q = q.eq("type", "STOCK")
+                res = q.execute()
+                if res.data:
+                    aid = res.data[0]["id"]
+                    curr = float(res.data[0].get("quantity") or 0)
+                    new_q = curr - qty if action.upper() == "BUY" else curr + qty
+                    supabase.table("assets").update({"quantity": new_q}).eq("id", aid).execute()
+            except Exception:
+                pass
+            return
 
-        else: st.info("No transactions found in history.")
-    except Exception as e: st.error(f"Error loading ledger: {e}")
+        # 3) Option premium: reverse open/close effect on options table
+        if "OPTION_PREMIUM" in ttype:
+            try:
+                # desc: "Sell 2 NVDA 2026-Jan-16 $450 CALL ..."
+                parts = desc.split()
+                side = parts[0].upper()
+                qty = int(float(parts[1]))
+                ticker = str(parts[2]).upper()
+                # parse exp
+                exp = None
+                mexp = re.search(r"(\d{4}-[A-Za-z]{3}-\d{2})", desc)
+                if mexp:
+                    exp = datetime.strptime(mexp.group(1), "%Y-%b-%d").date().isoformat()
+                # parse strike
+                mstr = re.search(r"\$(\d+(?:\.\d+)?)", desc)
+                strike = float(mstr.group(1)) if mstr else None
+                right = "CALL" if "CALL" in desc.upper() else ("PUT" if "PUT" in desc.upper() else None)
+
+                if not (ticker and exp and strike is not None and right):
+                    return
+
+                if side == "SELL":
+                    # Reverse an open: remove contracts from open options
+                    res = supabase.table("options").select("*").eq("user_id", row["user_id"]).eq("symbol", ticker).eq("strike_price", strike).eq("expiration_date", exp).eq("type", right).eq("status", "open").order("open_date", desc=True).execute()
+                    remaining = qty
+                    if res.data:
+                        for opt in res.data:
+                            if remaining <= 0:
+                                break
+                            avail = int(opt.get("contracts") or opt.get("quantity") or 0)
+                            if avail <= remaining:
+                                supabase.table("options").update({"status": "closed"}).eq("id", opt["id"]).execute()
+                                remaining -= avail
+                            else:
+                                supabase.table("options").update({"contracts": avail - remaining}).eq("id", opt["id"]).execute()
+                                remaining = 0
+                else:
+                    # Reverse a close: reopen contracts as a new open option (best effort)
+                    payload = {
+                        "user_id": row["user_id"],
+                        "ticker": ticker,
+                        "symbol": ticker,
+                        "strike_price": strike,
+                        "expiration_date": exp,
+                        "expiration": exp,
+                        "open_date": str(row.get("transaction_date") or date.today().isoformat()),
+                        "type": right,
+                        "contracts": int(qty),
+                        "premium_received": 0.0,
+                        "status": "open",
+                        "linked_asset_id": None
+                    }
+                    supabase.table("options").insert(payload).execute()
+            except Exception:
+                pass
+            return
+
+    def _delete_group(gdf: pd.DataFrame, group_label: str):
+        # Roll back portfolio impact first (reverse chronological)
+        for _, r in gdf.sort_values(["_d", "id_str"], ascending=[False, False]).iterrows():
+            _reverse_transaction_row(r.to_dict())
+            try:
+                supabase.table("transactions").delete().eq("id", r["id"]).execute()
+            except Exception:
+                pass
+        st.success(f"Deleted transaction ({group_label}) and rolled back portfolio changes.")
+        st.cache_data.clear()
+        st.rerun()
+
+    # -------- Fetch + Group --------
+    qb = supabase.table("transactions")\
+        .select("*")\
+        .eq("user_id", user.id)\
+        .order("transaction_date", desc=False)
+
+    rows = _fetch_all(qb)
+    if not rows:
+        st.info("No transactions yet.")
+        return
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        st.info("No transactions yet.")
+        return
+
+    df["_d"] = df["transaction_date"].apply(_to_date)
+    df["id_str"] = df["id"].astype(str)
+    df["txg"] = df["description"].apply(_extract_txg)
+    df["gkey"] = df["txg"].fillna(df["id_str"])
+
+    # sort
+    df = df.sort_values(["_d", "id_str"], ascending=[True, True])
+
+    # Build grouped list preserving order
+    groups = []
+    for gkey, gdf in df.groupby("gkey", sort=False):
+        gdf = gdf.copy()
+        gdate = gdf["_d"].dropna().min()
+        symbol = (gdf.get("related_symbol") or gdf.get("symbol")).iloc[0] if "related_symbol" in gdf.columns else ""
+        action = _friendly_action_group(gdf)
+        amount = float(pd.to_numeric(gdf.get("amount"), errors="coerce").fillna(0).sum())
+        groups.append({"gkey": gkey, "date": gdate, "symbol": symbol, "action": action, "amount": amount, "gdf": gdf})
+
+    # Running balance on groups (full history)
+    running = 0.0
+    for g in groups:
+        running += float(g["amount"] or 0.0)
+        g["running"] = running
+
+    # Filter display groups by date range (inclusive)
+    disp = [g for g in groups if (g["date"] is not None and start_date <= g["date"] <= end_date)]
+    if not disp:
+        st.info("No transactions in this date range.")
+        return
+
+    # -------- Render --------
+    hdr = st.columns([1.1, 1.0, 2.3, 1.2, 1.3, 0.8])
+    hdr[0].markdown("**Date**")
+    hdr[1].markdown("**Symbol**")
+    hdr[2].markdown("**Action**")
+    hdr[3].markdown("**Amount**")
+    hdr[4].markdown("**Balance**")
+    hdr[5].markdown("")
+
+    for i, g in enumerate(disp):
+        rowc = st.columns([1.1, 1.0, 2.3, 1.2, 1.3, 0.8])
+        rowc[0].write(str(g["date"]))
+        rowc[1].write(str(g["symbol"] or "").upper())
+        rowc[2].write(g["action"])
+        rowc[3].write(f"{g['amount']:,.2f}")
+        rowc[4].write(f"{g['running']:,.2f}")
+
+        if rowc[5].button("Delete", key=f"txg_del_{g['gkey']}_{i}"):
+            _delete_group(g["gdf"], g["action"])
+
+        with st.expander("Show details", expanded=False):
+            sub = []
+            for _, rr in g["gdf"].iterrows():
+                sub.append({
+                    "Date": str(rr.get("_d") or ""),
+                    "Symbol": str(rr.get("related_symbol") or ""),
+                    "Action": _friendly_action_step(rr.to_dict()),
+                    "Amount": float(rr.get("amount") or 0.0),
+                    "Details": str(rr.get("description") or "")
+                })
+            st.dataframe(pd.DataFrame(sub), use_container_width=True)
 
 def trade_entry_page(user):
     st.header("⚡ Smart Trade Entry")
