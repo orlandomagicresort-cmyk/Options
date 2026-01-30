@@ -1,56 +1,110 @@
 import streamlit as st
 
-# =========================
-# Global UI Theme Overrides
-# =========================
 def apply_global_ui_theme():
     """
-    Minimal UI tweaks that *respect* Streamlit's theme (config.toml).
-    We avoid forcing colors here to prevent black/white inconsistencies across widgets.
+    Minimal global UI tweaks that respect Streamlit's theme (config.toml).
+    Colors should be controlled via .streamlit/config.toml for consistency.
     """
     st.markdown(
         """
         <style>
         /* Typography + spacing (no hard-coded colors) */
-        .stApp { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
-
-        /* Make layout feel more "app-like" */
+        .stApp {
+            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+        }
         [data-testid="stMainBlockContainer"] { padding-top: 1.25rem; padding-bottom: 2rem; }
 
-        /* Cards / containers */
-        .stExpander, [data-testid="stMetric"], [data-testid="stDataFrame"] {
-            border-radius: 14px !important;
-        }
-
-        /* Buttons: consistent shape; let theme define colors */
-        .stButton button, button[kind="primary"], button[kind="secondary"] {
-            border-radius: 12px !important;
-            padding: 0.55rem 0.9rem !important;
-            font-weight: 600 !important;
-        }
-
-        /* Inputs: consistent rounding; let theme define colors */
+        /* Consistent rounding */
+        .stButton button, button[kind="primary"], button[kind="secondary"],
         .stTextInput input, .stNumberInput input, .stDateInput input,
-        .stTextArea textarea, [data-baseweb="select"] > div {
+        .stTextArea textarea, [data-baseweb="select"] > div,
+        [data-testid="stDataFrame"], [data-testid="stMetric"], [data-testid="stExpander"] {
             border-radius: 12px !important;
         }
 
-        /* Dataframes: improve readability without forcing colors */
-        [data-testid="stDataFrame"] { overflow: hidden !important; }
+        /* Dataframe readability */
         [data-testid="stDataFrame"] thead tr th { font-weight: 700 !important; }
         [data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
-
-        /* Sidebar: tidy spacing */
-        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
-
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+import pandas as pd
+import altair as alt
+import yfinance as yf
+import re
+from supabase import create_client, Client
+from datetime import datetime, date, timedelta
+import math
+import os
+import uuid
 
 def force_light_mode():
-    # --------------------------------------------------------------------------------
+    st.markdown("""
+        <style>
+        /* --- GLOBAL BACKGROUND (White) --- */
+        .stApp {
+            background-color: #FFFFFF;
+            color: #000000;
+        }
+        
+        /* --- SIDEBAR (Light Grey) --- */
+        [data-testid="stSidebar"] {
+            background-color: #F0F2F6;
+            border-right: 1px solid #E6E6E6;
+        }
+        
+        /* --- METRICS (Clean White Cards) --- */
+        [data-testid="stMetric"] {
+            background-color: #FFFFFF;
+            border: 1px solid #E6E6E6;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        [data-testid="stMetricLabel"] {
+            color: #555555; /* Dark Grey for labels */
+        }
+        [data-testid="stMetricValue"] {
+            color: #000000; /* Pitch Black for numbers */
+        }
+
+        /* --- INPUT FIELDS (Force White w/ Black Text) --- */
+        /* Crucial for overriding system dark mode defaults */
+        .stTextInput > div > div > input, 
+        .stNumberInput > div > div > input,
+        .stSelectbox > div > div > div {
+            color: #000000 !important;
+            background-color: #FFFFFF !important;
+            border: 1px solid #D6D6D6;
+        }
+        
+        /* --- DATAFRAMES --- */
+        [data-testid="stDataFrame"] {
+            border: 1px solid #E6E6E6;
+        }
+        
+        /* --- HEADERS --- */
+        h1, h2, h3, h4, h5, h6 {
+            color: #000000 !important;
+        }
+        
+        /* --- SIDEBAR TEXT (Readable) --- */
+        [data-testid="stSidebar"] * { color: #111111 !important; }
+        [data-testid="stSidebar"] a, [data-testid="stSidebar"] a * { color: #111111 !important; }
+        [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+            color: #111111 !important; font-weight: 700 !important;
+        }
+        [data-testid="stSidebar"] [aria-selected="true"] {
+            background: rgba(0,0,0,0.06) !important;
+            border-radius: 8px;
+        }
+    </style>
+    """, unsafe_allow_html=True)
+
+
+# --------------------------------------------------------------------------------
 # 0. CREDENTIALS
 # --------------------------------------------------------------------------------
 import os
@@ -86,6 +140,51 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+st.markdown("""
+    <style>
+    .stDataFrame { border: 1px solid #f0f2f6; }
+    div[data-testid="stMetric"] { background-color: #f9f9f9; padding: 10px; border-radius: 5px; }
+    
+    /* Custom Table Styling */
+    .finance-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        font-size: 0.95rem;
+        margin-bottom: 20px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .finance-table th {
+        background-color: #f0f2f6;
+        text-align: right;
+        padding: 10px 12px;
+        font-weight: 600;
+        border-bottom: 2px solid #d1d5db;
+        color: #31333F;
+    }
+    .finance-table th:first-child, .finance-table td:first-child {
+        text-align: left;
+    }
+    .finance-table td {
+        padding: 10px 12px;
+        text-align: right;
+        border-bottom: 1px solid #f0f2f6;
+        color: #31333F;
+    }
+    .finance-table tr:nth-child(even) { background-color: #f8f9fb; }
+    .finance-table tr:hover { background-color: #eef2f6; }
+    .finance-table .total-row {
+        font-weight: bold;
+        background-color: #e8f0fe !important;
+        border-top: 2px solid #aecbfa;
+    }
+    .finance-table .total-row td { font-size: 1.05rem; color: #1a73e8; }
+    .pos-val { color: #00703c; font-weight: 500; }
+    .neg-val { color: #d93025; font-weight: 500; }
+    .liability-alert { color: #d93025; font-weight: bold; }
+    </style>
+    """, unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------------
 # 2. SUPABASE CONNECTION
