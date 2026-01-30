@@ -2837,15 +2837,15 @@ def ledger_page(user):
         gdf = gdf.copy()
         gdate = gdf["_d"].dropna().min()
         # Choose a symbol safely (avoid pandas Series truth-value ambiguity)
-            symbol = ""
-            if "related_symbol" in gdf.columns:
-                rs = gdf["related_symbol"].dropna()
-                if not rs.empty:
-                    symbol = str(rs.iloc[0])
-            if (not symbol) and "symbol" in gdf.columns:
-                ss = gdf["symbol"].dropna()
-                if not ss.empty:
-                    symbol = str(ss.iloc[0])
+        symbol = ""
+        if "related_symbol" in gdf.columns:
+            rs = gdf["related_symbol"].dropna()
+            if not rs.empty:
+                symbol = str(rs.iloc[0])
+        if (not symbol) and "symbol" in gdf.columns:
+            ss = gdf["symbol"].dropna()
+            if not ss.empty:
+                symbol = str(ss.iloc[0])
         action = _friendly_action_group(gdf)
         amount = float(pd.to_numeric(gdf.get("amount"), errors="coerce").fillna(0).sum())
         groups.append({"gkey": gkey, "date": gdate, "symbol": symbol, "action": action, "amount": amount, "gdf": gdf})
