@@ -1,34 +1,39 @@
-import streamlit as st
+import os
+import re
+import math
+import uuid
+from datetime import datetime, date, timedelta
 
+import streamlit as st
+import pandas as pd
+import altair as alt
+import yfinance as yf
+from supabase import create_client, Client
+
+
+# ---------------- UI THEME ----------------
 def apply_global_ui_theme():
-    """
-    Minimal global UI tweaks that respect Streamlit's theme (config.toml).
-    Colors should be controlled via .streamlit/config.toml for consistency.
-    """
+    """Minimal global UI tweaks – colors come from .streamlit/config.toml"""
     st.markdown(
         """
         <style>
-        /* Typography + spacing (no hard-coded colors) */
         .stApp {
-            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
         }
-        [data-testid="stMainBlockContainer"] { padding-top: 1.25rem; padding-bottom: 2rem; }
-
-        /* Consistent rounding */
-        .stButton button, button[kind="primary"], button[kind="secondary"],
-        .stTextInput input, .stNumberInput input, .stDateInput input,
-        .stTextArea textarea, [data-baseweb="select"] > div,
-        [data-testid="stDataFrame"], [data-testid="stMetric"], [data-testid="stExpander"] {
-            border-radius: 12px !important;
-        }
-
-        /* Dataframe readability */
-        [data-testid="stDataFrame"] thead tr th { font-weight: 700 !important; }
-        [data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
         </style>
         """,
-        unsafe_allow_html=True,
+        unsafe_allow_html=True
     )
+
+
+# IMPORTANT: must be first Streamlit call
+st.set_page_config(
+    page_title="Options Trading Tracker",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+apply_global_ui_theme()
 
 import pandas as pd
 import altair as alt
