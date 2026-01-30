@@ -1,4 +1,72 @@
 import streamlit as st
+
+# =========================
+# Global UI Theme Overrides
+# =========================
+def apply_global_ui_theme():
+    """
+    Standardize colors for readability across Streamlit Cloud themes.
+    Forces dark text on light surfaces, improves button contrast, inputs, tables, and sidebar.
+    """
+    st.markdown(
+        """
+        <style>
+        /* App background + default text */
+        .stApp { background: #ffffff; color: #111827; }
+        html, body, [class*="css"] { color: #111827; }
+
+        /* Sidebar */
+        [data-testid="stSidebar"] { background: #f8fafc; }
+        [data-testid="stSidebar"] * { color: #111827 !important; }
+        [data-testid="stSidebar"] a, [data-testid="stSidebar"] a * { color: #111827 !important; }
+        [data-testid="stSidebar"] hr { border-color: #e5e7eb; }
+
+        /* Headings */
+        h1, h2, h3, h4, h5, h6 { color: #111827; }
+
+        /* Inputs */
+        .stTextInput input, .stNumberInput input, .stDateInput input,
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stTextArea textarea {
+            color: #111827 !important;
+            background: #ffffff !important;
+            border-color: #d1d5db !important;
+        }
+
+        /* Labels */
+        label, .stMarkdown, .stMarkdown p, .stMarkdown span { color: #111827 !important; }
+
+        /* Buttons */
+        .stButton button, button[kind="primary"], button[kind="secondary"] {
+            background: #111827 !important;
+            color: #ffffff !important;
+            border: 1px solid #111827 !important;
+            border-radius: 10px !important;
+        }
+        .stButton button:hover, button[kind="primary"]:hover, button[kind="secondary"]:hover {
+            filter: brightness(1.05);
+        }
+
+        /* Dataframes / Tables */
+        [data-testid="stDataFrame"] { background: #ffffff; }
+        [data-testid="stDataFrame"] * { color: #111827 !important; }
+        table { color: #111827 !important; }
+        thead tr th { background: #f3f4f6 !important; }
+
+        /* Expanders */
+        [data-testid="stExpander"] { border-color: #e5e7eb; }
+        [data-testid="stExpander"] * { color: #111827 !important; }
+
+        /* Alerts */
+        [data-testid="stAlert"] { color: #111827 !important; }
+
+        /* Links */
+        a { color: #1d4ed8 !important; }
+
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
 import pandas as pd
 import altair as alt
 import yfinance as yf
