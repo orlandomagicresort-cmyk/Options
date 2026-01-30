@@ -40,26 +40,6 @@ import math
 import os
 import uuid
 
-def _auto_refresh_prices_on_enter(user, page_name: str, also_force_leap_mid: bool = False):
-    """
-    Clears cache_data once per page entry so live share/option prices refresh.
-    Optionally forces LEAP mid refresh (for Update LEAP Prices page).
-    """
-    nav_seq = int(st.session_state.get("_nav_seq", 0))
-    key = f"_prices_refreshed_{page_name}_{user.id}"
-    if st.session_state.get(key) != nav_seq:
-        # Clear cached Yahoo calls so prices re-fetch
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        st.session_state[key] = nav_seq
-
-        if also_force_leap_mid:
-            # Reset the once/day guard so the page runs a refresh on entry
-            today_key = f"leap_mid_autorefresh_{user.id}"
-            st.session_state[today_key] = "__force__"
-
 def force_light_mode():
     st.markdown("""
         <style>
@@ -754,14 +734,6 @@ def get_open_short_call_contracts(user_id, symbol):
 
 def dashboard_page(user):
     st.header("📊 Executive Dashboard")
-
-
-    # Auto-refresh share/LEAP prices on page entry
-    _auto_refresh_prices_on_enter(user, 'Dashboard', also_force_leap_mid=False)
-    # Manual refresh button
-    if st.button("🔄 Refresh Prices", key=f"refresh_prices_{page_name}_{user.id}", type="primary"):
-        st.cache_data.clear()
-        st.rerun()
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
     fx = float(get_usd_to_cad_rate() or 1.0)
@@ -1513,14 +1485,6 @@ def dashboard_page(user):
 def option_details_page(user):
     st.header("📊 Executive Dashboard")
     
-
-    # Auto-refresh share/LEAP prices on page entry
-    _auto_refresh_prices_on_enter(user, 'Option Details', also_force_leap_mid=False)
-    # Manual refresh button
-    if st.button("🔄 Refresh Prices", key=f"refresh_prices_{page_name}_{user.id}", type="primary"):
-        st.cache_data.clear()
-        st.rerun()
-
     # --- Top Controls ---
     c_ctrl_1, c_ctrl_2, c_ctrl_3 = st.columns([2, 4, 1])
     with c_ctrl_1:
@@ -2501,15 +2465,6 @@ def cash_management_page(user):
 def pricing_page(user):
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
 
-
-    # Auto-refresh share/LEAP prices on page entry
-    _auto_refresh_prices_on_enter(user, 'Update LEAP Prices', also_force_leap_mid=True)
-    # Manual refresh button
-    if st.button("🔄 Refresh Prices", key=f"refresh_prices_{page_name}_{user.id}", type="primary"):
-        st.cache_data.clear()
-        st.session_state[f"leap_mid_autorefresh_{user.id}"] = "__force__"
-        st.rerun()
-
     assets, _ = get_portfolio_data(user.id)
     if assets.empty:
         st.info("No assets found.")
@@ -3156,13 +3111,7 @@ def main():
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
     page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Settings"])
-    
-    # Track navigation changes (used for one-time auto refresh on page entry)
-    prev_page = st.session_state.get("_current_page")
-    if prev_page != page:
-        st.session_state["_nav_seq"] = int(st.session_state.get("_nav_seq", 0)) + 1
-        st.session_state["_current_page"] = page
-user = st.session_state.user
+    user = st.session_state.user
     if page == "Dashboard": dashboard_page(user)
     elif page == "Option Details": option_details_page(user)
     elif page == "Update LEAP Prices": pricing_page(user)
