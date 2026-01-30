@@ -1,39 +1,34 @@
-import os
-import re
-import math
-import uuid
-from datetime import datetime, date, timedelta
-
 import streamlit as st
-import pandas as pd
-import altair as alt
-import yfinance as yf
-from supabase import create_client, Client
 
-
-# ---------------- UI THEME ----------------
 def apply_global_ui_theme():
-    """Minimal global UI tweaks – colors come from .streamlit/config.toml"""
+    """
+    Minimal global UI tweaks that respect Streamlit's theme (config.toml).
+    Colors should be controlled via .streamlit/config.toml for consistency.
+    """
     st.markdown(
         """
         <style>
+        /* Typography + spacing (no hard-coded colors) */
         .stApp {
-            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
         }
+        [data-testid="stMainBlockContainer"] { padding-top: 1.25rem; padding-bottom: 2rem; }
+
+        /* Consistent rounding */
+        .stButton button, button[kind="primary"], button[kind="secondary"],
+        .stTextInput input, .stNumberInput input, .stDateInput input,
+        .stTextArea textarea, [data-baseweb="select"] > div,
+        [data-testid="stDataFrame"], [data-testid="stMetric"], [data-testid="stExpander"] {
+            border-radius: 12px !important;
+        }
+
+        /* Dataframe readability */
+        [data-testid="stDataFrame"] thead tr th { font-weight: 700 !important; }
+        [data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-
-
-# IMPORTANT: must be first Streamlit call
-st.set_page_config(
-    page_title="Options Trading Tracker",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
-
-apply_global_ui_theme()
 
 import pandas as pd
 import altair as alt
@@ -3167,24 +3162,16 @@ def main():
     if prev_page != page:
         st.session_state["_nav_seq"] = int(st.session_state.get("_nav_seq", 0)) + 1
         st.session_state["_current_page"] = page
-    user = st.session_state.user
-    # -------- Page Routing --------
-    if page == "Dashboard":
-        dashboard_page(user)
-    elif page == "Option Details":
-        option_details_page(user)
-    elif page == "Update LEAP Prices":
-        pricing_page(user)
-    elif page == "Weekly Snapshot":
-        snapshot_page(user)
-    elif page == "Cash Management":
-        cash_management_page(user)
-    elif page == "Enter Trade":
-        trade_entry_page(user)
-    elif page == "Ledger":
-        ledger_page(user)
-    elif page == "Import Data":
-        import_data_page(user)
-    elif page == "Settings":
-        settings_page(user)
+user = st.session_state.user
+    if page == "Dashboard": dashboard_page(user)
+    elif page == "Option Details": option_details_page(user)
+    elif page == "Update LEAP Prices": pricing_page(user)
+    elif page == "Weekly Snapshot": snapshot_page(user)
+    elif page == "Cash Management": cash_management_page(user)
+    elif page == "Enter Trade": trade_entry_page(user)
+    elif page == "Ledger": ledger_page(user)
+    elif page == "Import Data": import_page(user)
+    elif page == "Settings": settings_page(user)
 
+if __name__ == "__main__":
+    main()
