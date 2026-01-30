@@ -201,70 +201,7 @@ import os
 import uuid
 
 def force_light_mode():
-    st.markdown("""
-        <style>
-        /* --- GLOBAL BACKGROUND (White) --- */
-        .stApp {
-            background-color: #FFFFFF;
-            color: #000000;
-        }
-        
-        /* --- SIDEBAR (Light Grey) --- */
-        [data-testid="stSidebar"] {
-            background-color: #F0F2F6;
-            border-right: 1px solid #E6E6E6;
-        }
-        
-        /* --- METRICS (Clean White Cards) --- */
-        [data-testid="stMetric"] {
-            background-color: #FFFFFF;
-            border: 1px solid #E6E6E6;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        [data-testid="stMetricLabel"] {
-            color: #555555; /* Dark Grey for labels */
-        }
-        [data-testid="stMetricValue"] {
-            color: #000000; /* Pitch Black for numbers */
-        }
-
-        /* --- INPUT FIELDS (Force White w/ Black Text) --- */
-        /* Crucial for overriding system dark mode defaults */
-        .stTextInput > div > div > input, 
-        .stNumberInput > div > div > input,
-        .stSelectbox > div > div > div {
-            color: #000000 !important;
-            background-color: #FFFFFF !important;
-            border: 1px solid #D6D6D6;
-        }
-        
-        /* --- DATAFRAMES --- */
-        [data-testid="stDataFrame"] {
-            border: 1px solid #E6E6E6;
-        }
-        
-        /* --- HEADERS --- */
-        h1, h2, h3, h4, h5, h6 {
-            color: #000000 !important;
-        }
-        
-        /* --- SIDEBAR TEXT (Readable) --- */
-        [data-testid="stSidebar"] * { color: #111111 !important; }
-        [data-testid="stSidebar"] a, [data-testid="stSidebar"] a * { color: #111111 !important; }
-        [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
-            color: #111111 !important; font-weight: 700 !important;
-        }
-        [data-testid="stSidebar"] [aria-selected="true"] {
-            background: rgba(0,0,0,0.06) !important;
-            border-radius: 8px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-
-# --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
 # 0. CREDENTIALS
 # --------------------------------------------------------------------------------
 import os
@@ -300,51 +237,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-st.markdown("""
-    <style>
-    .stDataFrame { border: 1px solid #f0f2f6; }
-    div[data-testid="stMetric"] { background-color: #f9f9f9; padding: 10px; border-radius: 5px; }
-    
-    /* Custom Table Styling */
-    .finance-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        font-size: 0.95rem;
-        margin-bottom: 20px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    .finance-table th {
-        background-color: #f0f2f6;
-        text-align: right;
-        padding: 10px 12px;
-        font-weight: 600;
-        border-bottom: 2px solid #d1d5db;
-        color: #31333F;
-    }
-    .finance-table th:first-child, .finance-table td:first-child {
-        text-align: left;
-    }
-    .finance-table td {
-        padding: 10px 12px;
-        text-align: right;
-        border-bottom: 1px solid #f0f2f6;
-        color: #31333F;
-    }
-    .finance-table tr:nth-child(even) { background-color: #f8f9fb; }
-    .finance-table tr:hover { background-color: #eef2f6; }
-    .finance-table .total-row {
-        font-weight: bold;
-        background-color: #e8f0fe !important;
-        border-top: 2px solid #aecbfa;
-    }
-    .finance-table .total-row td { font-size: 1.05rem; color: #1a73e8; }
-    .pos-val { color: #00703c; font-weight: 500; }
-    .neg-val { color: #d93025; font-weight: 500; }
-    .liability-alert { color: #d93025; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------------
 # 2. SUPABASE CONNECTION
@@ -893,6 +785,8 @@ def get_open_short_call_contracts(user_id, symbol):
 # --------------------------------------------------------------------------------
 
 def dashboard_page(user):
+
+    apply_global_ui_theme()
     st.header("📊 Executive Dashboard")
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
@@ -2623,6 +2517,8 @@ def cash_management_page(user):
 
 
 def pricing_page(user):
+
+    apply_global_ui_theme()
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
 
     assets, _ = get_portfolio_data(user.id)
@@ -2776,6 +2672,8 @@ def safe_reverse_ledger_transaction(transaction_id):
     return True, "Deleted."
 
 def ledger_page(user):
+
+    apply_global_ui_theme()
     st.header("📜 Transaction Ledger")
 
     # --- Date Filtering ---
@@ -3086,6 +2984,8 @@ def ledger_page(user):
             st.dataframe(pd.DataFrame(sub), use_container_width=True)
 
 def trade_entry_page(user):
+
+    apply_global_ui_theme()
     st.header("⚡ Smart Trade Entry")
 
     # Helper: default option expiry is the next Friday from the selected trade date
@@ -3220,6 +3120,7 @@ def trade_entry_page(user):
                  st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."; st.rerun()
 
 def settings_page(user):
+    apply_global_ui_theme()
     st.header("⚙️ Settings")
     tab1, tab2 = st.tabs(["Assets", "Danger Zone"])
     with tab1:
