@@ -5,266 +5,52 @@ import streamlit as st
 # =========================
 def apply_global_ui_theme():
     """
-    Centralized, aggressive UI theme overrides for consistent readability across ALL pages.
-    Streamlit Cloud sometimes mixes dark/light theme tokens; this forces a consistent light theme
-    with dark text and high-contrast controls.
+    Minimal UI tweaks that *respect* Streamlit's theme (config.toml).
+    We avoid forcing colors here to prevent black/white inconsistencies across widgets.
     """
     st.markdown(
         """
         <style>
-        /* =========================
-           Global base + typography
-           ========================= */
-        :root {
-            --bg: #ffffff;
-            --panel: #ffffff;
-            --sidebar: #f8fafc;
-            --text: #111827;
-            --muted: #374151;
-            --border: #d1d5db;
-            --header: #0f172a;
-            --link: #1d4ed8;
+        /* Typography + spacing (no hard-coded colors) */
+        .stApp { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji"; }
 
-            --btn-bg: #111827;
-            --btn-text: #ffffff;
-            --btn-border: #111827;
+        /* Make layout feel more "app-like" */
+        [data-testid="stMainBlockContainer"] { padding-top: 1.25rem; padding-bottom: 2rem; }
 
-            --input-bg: #ffffff;
-            --input-text: #111827;
-            --input-border: #d1d5db;
-
-            --table-head: #f3f4f6;
-            --table-alt: #fafafa;
+        /* Cards / containers */
+        .stExpander, [data-testid="stMetric"], [data-testid="stDataFrame"] {
+            border-radius: 14px !important;
         }
 
-        html, body, .stApp {
-            background: var(--bg) !important;
-            color: var(--text) !important;
-        }
-
-        /* Force text color everywhere (Streamlit sometimes injects white text in dark mode) */
-        * {
-            color: var(--text) !important;
-        }
-
-        /* Keep icons/plots unaffected where possible */
-        svg, svg * {
-            color: inherit !important;
-        }
-
-        /* Headings */
-        h1, h2, h3, h4, h5, h6 {
-            color: var(--header) !important;
-        }
-
-        /* Sidebar */
-        [data-testid="stSidebar"] {
-            background: var(--sidebar) !important;
-            border-right: 1px solid var(--border) !important;
-        }
-        [data-testid="stSidebar"] * {
-            color: var(--text) !important;
-        }
-
-        /* Links */
-        a, a * {
-            color: var(--link) !important;
-        }
-
-        /* =========================
-           Inputs
-           ========================= */
-        input, textarea, select {
-            background: var(--input-bg) !important;
-            color: var(--input-text) !important;
-            border-color: var(--input-border) !important;
-        }
-
-        /* Streamlit input wrappers */
-        .stTextInput input,
-        .stNumberInput input,
-        .stDateInput input,
-        .stTextArea textarea {
-            background: var(--input-bg) !important;
-            color: var(--input-text) !important;
-            border: 1px solid var(--input-border) !important;
-        }
-
-        /* BaseWeb (Selectbox) */
-        [data-baseweb="select"] * {
-            background: var(--input-bg) !important;
-            color: var(--input-text) !important;
-        }
-        [data-baseweb="select"] > div {
-            border: 1px solid var(--input-border) !important;
-            border-radius: 10px !important;
-        }
-
-        /* Labels / helper text */
-        label, small, .stCaption, .stMarkdown p, .stMarkdown span {
-            color: var(--muted) !important;
-        }
-
-        /* =========================
-           Buttons (all kinds)
-           ========================= */
-        button, .stButton button, button[kind="primary"], button[kind="secondary"] {
-            background: var(--btn-bg) !important;
-            color: var(--btn-text) !important;
-            border: 1px solid var(--btn-border) !important;
-            border-radius: 10px !important;
-        }
-        button:hover, .stButton button:hover, button[kind="primary"]:hover, button[kind="secondary"]:hover {
-            filter: brightness(1.05) !important;
-        }
-        button:disabled {
-            opacity: 0.6 !important;
-        }
-
-        /* =========================
-           Tables / Dataframes
-           ========================= */
-        table, thead, tbody, tr, th, td {
-            color: var(--text) !important;
-        }
-        thead tr th {
-            background: var(--table-head) !important;
-            border-bottom: 1px solid var(--border) !important;
-        }
-        tbody tr:nth-child(even) td {
-            background: var(--table-alt) !important;
-        }
-        tbody tr td {
-            border-bottom: 1px solid #eef2f7 !important;
-        }
-
-        /* Streamlit dataframe container */
-        [data-testid="stDataFrame"] {
-            background: var(--panel) !important;
-            border: 1px solid var(--border) !important;
+        /* Buttons: consistent shape; let theme define colors */
+        .stButton button, button[kind="primary"], button[kind="secondary"] {
             border-radius: 12px !important;
-            overflow: hidden !important;
-        }
-        [data-testid="stDataFrame"] * {
-            color: var(--text) !important;
+            padding: 0.55rem 0.9rem !important;
+            font-weight: 600 !important;
         }
 
-        /* Expander */
-        [data-testid="stExpander"] {
-            border: 1px solid var(--border) !important;
+        /* Inputs: consistent rounding; let theme define colors */
+        .stTextInput input, .stNumberInput input, .stDateInput input,
+        .stTextArea textarea, [data-baseweb="select"] > div {
             border-radius: 12px !important;
-            background: var(--panel) !important;
-        }
-        [data-testid="stExpander"] summary {
-            background: var(--table-head) !important;
         }
 
-        /* Alerts */
-        [data-testid="stAlert"] {
-            border-radius: 12px !important;
-            border-color: var(--border) !important;
-            background: #f8fafc !important;
-        }
+        /* Dataframes: improve readability without forcing colors */
+        [data-testid="stDataFrame"] { overflow: hidden !important; }
+        [data-testid="stDataFrame"] thead tr th { font-weight: 700 !important; }
+        [data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
 
-        /* Code blocks */
-        pre, code {
-            background: #f3f4f6 !important;
-            color: #111827 !important;
-            border-radius: 10px !important;
-        }
+        /* Sidebar: tidy spacing */
+        [data-testid="stSidebar"] [data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
 
-        /* Metric widgets */
-        [data-testid="stMetric"] {
-            background: var(--panel) !important;
-            border: 1px solid var(--border) !important;
-            border-radius: 12px !important;
-            padding: 10px !important;
-        }
-        [data-testid="stMetric"] * {
-            color: var(--text) !important;
-        }
-
-        /* Remove dark overlays some themes add */
-        .stApp [data-testid="stToolbar"] { background: transparent !important; }
         </style>
         """,
         unsafe_allow_html=True,
     )
-import pandas as pd
-import altair as alt
-import yfinance as yf
-import re
-from supabase import create_client, Client
-from datetime import datetime, date, timedelta
-import math
-import os
-import uuid
+
 
 def force_light_mode():
-    st.markdown("""
-        <style>
-        /* --- GLOBAL BACKGROUND (White) --- */
-        .stApp {
-            background-color: #FFFFFF;
-            color: #000000;
-        }
-        
-        /* --- SIDEBAR (Light Grey) --- */
-        [data-testid="stSidebar"] {
-            background-color: #F0F2F6;
-            border-right: 1px solid #E6E6E6;
-        }
-        
-        /* --- METRICS (Clean White Cards) --- */
-        [data-testid="stMetric"] {
-            background-color: #FFFFFF;
-            border: 1px solid #E6E6E6;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-        }
-        [data-testid="stMetricLabel"] {
-            color: #555555; /* Dark Grey for labels */
-        }
-        [data-testid="stMetricValue"] {
-            color: #000000; /* Pitch Black for numbers */
-        }
-
-        /* --- INPUT FIELDS (Force White w/ Black Text) --- */
-        /* Crucial for overriding system dark mode defaults */
-        .stTextInput > div > div > input, 
-        .stNumberInput > div > div > input,
-        .stSelectbox > div > div > div {
-            color: #000000 !important;
-            background-color: #FFFFFF !important;
-            border: 1px solid #D6D6D6;
-        }
-        
-        /* --- DATAFRAMES --- */
-        [data-testid="stDataFrame"] {
-            border: 1px solid #E6E6E6;
-        }
-        
-        /* --- HEADERS --- */
-        h1, h2, h3, h4, h5, h6 {
-            color: #000000 !important;
-        }
-        
-        /* --- SIDEBAR TEXT (Readable) --- */
-        [data-testid="stSidebar"] * { color: #111111 !important; }
-        [data-testid="stSidebar"] a, [data-testid="stSidebar"] a * { color: #111111 !important; }
-        [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
-            color: #111111 !important; font-weight: 700 !important;
-        }
-        [data-testid="stSidebar"] [aria-selected="true"] {
-            background: rgba(0,0,0,0.06) !important;
-            border-radius: 8px;
-        }
-    </style>
-    """, unsafe_allow_html=True)
-
-
-# --------------------------------------------------------------------------------
+    # --------------------------------------------------------------------------------
 # 0. CREDENTIALS
 # --------------------------------------------------------------------------------
 import os
@@ -300,51 +86,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-st.markdown("""
-    <style>
-    .stDataFrame { border: 1px solid #f0f2f6; }
-    div[data-testid="stMetric"] { background-color: #f9f9f9; padding: 10px; border-radius: 5px; }
-    
-    /* Custom Table Styling */
-    .finance-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        font-size: 0.95rem;
-        margin-bottom: 20px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    .finance-table th {
-        background-color: #f0f2f6;
-        text-align: right;
-        padding: 10px 12px;
-        font-weight: 600;
-        border-bottom: 2px solid #d1d5db;
-        color: #31333F;
-    }
-    .finance-table th:first-child, .finance-table td:first-child {
-        text-align: left;
-    }
-    .finance-table td {
-        padding: 10px 12px;
-        text-align: right;
-        border-bottom: 1px solid #f0f2f6;
-        color: #31333F;
-    }
-    .finance-table tr:nth-child(even) { background-color: #f8f9fb; }
-    .finance-table tr:hover { background-color: #eef2f6; }
-    .finance-table .total-row {
-        font-weight: bold;
-        background-color: #e8f0fe !important;
-        border-top: 2px solid #aecbfa;
-    }
-    .finance-table .total-row td { font-size: 1.05rem; color: #1a73e8; }
-    .pos-val { color: #00703c; font-weight: 500; }
-    .neg-val { color: #d93025; font-weight: 500; }
-    .liability-alert { color: #d93025; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------------
 # 2. SUPABASE CONNECTION
