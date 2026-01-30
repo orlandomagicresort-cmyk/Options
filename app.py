@@ -3163,15 +3163,22 @@ def main():
         st.session_state["_nav_seq"] = int(st.session_state.get("_nav_seq", 0)) + 1
         st.session_state["_current_page"] = page
 user = st.session_state.user
-    if page == "Dashboard": dashboard_page(user)
-    elif page == "Option Details": option_details_page(user)
-    elif page == "Update LEAP Prices": pricing_page(user)
-    elif page == "Weekly Snapshot": snapshot_page(user)
-    elif page == "Cash Management": cash_management_page(user)
-    elif page == "Enter Trade": trade_entry_page(user)
-    elif page == "Ledger": ledger_page(user)
-    elif page == "Import Data": import_page(user)
-    elif page == "Settings": settings_page(user)
-
-if __name__ == "__main__":
-    main()
+    # -------- Page Routing --------
+    if page == "Dashboard":
+        dashboard_page(user)
+    elif page == "Enter Trade":
+        trade_entry_page(user)
+    elif page == "Option Details":
+        option_details_page(user)
+    elif page == "LEAP Prices":
+        pricing_page(user)
+    elif page == "Ledger":
+        ledger_page(user)
+    elif page == "History":
+        history_page(user)
+    elif page == "Import Data":
+        import_data_page(user)
+    elif page == "Unified Import":
+        unified_import_page(user)
+    elif page == "Settings":
+        settings_page(user)
