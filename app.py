@@ -40,6 +40,32 @@ import math
 import os
 import uuid
 
+def _price_refresh_controls(user, page_name: str, force_leap_mid: bool = False):
+    """
+    Standard price refresh behavior:
+    - On first entry to the page (navigation), clear cached pricing so values re-fetch.
+    - Provide a top-of-page Refresh Prices button to manually refresh while staying on the page.
+    NOTE: Colors are controlled via .streamlit/config.toml; this only affects data freshness.
+    """
+    prev = st.session_state.get("_current_page_name")
+    if prev != page_name:
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        if force_leap_mid:
+            st.session_state[f"leap_mid_autorefresh_{user.id}"] = "__force__"
+        st.session_state["_current_page_name"] = page_name
+
+    if st.button("🔄 Refresh Prices", key=f"refresh_prices_{page_name}_{user.id}", type="primary"):
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        if force_leap_mid:
+            st.session_state[f"leap_mid_autorefresh_{user.id}"] = "__force__"
+        st.rerun()
+
 def force_light_mode():
     st.markdown("""
         <style>
@@ -734,6 +760,9 @@ def get_open_short_call_contracts(user_id, symbol):
 
 def dashboard_page(user):
     st.header("📊 Executive Dashboard")
+
+
+    _price_refresh_controls(user, 'Dashboard', force_leap_mid=False)
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
     fx = float(get_usd_to_cad_rate() or 1.0)
@@ -1485,6 +1514,9 @@ def dashboard_page(user):
 def option_details_page(user):
     st.header("📊 Executive Dashboard")
     
+
+    _price_refresh_controls(user, 'Option Details', force_leap_mid=False)
+
     # --- Top Controls ---
     c_ctrl_1, c_ctrl_2, c_ctrl_3 = st.columns([2, 4, 1])
     with c_ctrl_1:
@@ -2464,6 +2496,9 @@ def cash_management_page(user):
 
 def pricing_page(user):
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
+
+
+    _price_refresh_controls(user, 'Update LEAP Prices', force_leap_mid=True)
 
     assets, _ = get_portfolio_data(user.id)
     if assets.empty:
