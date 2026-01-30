@@ -5,67 +5,190 @@ import streamlit as st
 # =========================
 def apply_global_ui_theme():
     """
-    Standardize colors for readability across Streamlit Cloud themes.
-    Forces dark text on light surfaces, improves button contrast, inputs, tables, and sidebar.
+    Centralized, aggressive UI theme overrides for consistent readability across ALL pages.
+    Streamlit Cloud sometimes mixes dark/light theme tokens; this forces a consistent light theme
+    with dark text and high-contrast controls.
     """
     st.markdown(
         """
         <style>
-        /* App background + default text */
-        .stApp { background: #ffffff; color: #111827; }
-        html, body, [class*="css"] { color: #111827; }
+        /* =========================
+           Global base + typography
+           ========================= */
+        :root {
+            --bg: #ffffff;
+            --panel: #ffffff;
+            --sidebar: #f8fafc;
+            --text: #111827;
+            --muted: #374151;
+            --border: #d1d5db;
+            --header: #0f172a;
+            --link: #1d4ed8;
 
-        /* Sidebar */
-        [data-testid="stSidebar"] { background: #f8fafc; }
-        [data-testid="stSidebar"] * { color: #111827 !important; }
-        [data-testid="stSidebar"] a, [data-testid="stSidebar"] a * { color: #111827 !important; }
-        [data-testid="stSidebar"] hr { border-color: #e5e7eb; }
+            --btn-bg: #111827;
+            --btn-text: #ffffff;
+            --btn-border: #111827;
+
+            --input-bg: #ffffff;
+            --input-text: #111827;
+            --input-border: #d1d5db;
+
+            --table-head: #f3f4f6;
+            --table-alt: #fafafa;
+        }
+
+        html, body, .stApp {
+            background: var(--bg) !important;
+            color: var(--text) !important;
+        }
+
+        /* Force text color everywhere (Streamlit sometimes injects white text in dark mode) */
+        * {
+            color: var(--text) !important;
+        }
+
+        /* Keep icons/plots unaffected where possible */
+        svg, svg * {
+            color: inherit !important;
+        }
 
         /* Headings */
-        h1, h2, h3, h4, h5, h6 { color: #111827; }
-
-        /* Inputs */
-        .stTextInput input, .stNumberInput input, .stDateInput input,
-        .stSelectbox div[data-baseweb="select"] > div,
-        .stTextArea textarea {
-            color: #111827 !important;
-            background: #ffffff !important;
-            border-color: #d1d5db !important;
+        h1, h2, h3, h4, h5, h6 {
+            color: var(--header) !important;
         }
 
-        /* Labels */
-        label, .stMarkdown, .stMarkdown p, .stMarkdown span { color: #111827 !important; }
-
-        /* Buttons */
-        .stButton button, button[kind="primary"], button[kind="secondary"] {
-            background: #111827 !important;
-            color: #ffffff !important;
-            border: 1px solid #111827 !important;
-            border-radius: 10px !important;
+        /* Sidebar */
+        [data-testid="stSidebar"] {
+            background: var(--sidebar) !important;
+            border-right: 1px solid var(--border) !important;
         }
-        .stButton button:hover, button[kind="primary"]:hover, button[kind="secondary"]:hover {
-            filter: brightness(1.05);
+        [data-testid="stSidebar"] * {
+            color: var(--text) !important;
         }
-
-        /* Dataframes / Tables */
-        [data-testid="stDataFrame"] { background: #ffffff; }
-        [data-testid="stDataFrame"] * { color: #111827 !important; }
-        table { color: #111827 !important; }
-        thead tr th { background: #f3f4f6 !important; }
-
-        /* Expanders */
-        [data-testid="stExpander"] { border-color: #e5e7eb; }
-        [data-testid="stExpander"] * { color: #111827 !important; }
-
-        /* Alerts */
-        [data-testid="stAlert"] { color: #111827 !important; }
 
         /* Links */
-        a { color: #1d4ed8 !important; }
+        a, a * {
+            color: var(--link) !important;
+        }
 
+        /* =========================
+           Inputs
+           ========================= */
+        input, textarea, select {
+            background: var(--input-bg) !important;
+            color: var(--input-text) !important;
+            border-color: var(--input-border) !important;
+        }
+
+        /* Streamlit input wrappers */
+        .stTextInput input,
+        .stNumberInput input,
+        .stDateInput input,
+        .stTextArea textarea {
+            background: var(--input-bg) !important;
+            color: var(--input-text) !important;
+            border: 1px solid var(--input-border) !important;
+        }
+
+        /* BaseWeb (Selectbox) */
+        [data-baseweb="select"] * {
+            background: var(--input-bg) !important;
+            color: var(--input-text) !important;
+        }
+        [data-baseweb="select"] > div {
+            border: 1px solid var(--input-border) !important;
+            border-radius: 10px !important;
+        }
+
+        /* Labels / helper text */
+        label, small, .stCaption, .stMarkdown p, .stMarkdown span {
+            color: var(--muted) !important;
+        }
+
+        /* =========================
+           Buttons (all kinds)
+           ========================= */
+        button, .stButton button, button[kind="primary"], button[kind="secondary"] {
+            background: var(--btn-bg) !important;
+            color: var(--btn-text) !important;
+            border: 1px solid var(--btn-border) !important;
+            border-radius: 10px !important;
+        }
+        button:hover, .stButton button:hover, button[kind="primary"]:hover, button[kind="secondary"]:hover {
+            filter: brightness(1.05) !important;
+        }
+        button:disabled {
+            opacity: 0.6 !important;
+        }
+
+        /* =========================
+           Tables / Dataframes
+           ========================= */
+        table, thead, tbody, tr, th, td {
+            color: var(--text) !important;
+        }
+        thead tr th {
+            background: var(--table-head) !important;
+            border-bottom: 1px solid var(--border) !important;
+        }
+        tbody tr:nth-child(even) td {
+            background: var(--table-alt) !important;
+        }
+        tbody tr td {
+            border-bottom: 1px solid #eef2f7 !important;
+        }
+
+        /* Streamlit dataframe container */
+        [data-testid="stDataFrame"] {
+            background: var(--panel) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 12px !important;
+            overflow: hidden !important;
+        }
+        [data-testid="stDataFrame"] * {
+            color: var(--text) !important;
+        }
+
+        /* Expander */
+        [data-testid="stExpander"] {
+            border: 1px solid var(--border) !important;
+            border-radius: 12px !important;
+            background: var(--panel) !important;
+        }
+        [data-testid="stExpander"] summary {
+            background: var(--table-head) !important;
+        }
+
+        /* Alerts */
+        [data-testid="stAlert"] {
+            border-radius: 12px !important;
+            border-color: var(--border) !important;
+            background: #f8fafc !important;
+        }
+
+        /* Code blocks */
+        pre, code {
+            background: #f3f4f6 !important;
+            color: #111827 !important;
+            border-radius: 10px !important;
+        }
+
+        /* Metric widgets */
+        [data-testid="stMetric"] {
+            background: var(--panel) !important;
+            border: 1px solid var(--border) !important;
+            border-radius: 12px !important;
+            padding: 10px !important;
+        }
+        [data-testid="stMetric"] * {
+            color: var(--text) !important;
+        }
+
+        /* Remove dark overlays some themes add */
+        .stApp [data-testid="stToolbar"] { background: transparent !important; }
         </style>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
 import pandas as pd
 import altair as alt
