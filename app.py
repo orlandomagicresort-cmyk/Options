@@ -2836,7 +2836,16 @@ def ledger_page(user):
     for gkey, gdf in df.groupby("gkey", sort=False):
         gdf = gdf.copy()
         gdate = gdf["_d"].dropna().min()
-        symbol = (gdf.get("related_symbol") or gdf.get("symbol")).iloc[0] if "related_symbol" in gdf.columns else ""
+        # Choose a symbol safely (avoid pandas Series truth-value ambiguity)
+            symbol = ""
+            if "related_symbol" in gdf.columns:
+                rs = gdf["related_symbol"].dropna()
+                if not rs.empty:
+                    symbol = str(rs.iloc[0])
+            if (not symbol) and "symbol" in gdf.columns:
+                ss = gdf["symbol"].dropna()
+                if not ss.empty:
+                    symbol = str(ss.iloc[0])
         action = _friendly_action_group(gdf)
         amount = float(pd.to_numeric(gdf.get("amount"), errors="coerce").fillna(0).sum())
         groups.append({"gkey": gkey, "date": gdate, "symbol": symbol, "action": action, "amount": amount, "gdf": gdf})
