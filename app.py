@@ -1081,18 +1081,33 @@ def dashboard_page(user):
                 weekly_rets.append(float(weekly_ret))
                 weekly_profits.append(float(weekly_profit))
 
+            # Include the current (unfrozen) week from the last snapshot to today
+            last_date = hist_df.iloc[-1]["snapshot_date"]
+            last_eq = float(hist_df.iloc[-1]["total_equity"])
+            cur_flow = 0.0
+            if not tx_df.empty:
+                mask_cur = tx_df["transaction_date"] > last_date
+                cur_flow = float(tx_df.loc[mask_cur, "amount"].sum())
+            cur_base = last_eq + cur_flow
+            cur_profit = float(net_liq_usd) - float(cur_base)
+            cur_ret = (cur_profit / cur_base) if cur_base not in (0, 0.0, None) else 0.0
+
             # Compound Weekly % week-over-week (skip first row which is always 0)
             prod = 1.0
             for r in weekly_rets[1:]:
-                # guard against NaN/inf
                 if r is None or (isinstance(r, float) and (math.isinf(r) or math.isnan(r))):
                     r = 0.0
                 prod *= (1.0 + float(r))
+
+            # Include current week
+            if cur_ret is None or (isinstance(cur_ret, float) and (math.isinf(cur_ret) or math.isnan(cur_ret))):
+                cur_ret = 0.0
+            prod *= (1.0 + float(cur_ret))
             life_pct_local = float(prod - 1.0)
 
-            # Lifetime profit dollars: sum of flow-normalized weekly P/L values (ignores deposits/withdrawals).
-            # This matches your request to "just add the weekly P/L" week-over-week.
+            # Lifetime profit dollars: sum of flow-normalized weekly P/L values + current week P/L.
             life_profit_local = float(sum(weekly_profits[1:])) if len(weekly_profits) > 1 else 0.0
+            life_profit_local += float(cur_profit)
 
             return life_profit_local, life_pct_local
 
@@ -1163,10 +1178,26 @@ def dashboard_page(user):
                 weekly_profits.append(float(weekly_profit))
                 weekly_flows.append(float(net_flow))
 
-            # Trailing 52 weeks: compound last 52 weekly returns ending at last snapshot
+            # Include the current (unfrozen) week from the last snapshot to today
+            last_date = hist_df.iloc[-1]["snapshot_date"]
+            last_eq = float(hist_df.iloc[-1]["total_equity"])
+            cur_flow = 0.0
+            if not tx_df.empty:
+                mask_cur = tx_df["transaction_date"] > last_date
+                cur_flow = float(tx_df.loc[mask_cur, "amount"].sum())
+            cur_base = last_eq + cur_flow
+            cur_profit = float(net_liq_usd) - float(cur_base)
+            cur_ret = (cur_profit / cur_base) if cur_base not in (0, 0.0, None) else 0.0
+
+            # Trailing 52 weeks INCLUDING current week:
+            # take up to the last 51 snapshot weekly returns + current week = 52 periods
             end_i = len(hist_df) - 1
-            start_k = max(1, end_i - 51)  # matches History tab logic
+            start_k = max(1, end_i - 50)
+
             window_rets = [float(weekly_rets[k]) for k in range(start_k, end_i + 1)]
+            # append current week
+            window_rets.append(float(cur_ret))
+
             prod = 1.0
             for r in window_rets:
                 if r is None or (isinstance(r, float) and (math.isinf(r) or math.isnan(r))):
@@ -1174,9 +1205,10 @@ def dashboard_page(user):
                 prod *= (1.0 + float(r))
             pct_52w = float(prod - 1.0) if window_rets else 0.0
 
-            # Dollar profit over same window: sum of flow-normalized weekly P/L values in the window.
-            # This ignores deposits/withdrawals by construction (weekly_profit = curr_eq - (prev_eq + net_flow)).
+            # Dollar profit over same window: sum of weekly P/L values in window + current week P/L
             profit_52w = float(sum(weekly_profits[start_k:end_i + 1])) if (end_i >= start_k) else 0.0
+            profit_52w += float(cur_profit)
+
             return profit_52w, pct_52w
 
         except Exception:
@@ -1795,10 +1827,15 @@ def option_details_page(user):
                     with r_c3:
                         new_premium = st.number_input("New Premium ($)", min_value=0.0, format="%.2f", step=0.01)
                     
-                    def_date = datetime.now().date() + timedelta(days=30)
-                    new_exp = st.date_input("New Expiration Date", value=def_date)
+                    def _next_friday_local(d: date) -> date:
+                        days_ahead = (4 - d.weekday()) % 7
+                        if days_ahead == 0:
+                            days_ahead = 7
+                        return d + timedelta(days=days_ahead)
 
-                    # Ensure standard float/int calculation (prevents numpy errors)
+                    def_date = _next_friday_local(date.today())
+                    new_exp = st.date_input("New Expiration Date", value=def_date)
+# Ensure standard float/int calculation (prevents numpy errors)
                     calc_btc = float(btc_price) * int(qty_to_process) * 100
                     calc_sto = float(new_premium) * int(qty_to_process) * 100
                     net_cash = calc_sto - calc_btc
