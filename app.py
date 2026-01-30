@@ -2893,6 +2893,26 @@ def ledger_page(user):
         st.info("No transactions in this date range.")
         return
 
+    # --- Search / Filters ---
+    f1, f2 = st.columns(2)
+    sym_options = sorted({str(g.get("symbol") or "").upper() for g in disp if str(g.get("symbol") or "").strip()})
+    act_options = sorted({str(g.get("action") or "") for g in disp if str(g.get("action") or "").strip()})
+
+    with f1:
+        sym_sel = st.multiselect("Filter Symbol", options=sym_options, default=[])
+    with f2:
+        act_sel = st.multiselect("Filter Action", options=act_options, default=[])
+
+    if sym_sel:
+        sym_set = {s.upper() for s in sym_sel}
+        disp = [g for g in disp if str(g.get("symbol") or "").upper() in sym_set]
+    if act_sel:
+        act_set = set(act_sel)
+        disp = [g for g in disp if str(g.get("action") or "") in act_set]
+
+    # Sort newest first
+    disp = sorted(disp, key=lambda g: (g.get("date") or date.min, str(g.get("gkey") or "")), reverse=True)
+
     # -------- Render --------
     hdr = st.columns([1.1, 1.0, 2.3, 1.2, 1.3, 0.8])
     hdr[0].markdown("**Date**")
