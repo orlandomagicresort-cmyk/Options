@@ -36,6 +36,18 @@ import yfinance as yf
 import re
 from supabase import create_client, Client
 from datetime import datetime, date, timedelta
+
+def _next_friday_local(d: date) -> date:
+    """Return the next Friday after date d. If d is Friday, returns the following Friday."""
+    days_ahead = (4 - d.weekday()) % 7
+    if days_ahead == 0:
+        days_ahead = 7
+    return d + timedelta(days=days_ahead)
+
+def _next_friday(d: date) -> date:
+    """Compatibility wrapper used by multiple pages."""
+    return _next_friday_local(d)
+
 import math
 import os
 import uuid
@@ -3424,7 +3436,7 @@ def bulk_entries_page(user):
 
         # shared defaults
         today = datetime.now().date()
-        nf = _next_friday_local(today)
+        nf = _next_friday(today)
 
         if asset_kind == "Stock":
             action = st.selectbox("Action", ["Buy", "Sell"], key="bulk_stock_action")
