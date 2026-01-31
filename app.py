@@ -3415,305 +3415,311 @@ def _bulk_expire_option(option_id: int):
 
 
 def bulk_entries_page(user):
-    st.header("🧾 Bulk Entries")
-    st.caption("Enter multiple transactions at once. Review the summary, then submit all updates in one batch.")
 
-    asset_kind = st.selectbox("Asset", ["Stock", "LEAP", "Shorts"], key="bulk_asset_kind")
-
-    # shared defaults
-    today = datetime.now().date()
-    nf = _next_friday(today)
-
-    if asset_kind == "Stock":
-        action = st.selectbox("Action", ["Buy", "Sell"], key="bulk_stock_action")
-        # Ticker choices: for Sell, limit to tickers you own
-        owned = _fetch_stock_tickers(user)
-
-        default_rows = st.session_state.get("bulk_rows_stock", [])
-        if not default_rows:
-            default_rows = [{
-                "Date": today,
-                "Ticker": "",
-                "Qty": 100,
-                "Price": 0.0,
-                "Fees": 0.0,
-                "Net Cash Change": 0.0,
-            }]
-
-        col_cfg = {
-            "Date": st.column_config.DateColumn("Date", default=today),
-            "Ticker": st.column_config.SelectboxColumn("Ticker", options=owned, required=False) if action == "Sell" and owned else st.column_config.TextColumn("Ticker"),
-            "Qty": st.column_config.NumberColumn("Qty", step=1, default=100),
-            "Price": st.column_config.NumberColumn("Price", step=0.01),
-            "Fees": st.column_config.NumberColumn("Fees", step=0.01, default=0.0),
-            "Net Cash Change": st.column_config.NumberColumn("Net Cash Change", disabled=True),
-        }
-
-        df = st.data_editor(default_rows, num_rows="dynamic", key="bulk_stock_editor", column_config=col_cfg)
-        # compute net cash
-        rows = []
-        for r in df:
-            qty = float(r.get("Qty") or 0)
-            price = float(r.get("Price") or 0)
-            fees = float(r.get("Fees") or 0)
-            r["Net Cash Change"] = _bulk_net_cash_change("Stock", action, qty, price, fees)
-            r["Action"] = action
-            rows.append(r)
-        st.session_state["bulk_rows_stock"] = rows
-
-        summary = rows
-        process_kind = "Stock"
-
-    elif asset_kind == "LEAP":
-        action = st.selectbox(
-            "Action",
-            ["Buy to Close", "Sell to Open", "Sell to Close", "Roll", "Expire", "Assign"],
-            key="bulk_leap_action"
-        )
-        # For LEAP bulk we treat them as LONG options in assets table (not shorts)
-        # We'll provide ticker dropdown for actions that use existing positions.
-        longs = _fetch_long_leaps(user)
-        long_syms = sorted({str(r.get("symbol") or r.get("ticker") or "").upper() for r in longs if str(r.get("symbol") or r.get("ticker") or "")})
-        default_rows = st.session_state.get("bulk_rows_leap", [])
-        if not default_rows:
-            default_rows = [{
-                "Date": today,
-                "Ticker": "",
-                "Exp": _third_friday_next_december(today),
-                "Strike": 0.0,
-                "Type": "CALL",
-                "Contracts": 1,
-                "Premium": 0.0,
-                "Fees": 0.0,
-                "Net Cash Change": 0.0,
-            }]
-
-        if action in ["Sell to Close", "Roll", "Expire", "Assign", "Buy to Close"]:
-            ticker_col = st.column_config.SelectboxColumn("Ticker", options=long_syms, required=False) if long_syms else st.column_config.TextColumn("Ticker")
-        else:
-            ticker_col = st.column_config.TextColumn("Ticker")
-
-        col_cfg = {
-            "Date": st.column_config.DateColumn("Date", default=today),
-            "Ticker": ticker_col,
-            "Exp": st.column_config.DateColumn("Exp", default=_third_friday_next_december(today)),
-            "Strike": st.column_config.NumberColumn("Strike", step=0.5),
-            "Type": st.column_config.SelectboxColumn("Type", options=["CALL", "PUT"]),
-            "Contracts": st.column_config.NumberColumn("Contracts", step=1, default=1),
-            "Premium": st.column_config.NumberColumn("Premium", step=0.01),
-            "Fees": st.column_config.NumberColumn("Fees", step=0.01, default=0.0),
-            "Net Cash Change": st.column_config.NumberColumn("Net Cash Change", disabled=True),
-        }
-
-        # For Roll, we need extra cols
-        if action == "Roll":
-            for k,v in {
-                "BTC Price": st.column_config.NumberColumn("BTC Price", step=0.01),
-                "New Strike": st.column_config.NumberColumn("New Strike", step=0.5),
-                "New Premium": st.column_config.NumberColumn("New Premium", step=0.01),
-                "New Exp": st.column_config.DateColumn("New Exp", default=nf),
-            }.items():
-                col_cfg[k]=v
-
-        df = st.data_editor(default_rows, num_rows="dynamic", key="bulk_leap_editor", column_config=col_cfg)
-        rows=[]
-        for r in df:
-            c = float(r.get("Contracts") or 0)
-            prem = float(r.get("Premium") or 0)
-            fees = float(r.get("Fees") or 0)
-            # LEAP cash change uses option premium
-            r["Net Cash Change"] = _bulk_net_cash_change("LEAP", "Sell" if "Sell" in action else "Buy", c, prem, fees)
-            r["Action"] = action
-            rows.append(r)
-        st.session_state["bulk_rows_leap"] = rows
-        summary = rows
-        process_kind = "LEAP"
-
-    else:  # Shorts
-        action = st.selectbox(
-            "Action",
-            ["Buy to Close", "Sell to Open", "Roll", "Expire", "Assign"],
-            key="bulk_short_action"
-        )
-        open_shorts = _fetch_open_shorts(user)
-        short_syms = sorted({str(r.get("symbol") or "").upper() for r in open_shorts if str(r.get("symbol") or "")})
-        default_rows = st.session_state.get("bulk_rows_short", [])
-        if not default_rows:
-            default_rows = [{
-                "Date": today,
-                "Ticker": "",
-                "Exp": nf,
-                "Strike": 0.0,
-                "Type": "CALL",
-                "Contracts": 1,
-                "Premium": 0.0,
-                "Fees": 0.0,
-                "Net Cash Change": 0.0,
-            }]
-
-        # ticker column based on action
-        if action in ["Buy to Close", "Roll", "Expire", "Assign"]:
-            ticker_col = st.column_config.SelectboxColumn("Ticker", options=short_syms, required=False) if short_syms else st.column_config.TextColumn("Ticker")
-        else:
-            # Sell to open: limit to tickers with holdings
-            tick_opts = get_distinct_holdings(user.id)
-            ticker_col = st.column_config.SelectboxColumn("Ticker", options=tick_opts, required=False) if tick_opts else st.column_config.TextColumn("Ticker")
-
-        col_cfg = {
-            "Date": st.column_config.DateColumn("Date", default=today),
-            "Ticker": ticker_col,
-            "Exp": st.column_config.DateColumn("Exp", default=nf),
-            "Strike": st.column_config.NumberColumn("Strike", step=0.5),
-            "Type": st.column_config.SelectboxColumn("Type", options=["CALL", "PUT"]),
-            "Contracts": st.column_config.NumberColumn("Contracts", step=1, default=1),
-            "Premium": st.column_config.NumberColumn("Premium", step=0.01),
-            "Fees": st.column_config.NumberColumn("Fees", step=0.01, default=0.0),
-            "Net Cash Change": st.column_config.NumberColumn("Net Cash Change", disabled=True),
-        }
-        if action == "Roll":
-            for k,v in {
-                "BTC Price": st.column_config.NumberColumn("BTC Price", step=0.01),
-                "New Strike": st.column_config.NumberColumn("New Strike", step=0.5),
-                "New Premium": st.column_config.NumberColumn("New Premium", step=0.01),
-                "New Exp": st.column_config.DateColumn("New Exp", default=nf),
-            }.items():
-                col_cfg[k]=v
-
-        df = st.data_editor(default_rows, num_rows="dynamic", key="bulk_short_editor", column_config=col_cfg)
-        rows=[]
-        for r in df:
-            c=float(r.get("Contracts") or 0)
-            prem=float(r.get("Premium") or 0)
-            fees=float(r.get("Fees") or 0)
-            # shorts: sell to open positive, buy to close negative
-            act_cash = "Sell" if action == "Sell to Open" else ("Buy" if action == "Buy to Close" else "Buy")
-            r["Net Cash Change"] = _bulk_net_cash_change("Shorts", act_cash, c, prem, fees)
-            r["Action"]=action
-            rows.append(r)
-        st.session_state["bulk_rows_short"]=rows
-        summary=rows
-        process_kind="Shorts"
-
-    st.divider()
-    st.subheader("Review & Submit")
-    if not summary:
-        st.info("Add at least one row above.")
-        return
-
-    # Show summary table
     try:
-        import pandas as pd
-        sdf = pd.DataFrame(summary)
-        st.dataframe(sdf, use_container_width=True)
-        total_cash = float(sdf.get("Net Cash Change", pd.Series([0])).sum())
-        st.metric("Total Net Cash Change", f"${total_cash:,.2f}")
-    except Exception:
-        total_cash = 0.0
+        st.header("🧾 Bulk Entries")
+        st.caption("Enter multiple transactions at once. Review the summary, then submit all updates in one batch.")
 
-    if st.checkbox("I confirm these transactions are correct", key="bulk_confirm"):
-        if st.button("✅ Submit All Transactions", type="primary"):
-            errors=[]
-            ok=0
-            for r in summary:
-                try:
-                    d = r.get("Date") or today
-                    if isinstance(d, str):
-                        d = date.fromisoformat(d[:10])
-                    sym = str(r.get("Ticker") or "").upper().strip()
-                    fees = float(r.get("Fees") or 0)
-                    if process_kind == "Stock":
-                        qty=float(r.get("Qty") or 0)
-                        price=float(r.get("Price") or 0)
-                        update_asset_position(user.id, sym, qty, price, r.get("Action"), d, "STOCK", fees=fees)
-                        ok += 1
-                    elif process_kind == "LEAP":
-                        act = r.get("Action")
-                        contracts=int(float(r.get("Contracts") or 0))
-                        prem=float(r.get("Premium") or 0)
-                        opt_type=str(r.get("Type") or "CALL").upper()
-                        exp = r.get("Exp") or _third_friday_next_december(today)
-                        if isinstance(exp, str):
-                            exp = date.fromisoformat(exp[:10])
-                        strike=float(r.get("Strike") or 0)
-                        if act == "Sell to Open":
-                            update_asset_position(user.id, sym, contracts, prem, "Buy", d, f"LEAP_{opt_type}", exp, strike, fees=fees)  # treat as opening long
+        asset_kind = st.selectbox("Asset", ["Stock", "LEAP", "Shorts"], key="bulk_asset_kind")
+
+        # shared defaults
+        today = datetime.now().date()
+        nf = _next_friday(today)
+
+        if asset_kind == "Stock":
+            action = st.selectbox("Action", ["Buy", "Sell"], key="bulk_stock_action")
+            # Ticker choices: for Sell, limit to tickers you own
+            owned = _fetch_stock_tickers(user)
+
+            default_rows = st.session_state.get("bulk_rows_stock", [])
+            if not default_rows:
+                default_rows = [{
+                    "Date": today,
+                    "Ticker": "",
+                    "Qty": 100,
+                    "Price": 0.0,
+                    "Fees": 0.0,
+                    "Net Cash Change": 0.0,
+                }]
+
+            col_cfg = {
+                "Date": st.column_config.DateColumn("Date", default=today),
+                "Ticker": st.column_config.SelectboxColumn("Ticker", options=owned, required=False) if action == "Sell" and owned else st.column_config.TextColumn("Ticker"),
+                "Qty": st.column_config.NumberColumn("Qty", step=1, default=100),
+                "Price": st.column_config.NumberColumn("Price", step=0.01),
+                "Fees": st.column_config.NumberColumn("Fees", step=0.01, default=0.0),
+                "Net Cash Change": st.column_config.NumberColumn("Net Cash Change", disabled=True),
+            }
+
+            df = st.data_editor(default_rows, num_rows="dynamic", key="bulk_stock_editor", column_config=col_cfg)
+            # compute net cash
+            rows = []
+            for r in df:
+                qty = float(r.get("Qty") or 0)
+                price = float(r.get("Price") or 0)
+                fees = float(r.get("Fees") or 0)
+                r["Net Cash Change"] = _bulk_net_cash_change("Stock", action, qty, price, fees)
+                r["Action"] = action
+                rows.append(r)
+            st.session_state["bulk_rows_stock"] = rows
+
+            summary = rows
+            process_kind = "Stock"
+
+        elif asset_kind == "LEAP":
+            action = st.selectbox(
+                "Action",
+                ["Buy to Close", "Sell to Open", "Sell to Close", "Roll", "Expire", "Assign"],
+                key="bulk_leap_action"
+            )
+            # For LEAP bulk we treat them as LONG options in assets table (not shorts)
+            # We'll provide ticker dropdown for actions that use existing positions.
+            longs = _fetch_long_leaps(user)
+            long_syms = sorted({str(r.get("symbol") or r.get("ticker") or "").upper() for r in longs if str(r.get("symbol") or r.get("ticker") or "")})
+            default_rows = st.session_state.get("bulk_rows_leap", [])
+            if not default_rows:
+                default_rows = [{
+                    "Date": today,
+                    "Ticker": "",
+                    "Exp": _third_friday_next_december(today),
+                    "Strike": 0.0,
+                    "Type": "CALL",
+                    "Contracts": 1,
+                    "Premium": 0.0,
+                    "Fees": 0.0,
+                    "Net Cash Change": 0.0,
+                }]
+
+            if action in ["Sell to Close", "Roll", "Expire", "Assign", "Buy to Close"]:
+                ticker_col = st.column_config.SelectboxColumn("Ticker", options=long_syms, required=False) if long_syms else st.column_config.TextColumn("Ticker")
+            else:
+                ticker_col = st.column_config.TextColumn("Ticker")
+
+            col_cfg = {
+                "Date": st.column_config.DateColumn("Date", default=today),
+                "Ticker": ticker_col,
+                "Exp": st.column_config.DateColumn("Exp", default=_third_friday_next_december(today)),
+                "Strike": st.column_config.NumberColumn("Strike", step=0.5),
+                "Type": st.column_config.SelectboxColumn("Type", options=["CALL", "PUT"]),
+                "Contracts": st.column_config.NumberColumn("Contracts", step=1, default=1),
+                "Premium": st.column_config.NumberColumn("Premium", step=0.01),
+                "Fees": st.column_config.NumberColumn("Fees", step=0.01, default=0.0),
+                "Net Cash Change": st.column_config.NumberColumn("Net Cash Change", disabled=True),
+            }
+
+            # For Roll, we need extra cols
+            if action == "Roll":
+                for k,v in {
+                    "BTC Price": st.column_config.NumberColumn("BTC Price", step=0.01),
+                    "New Strike": st.column_config.NumberColumn("New Strike", step=0.5),
+                    "New Premium": st.column_config.NumberColumn("New Premium", step=0.01),
+                    "New Exp": st.column_config.DateColumn("New Exp", default=nf),
+                }.items():
+                    col_cfg[k]=v
+
+            df = st.data_editor(default_rows, num_rows="dynamic", key="bulk_leap_editor", column_config=col_cfg)
+            rows=[]
+            for r in df:
+                c = float(r.get("Contracts") or 0)
+                prem = float(r.get("Premium") or 0)
+                fees = float(r.get("Fees") or 0)
+                # LEAP cash change uses option premium
+                r["Net Cash Change"] = _bulk_net_cash_change("LEAP", "Sell" if "Sell" in action else "Buy", c, prem, fees)
+                r["Action"] = action
+                rows.append(r)
+            st.session_state["bulk_rows_leap"] = rows
+            summary = rows
+            process_kind = "LEAP"
+
+        else:  # Shorts
+            action = st.selectbox(
+                "Action",
+                ["Buy to Close", "Sell to Open", "Roll", "Expire", "Assign"],
+                key="bulk_short_action"
+            )
+            open_shorts = _fetch_open_shorts(user)
+            short_syms = sorted({str(r.get("symbol") or "").upper() for r in open_shorts if str(r.get("symbol") or "")})
+            default_rows = st.session_state.get("bulk_rows_short", [])
+            if not default_rows:
+                default_rows = [{
+                    "Date": today,
+                    "Ticker": "",
+                    "Exp": nf,
+                    "Strike": 0.0,
+                    "Type": "CALL",
+                    "Contracts": 1,
+                    "Premium": 0.0,
+                    "Fees": 0.0,
+                    "Net Cash Change": 0.0,
+                }]
+
+            # ticker column based on action
+            if action in ["Buy to Close", "Roll", "Expire", "Assign"]:
+                ticker_col = st.column_config.SelectboxColumn("Ticker", options=short_syms, required=False) if short_syms else st.column_config.TextColumn("Ticker")
+            else:
+                # Sell to open: limit to tickers with holdings
+                tick_opts = get_distinct_holdings(user.id)
+                ticker_col = st.column_config.SelectboxColumn("Ticker", options=tick_opts, required=False) if tick_opts else st.column_config.TextColumn("Ticker")
+
+            col_cfg = {
+                "Date": st.column_config.DateColumn("Date", default=today),
+                "Ticker": ticker_col,
+                "Exp": st.column_config.DateColumn("Exp", default=nf),
+                "Strike": st.column_config.NumberColumn("Strike", step=0.5),
+                "Type": st.column_config.SelectboxColumn("Type", options=["CALL", "PUT"]),
+                "Contracts": st.column_config.NumberColumn("Contracts", step=1, default=1),
+                "Premium": st.column_config.NumberColumn("Premium", step=0.01),
+                "Fees": st.column_config.NumberColumn("Fees", step=0.01, default=0.0),
+                "Net Cash Change": st.column_config.NumberColumn("Net Cash Change", disabled=True),
+            }
+            if action == "Roll":
+                for k,v in {
+                    "BTC Price": st.column_config.NumberColumn("BTC Price", step=0.01),
+                    "New Strike": st.column_config.NumberColumn("New Strike", step=0.5),
+                    "New Premium": st.column_config.NumberColumn("New Premium", step=0.01),
+                    "New Exp": st.column_config.DateColumn("New Exp", default=nf),
+                }.items():
+                    col_cfg[k]=v
+
+            df = st.data_editor(default_rows, num_rows="dynamic", key="bulk_short_editor", column_config=col_cfg)
+            rows=[]
+            for r in df:
+                c=float(r.get("Contracts") or 0)
+                prem=float(r.get("Premium") or 0)
+                fees=float(r.get("Fees") or 0)
+                # shorts: sell to open positive, buy to close negative
+                act_cash = "Sell" if action == "Sell to Open" else ("Buy" if action == "Buy to Close" else "Buy")
+                r["Net Cash Change"] = _bulk_net_cash_change("Shorts", act_cash, c, prem, fees)
+                r["Action"]=action
+                rows.append(r)
+            st.session_state["bulk_rows_short"]=rows
+            summary=rows
+            process_kind="Shorts"
+
+        st.divider()
+        st.subheader("Review & Submit")
+        if not summary:
+            st.info("Add at least one row above.")
+            return
+
+        # Show summary table
+        try:
+            import pandas as pd
+            sdf = pd.DataFrame(summary)
+            st.dataframe(sdf, use_container_width=True)
+            total_cash = float(sdf.get("Net Cash Change", pd.Series([0])).sum())
+            st.metric("Total Net Cash Change", f"${total_cash:,.2f}")
+        except Exception:
+            total_cash = 0.0
+
+        if st.checkbox("I confirm these transactions are correct", key="bulk_confirm"):
+            if st.button("✅ Submit All Transactions", type="primary"):
+                errors=[]
+                ok=0
+                for r in summary:
+                    try:
+                        d = r.get("Date") or today
+                        if isinstance(d, str):
+                            d = date.fromisoformat(d[:10])
+                        sym = str(r.get("Ticker") or "").upper().strip()
+                        fees = float(r.get("Fees") or 0)
+                        if process_kind == "Stock":
+                            qty=float(r.get("Qty") or 0)
+                            price=float(r.get("Price") or 0)
+                            update_asset_position(user.id, sym, qty, price, r.get("Action"), d, "STOCK", fees=fees)
                             ok += 1
-                        elif act == "Sell to Close":
-                            update_asset_position(user.id, sym, contracts, prem, "Sell", d, f"LEAP_{opt_type}", exp, strike, fees=fees)
-                            ok += 1
-                        elif act == "Expire":
-                            # just reduce quantity to 0 at $0
-                            update_asset_position(user.id, sym, contracts, 0.0, "Sell", d, f"LEAP_{opt_type}", exp, strike, fees=fees)
-                            ok += 1
+                        elif process_kind == "LEAP":
+                            act = r.get("Action")
+                            contracts=int(float(r.get("Contracts") or 0))
+                            prem=float(r.get("Premium") or 0)
+                            opt_type=str(r.get("Type") or "CALL").upper()
+                            exp = r.get("Exp") or _third_friday_next_december(today)
+                            if isinstance(exp, str):
+                                exp = date.fromisoformat(exp[:10])
+                            strike=float(r.get("Strike") or 0)
+                            if act == "Sell to Open":
+                                update_asset_position(user.id, sym, contracts, prem, "Buy", d, f"LEAP_{opt_type}", exp, strike, fees=fees)  # treat as opening long
+                                ok += 1
+                            elif act == "Sell to Close":
+                                update_asset_position(user.id, sym, contracts, prem, "Sell", d, f"LEAP_{opt_type}", exp, strike, fees=fees)
+                                ok += 1
+                            elif act == "Expire":
+                                # just reduce quantity to 0 at $0
+                                update_asset_position(user.id, sym, contracts, 0.0, "Sell", d, f"LEAP_{opt_type}", exp, strike, fees=fees)
+                                ok += 1
+                            else:
+                                # Roll/Assign/Buy to Close not fully supported for LEAP longs in this MVP
+                                errors.append(f"LEAP action not supported yet in bulk: {act} ({sym})")
                         else:
-                            # Roll/Assign/Buy to Close not fully supported for LEAP longs in this MVP
-                            errors.append(f"LEAP action not supported yet in bulk: {act} ({sym})")
-                    else:
-                        act = r.get("Action")
-                        contracts=int(float(r.get("Contracts") or 0))
-                        prem=float(r.get("Premium") or 0)
-                        opt_type=str(r.get("Type") or "CALL").upper()
-                        exp = r.get("Exp") or nf
-                        if isinstance(exp, str):
-                            exp = date.fromisoformat(exp[:10])
-                        strike=float(r.get("Strike") or 0)
-                        if act == "Sell to Open":
-                            update_short_option_position(user.id, sym, contracts, prem, "Sell", d, opt_type, exp, strike, fees=fees, linked_asset_id_override=None)
-                            ok += 1
-                        elif act == "Buy to Close":
-                            update_short_option_position(user.id, sym, contracts, prem, "Buy", d, opt_type, exp, strike, fees=fees, linked_asset_id_override=None)
-                            ok += 1
-                        elif act == "Expire":
-                            # find matching open options and expire contracts in order
-                            open_rows = [o for o in _fetch_open_shorts(user, sym) if str(o.get("type","")).upper()==opt_type and float(o.get("strike_price") or 0)==strike]
-                            # sort by expiration then id
-                            open_rows = sorted(open_rows, key=lambda x: (str(x.get("expiration_date") or ""), int(x.get("id") or 0)))
-                            remaining=contracts
-                            for o in open_rows:
-                                if remaining<=0: break
-                                qty=int(o.get("contracts") or o.get("quantity") or 0)
-                                if qty<=0: continue
-                                if qty<=remaining:
-                                    _bulk_expire_option(int(o["id"]))
-                                    remaining-=qty
-                                else:
-                                    # split row by reducing contracts and creating expired row
-                                    supabase.table("options").update({"contracts": qty-remaining}).eq("id", o["id"]).execute()
-                                    # clone row with remaining contracts expired
-                                    clone = dict(o)
-                                    clone.pop("id", None)
-                                    clone["contracts"]=remaining
-                                    clone["status"]="expired"
-                                    clone["closing_price"]=0.0
-                                    clone["closed_date"]=datetime.now().isoformat()
-                                    supabase.table("options").insert(clone).execute()
-                                    remaining=0
-                            ok += 1
-                        elif act == "Assign":
-                            # Assign first matching open option rows
-                            open_rows = [o for o in _fetch_open_shorts(user, sym)]
-                            open_rows = sorted(open_rows, key=lambda x: (str(x.get("expiration_date") or ""), int(x.get("id") or 0)))
-                            remaining=contracts
-                            for o in open_rows:
-                                if remaining<=0: break
-                                qty=int(o.get("contracts") or 0)
-                                if qty<=0: continue
-                                take=min(remaining, qty)
-                                handle_assignment(user.id, o["id"], sym, float(o.get("strike_price") or 0), str(o.get("type") or "").upper(), take)
-                                remaining-=take
-                            ok += 1
-                        else:
-                            errors.append(f"Short action not supported yet in bulk: {act} ({sym})")
-                except Exception as e:
-                    errors.append(f"{r.get('Ticker','')}: {e}")
+                            act = r.get("Action")
+                            contracts=int(float(r.get("Contracts") or 0))
+                            prem=float(r.get("Premium") or 0)
+                            opt_type=str(r.get("Type") or "CALL").upper()
+                            exp = r.get("Exp") or nf
+                            if isinstance(exp, str):
+                                exp = date.fromisoformat(exp[:10])
+                            strike=float(r.get("Strike") or 0)
+                            if act == "Sell to Open":
+                                update_short_option_position(user.id, sym, contracts, prem, "Sell", d, opt_type, exp, strike, fees=fees, linked_asset_id_override=None)
+                                ok += 1
+                            elif act == "Buy to Close":
+                                update_short_option_position(user.id, sym, contracts, prem, "Buy", d, opt_type, exp, strike, fees=fees, linked_asset_id_override=None)
+                                ok += 1
+                            elif act == "Expire":
+                                # find matching open options and expire contracts in order
+                                open_rows = [o for o in _fetch_open_shorts(user, sym) if str(o.get("type","")).upper()==opt_type and float(o.get("strike_price") or 0)==strike]
+                                # sort by expiration then id
+                                open_rows = sorted(open_rows, key=lambda x: (str(x.get("expiration_date") or ""), int(x.get("id") or 0)))
+                                remaining=contracts
+                                for o in open_rows:
+                                    if remaining<=0: break
+                                    qty=int(o.get("contracts") or o.get("quantity") or 0)
+                                    if qty<=0: continue
+                                    if qty<=remaining:
+                                        _bulk_expire_option(int(o["id"]))
+                                        remaining-=qty
+                                    else:
+                                        # split row by reducing contracts and creating expired row
+                                        supabase.table("options").update({"contracts": qty-remaining}).eq("id", o["id"]).execute()
+                                        # clone row with remaining contracts expired
+                                        clone = dict(o)
+                                        clone.pop("id", None)
+                                        clone["contracts"]=remaining
+                                        clone["status"]="expired"
+                                        clone["closing_price"]=0.0
+                                        clone["closed_date"]=datetime.now().isoformat()
+                                        supabase.table("options").insert(clone).execute()
+                                        remaining=0
+                                ok += 1
+                            elif act == "Assign":
+                                # Assign first matching open option rows
+                                open_rows = [o for o in _fetch_open_shorts(user, sym)]
+                                open_rows = sorted(open_rows, key=lambda x: (str(x.get("expiration_date") or ""), int(x.get("id") or 0)))
+                                remaining=contracts
+                                for o in open_rows:
+                                    if remaining<=0: break
+                                    qty=int(o.get("contracts") or 0)
+                                    if qty<=0: continue
+                                    take=min(remaining, qty)
+                                    handle_assignment(user.id, o["id"], sym, float(o.get("strike_price") or 0), str(o.get("type") or "").upper(), take)
+                                    remaining-=take
+                                ok += 1
+                            else:
+                                errors.append(f"Short action not supported yet in bulk: {act} ({sym})")
+                    except Exception as e:
+                        errors.append(f"{r.get('Ticker','')}: {e}")
 
-            if errors:
-                st.error("Some rows failed:")
-                for e in errors[:20]:
-                    st.write("•", e)
-            st.success(f"Submitted {ok} transactions.")
-            st.rerun()
+                if errors:
+                    st.error("Some rows failed:")
+                    for e in errors[:20]:
+                        st.write("•", e)
+                st.success(f"Submitted {ok} transactions.")
+                st.rerun()
 
+
+    except Exception as e:
+        st.error('Bulk Entries page error (see details below).')
+        st.exception(e)
 
 
 def settings_page(user):
