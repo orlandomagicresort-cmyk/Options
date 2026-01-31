@@ -3764,6 +3764,7 @@ def main():
     elif page == "Enter Trade": trade_entry_page(user)
     elif page == "Ledger": ledger_page(user)
     elif page == "Import Data": import_page(user)
+    elif page == "Bulk Entries": bulk_entries_page(user)
     elif page == "Settings": settings_page(user)
 
 if __name__ == "__main__":
