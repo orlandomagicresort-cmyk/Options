@@ -3074,8 +3074,6 @@ def trade_entry_page(user):
             # For BUY, ask whether this is buying back a SHORT (close) or buying a LONG option (open/add)
             buy_mode = None
             selected_short = None
-            selected_long = None
-            max_long_close = None
 
             if action == "Buy":
                 buy_mode = st.radio(
@@ -3153,60 +3151,6 @@ def trade_entry_page(user):
                     key="te_pos_mode",
                 )
 
-
-            # If selling a LONG option, select the existing long position to sell (close/reduce)
-            if action == "Sell" and pos_mode == "Long (LEAP / Bought Option)":
-                try:
-                    ares = (
-                        supabase.table("assets")
-                        .select("*")
-                        .eq("user_id", user.id)
-                        .eq("symbol", symbol)
-                        .eq("status", "open")
-                        .execute()
-                    )
-                    arows = ares.data or []
-                except Exception:
-                    arows = []
-
-                # Keep only long options (LEAP_/LONG_) with remaining quantity
-                long_rows = []
-                for r in arows:
-                    t = str(r.get("type") or "").upper()
-                    q = float(r.get("quantity") or 0)
-                    if q <= 0:
-                        continue
-                    if ("LEAP_" in t) or ("LONG_" in t):
-                        long_rows.append(r)
-
-                if not long_rows:
-                    st.info("No open long options found for this symbol.")
-                else:
-                    opts = []
-                    idx_map = {}
-                    for r in long_rows:
-                        t = str(r.get("type") or "").upper().replace("LEAP_", "").replace("LONG_", "")
-                        exp = str(r.get("expiration_date") or r.get("expiration") or "")
-                        stx = float(r.get("strike_price") or 0)
-                        cts = int(float(r.get("quantity") or 0))
-                        lbl = f"{t} {format_date_custom(exp)}  ${stx:.2f}  ({cts} long)"
-                        idx_map[lbl] = r
-                        opts.append(lbl)
-
-                    sel_lbl = st.selectbox("Select long option to sell", opts, key="te_sell_long_sel")
-                    selected_long = idx_map.get(sel_lbl)
-
-                    if selected_long:
-                        # Override option fields from the selected long
-                        t_raw = str(selected_long.get("type") or "LEAP_CALL").upper()
-                        opt_type = "PUT" if "PUT" in t_raw else "CALL"
-                        exp_raw = str(selected_long.get("expiration_date") or selected_long.get("expiration") or "")
-                        try:
-                            exp_date = date.fromisoformat(exp_raw[:10]) if exp_raw else exp_date
-                        except Exception:
-                            pass
-                        strike = float(selected_long.get("strike_price") or strike)
-                        max_long_close = int(float(selected_long.get("quantity") or 0))
             linked_id = None
             max_allowed = None
 
@@ -3273,7 +3217,7 @@ def trade_entry_page(user):
                     max_allowed = valid_opts[sel_lbl]["limit"]
 
             c4, c5, c6 = st.columns(3)
-            qty = c4.number_input("Contracts", min_value=1, step=1, max_value=(max_close if max_close is not None else (max_long_close if max_long_close is not None else None)))
+            qty = c4.number_input("Contracts", min_value=1, step=1, max_value=max_close if max_close is not None else None)
             prem = c5.number_input("Premium", min_value=0.01)
             fees = c6.number_input("Total Fees", min_value=0.0, step=0.01, value=0.0)
             
@@ -3285,15 +3229,7 @@ def trade_entry_page(user):
                     if max_close is not None and qty > max_close:
                         st.error(f"Cannot buy back more than {max_close} open contracts."); return
 
-                
-                # If selling a long, ensure a long position is selected
-                if action == "Sell" and pos_mode == "Long (LEAP / Bought Option)":
-                    if not selected_long:
-                        st.error("Please select the long option you want to sell."); return
-                    if max_long_close is not None and qty > max_long_close:
-                        st.error(f"Cannot sell more than {max_long_close} long contracts."); return
-
-if linked_id and max_allowed is not None and qty > max_allowed:
+                if linked_id and max_allowed is not None and qty > max_allowed:
                     st.error(f"Limit exceeded. Max: {max_allowed}"); return
 
                 # Safety: ensure expiry comes from a valid date
@@ -3302,8 +3238,7 @@ if linked_id and max_allowed is not None and qty > max_allowed:
 
                 if pos_mode.startswith("Long"):
                     # Long option (LEAP) is an ASSET position tracked in the assets table
-                    asset_t = (str(selected_long.get("type")) if (action=="Sell" and pos_mode=="Long (LEAP / Bought Option)" and selected_long) else f"LEAP_{opt_type}")
-                    update_asset_position(user.id, symbol, qty, prem, action, trade_date, asset_t, exp_date, strike, fees=fees)
+                    update_asset_position(user.id, symbol, qty, prem, action, trade_date, f"LEAP_{opt_type}", exp_date, strike, fees=fees)
                 else:
                     # Short option liability tracked in options table (buy = close / sell = open)
                     update_short_option_position(
