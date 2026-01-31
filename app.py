@@ -3031,7 +3031,7 @@ def trade_entry_page(user):
     st.header("⚡ Smart Trade Entry")
 
     # Helper: default option expiry is the next Friday from the selected trade date
-    def _next_friday(d: date) -> date:
+    def _next_friday_local(d: date) -> date:
         days_ahead = (4 - d.weekday()) % 7
         if days_ahead == 0:
             days_ahead = 7
@@ -3105,7 +3105,7 @@ def trade_entry_page(user):
                     key="te_sell_mode",
                 )
 # Default fields
-            exp_date = _next_friday(trade_date)
+            exp_date = _next_friday_local(trade_date)
             strike = def_p
             opt_type = "CALL"
 
@@ -3147,7 +3147,7 @@ def trade_entry_page(user):
                     if selected_short:
                         opt_type = str(selected_short.get("type") or "CALL").upper()
                         exp_raw = str(selected_short.get("expiration_date") or selected_short.get("expiration") or "")
-                        exp_date = date.fromisoformat(exp_raw[:10]) if exp_raw else _next_friday(trade_date)
+                        exp_date = date.fromisoformat(exp_raw[:10]) if exp_raw else _next_friday_local(trade_date)
                         strike = float(selected_short.get("strike_price") or def_p)
                         max_close = int(selected_short.get("contracts") or 0)
 
@@ -3204,7 +3204,7 @@ def trade_entry_page(user):
                         max_long_close = int(float(selected_long.get("quantity") or 0))
 # For non-buyback scenarios, allow user to choose details normally
             if not ((action == "Buy" and buy_mode == "Buy Back Short (Close)") or (action == "Sell" and sell_mode == "Sell Long (Close)")):
-                exp_date = c1.date_input("Exp Date", value=_next_friday(trade_date), key="te_exp_date")
+                exp_date = c1.date_input("Exp Date", value=_next_friday_local(trade_date), key="te_exp_date")
                 strike = c2.number_input("Strike", value=def_p, step=0.5)
                 opt_type = c3.selectbox("Type", ["CALL", "PUT"])
 
@@ -3424,7 +3424,7 @@ def bulk_entries_page(user):
 
         # shared defaults
         today = datetime.now().date()
-        nf = _next_friday(today)
+        nf = _next_friday_local(today)
 
         if asset_kind == "Stock":
             action = st.selectbox("Action", ["Buy", "Sell"], key="bulk_stock_action")
