@@ -3393,6 +3393,15 @@ def _fetch_long_leaps(user, symbol: str | None = None):
     return out
 
 
+def _fetch_stock_tickers(user):
+    try:
+        res = supabase.table("assets").select("ticker").eq("user_id", user.id).eq("type", "STOCK").neq("quantity", 0).execute()
+        if res.data:
+            return sorted(list({str(r.get("ticker") or "").upper() for r in res.data if str(r.get("ticker") or "")}))
+        return []
+    except Exception:
+        return []
+
 def _bulk_expire_option(option_id: int):
     try:
         supabase.table("options").update({
@@ -3418,13 +3427,7 @@ def bulk_entries_page(user):
     if asset_kind == "Stock":
         action = st.selectbox("Action", ["Buy", "Sell"], key="bulk_stock_action")
         # Ticker choices: for Sell, limit to tickers you own
-        owned = []
-        try:
-            h = get_holdings(user.id)
-            owned = sorted({str(r.get("symbol") or r.get("ticker") or "").upper() for r in (h or []) if str(r.get("type","")).upper() == "STOCK"})
-            owned = [t for t in owned if t]
-        except Exception:
-            owned = []
+        owned = _fetch_stock_tickers(user)
 
         default_rows = st.session_state.get("bulk_rows_stock", [])
         if not default_rows:
@@ -3553,12 +3556,7 @@ def bulk_entries_page(user):
             ticker_col = st.column_config.SelectboxColumn("Ticker", options=short_syms, required=False) if short_syms else st.column_config.TextColumn("Ticker")
         else:
             # Sell to open: limit to tickers with holdings
-            tick_opts=[]
-            try:
-                h = get_holdings(user.id)
-                tick_opts = sorted({str(r.get("symbol") or r.get("ticker") or "").upper() for r in (h or []) if str(r.get("symbol") or r.get("ticker") or "")})
-            except Exception:
-                tick_opts=[]
+            tick_opts = get_distinct_holdings(user.id)
             ticker_col = st.column_config.SelectboxColumn("Ticker", options=tick_opts, required=False) if tick_opts else st.column_config.TextColumn("Ticker")
 
         col_cfg = {
