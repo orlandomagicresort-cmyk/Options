@@ -3297,7 +3297,7 @@ def trade_entry_page(user):
                     if max_long_close is not None and qty > max_long_close:
                         st.error(f"Cannot sell more than {max_long_close} long contracts."); return
 
-if linked_id and max_allowed is not None and qty > max_allowed:
+                if linked_id and max_allowed is not None and qty > max_allowed:
                     st.error(f"Limit exceeded. Max: {max_allowed}"); return
 
                 # Safety: ensure expiry comes from a valid date
@@ -3317,6 +3317,7 @@ if linked_id and max_allowed is not None and qty > max_allowed:
                 mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
                 st.session_state["txn_success_msg"] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."
                 st.rerun()
+
 def settings_page(user):
     st.header("⚙️ Settings")
     tab1, tab2 = st.tabs(["Assets", "Danger Zone"])
