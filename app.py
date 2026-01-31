@@ -3073,6 +3073,7 @@ def trade_entry_page(user):
             # --- Option attributes ---
             # For BUY, ask whether this is buying back a SHORT (close) or buying a LONG option (open/add)
             buy_mode = None
+            sell_mode = None
             selected_short = None
             selected_long = None
             max_long_close = None
@@ -3085,7 +3086,15 @@ def trade_entry_page(user):
                     key="te_buy_mode",
                 )
 
-            # Default fields
+            
+            if action == "Sell":
+                sell_mode = st.radio(
+                    "Sell Mode",
+                    ["Sell Short (Open)", "Sell Long (Close)"],
+                    horizontal=True,
+                    key="te_sell_mode",
+                )
+# Default fields
             exp_date = _next_friday(trade_date)
             strike = def_p
             opt_type = "CALL"
@@ -3132,30 +3141,9 @@ def trade_entry_page(user):
                         strike = float(selected_short.get("strike_price") or def_p)
                         max_close = int(selected_short.get("contracts") or 0)
 
-            # For non-buyback scenarios, allow user to choose details normally
-            if not (action == "Buy" and buy_mode == "Buy Back Short (Close)"):
-                exp_date = c1.date_input("Exp Date", value=_next_friday(trade_date), key="te_exp_date")
-                strike = c2.number_input("Strike", value=def_p, step=0.5)
-                opt_type = c3.selectbox("Type", ["CALL", "PUT"])
-
-            # --- Position mode (Short vs Long) ---
-            # Sell action always implies opening a SHORT (premium collection) OR selling a LONG option if user chooses.
-            # Buy action: if Buy Back Short -> treat as SHORT close; else treat as LONG buy.
-            if action == "Buy" and buy_mode == "Buy Back Short (Close)":
-                pos_mode = "Short (Sell Premium)"
-            elif action == "Buy":
-                pos_mode = "Long (LEAP / Bought Option)"
-            else:
-                pos_mode = st.radio(
-                    "Option Position",
-                    ["Short (Sell Premium)", "Long (LEAP / Bought Option)"],
-                    horizontal=True,
-                    key="te_pos_mode",
-                )
-
-
-            # If selling a LONG option, select the existing long position to sell (close/reduce)
-            if action == "Sell" and pos_mode == "Long (LEAP / Bought Option)":
+            
+            # If selling a long option, select the open long position first
+            if action == "Sell" and sell_mode == "Sell Long (Close)":
                 try:
                     ares = (
                         supabase.table("assets")
@@ -3169,7 +3157,6 @@ def trade_entry_page(user):
                 except Exception:
                     arows = []
 
-                # Keep only long options (LEAP_/LONG_) with remaining quantity
                 long_rows = []
                 for r in arows:
                     t = str(r.get("type") or "").upper()
@@ -3197,7 +3184,6 @@ def trade_entry_page(user):
                     selected_long = idx_map.get(sel_lbl)
 
                     if selected_long:
-                        # Override option fields from the selected long
                         t_raw = str(selected_long.get("type") or "LEAP_CALL").upper()
                         opt_type = "PUT" if "PUT" in t_raw else "CALL"
                         exp_raw = str(selected_long.get("expiration_date") or selected_long.get("expiration") or "")
@@ -3207,6 +3193,24 @@ def trade_entry_page(user):
                             pass
                         strike = float(selected_long.get("strike_price") or strike)
                         max_long_close = int(float(selected_long.get("quantity") or 0))
+# For non-buyback scenarios, allow user to choose details normally
+            if not ((action == "Buy" and buy_mode == "Buy Back Short (Close)") or (action == "Sell" and sell_mode == "Sell Long (Close)")):
+                exp_date = c1.date_input("Exp Date", value=_next_friday(trade_date), key="te_exp_date")
+                strike = c2.number_input("Strike", value=def_p, step=0.5)
+                opt_type = c3.selectbox("Type", ["CALL", "PUT"])
+
+            # --- Position mode (Short vs Long) ---
+            # Buy action: if Buy Back Short -> treat as SHORT close; else treat as LONG buy.
+            # Sell action: ask whether selling SHORT (open) or selling LONG (close).
+            if action == "Buy" and buy_mode == "Buy Back Short (Close)":
+                pos_mode = "Short (Sell Premium)"
+            elif action == "Buy":
+                pos_mode = "Long (LEAP / Bought Option)"
+            elif action == "Sell" and sell_mode == "Sell Long (Close)":
+                pos_mode = "Long (LEAP / Bought Option)"
+            else:
+                # default sell short (open) or any other fallback
+                pos_mode = "Short (Sell Premium)"
             linked_id = None
             max_allowed = None
 
@@ -3287,13 +3291,13 @@ def trade_entry_page(user):
 
                 
                 # If selling a long, ensure a long position is selected
-                if action == "Sell" and pos_mode == "Long (LEAP / Bought Option)":
+                if action == "Sell" and sell_mode == "Sell Long (Close)":
                     if not selected_long:
                         st.error("Please select the long option you want to sell."); return
                     if max_long_close is not None and qty > max_long_close:
                         st.error(f"Cannot sell more than {max_long_close} long contracts."); return
 
-                if linked_id and max_allowed is not None and qty > max_allowed:
+if linked_id and max_allowed is not None and qty > max_allowed:
                     st.error(f"Limit exceeded. Max: {max_allowed}"); return
 
                 # Safety: ensure expiry comes from a valid date
@@ -3302,7 +3306,7 @@ def trade_entry_page(user):
 
                 if pos_mode.startswith("Long"):
                     # Long option (LEAP) is an ASSET position tracked in the assets table
-                    asset_t = (str(selected_long.get("type")) if (action=="Sell" and pos_mode=="Long (LEAP / Bought Option)" and selected_long) else f"LEAP_{opt_type}")
+                    asset_t = (str(selected_long.get("type")) if (action=="Sell" and sell_mode=="Sell Long (Close)" and selected_long) else f"LEAP_{opt_type}")
                     update_asset_position(user.id, symbol, qty, prem, action, trade_date, asset_t, exp_date, strike, fees=fees)
                 else:
                     # Short option liability tracked in options table (buy = close / sell = open)
@@ -3313,7 +3317,6 @@ def trade_entry_page(user):
                 mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
                 st.session_state["txn_success_msg"] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."
                 st.rerun()
-
 def settings_page(user):
     st.header("⚙️ Settings")
     tab1, tab2 = st.tabs(["Assets", "Danger Zone"])
