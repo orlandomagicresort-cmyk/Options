@@ -3246,7 +3246,6 @@ def trade_entry_page(user):
                         fees=fees, linked_asset_id_override=linked_id
                     )
                 mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
- "LEAP" if pos_mode.startswith("Long") else "Short Option"
                  st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."; st.rerun()
 
 def settings_page(user):
