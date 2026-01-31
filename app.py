@@ -738,6 +738,16 @@ def get_locked_collateral(user_id):
         return {}
 
 
+def detach_collateral_links_for_asset(user_id, asset_id):
+    """
+    When a collateral asset (LEAP) is sold/closed, any open short options linked to it become uncovered.
+    We detach the link by setting linked_asset_id = NULL for those open options.
+    """
+    try:
+        supabase.table("options").update({"linked_asset_id": None}).eq("user_id", user_id).eq("status", "open").eq("linked_asset_id", asset_id).execute()
+    except Exception:
+        pass
+
 def get_open_short_call_contracts(user_id, symbol):
     """Total open short CALL contracts for a ticker (used to infer collateral usage when linked_asset_id is missing)."""
     try:
@@ -3215,7 +3225,7 @@ def trade_entry_page(user):
             max_allowed = None
 
             # Collateral linking is only relevant for opening SHORT CALLs (Sell action)
-            if pos_mode.startswith("Short") and action == "Sell" and opt_type == "CALL":
+            if pos_mode.startswith("Short") and action == "Sell" and opt_type == "CALL" and (globals().get("sell_mode", None) != "Sell Long (Close)"):
                 holdings_data = get_holdings_for_symbol(user.id, symbol)
                 locked_map = get_locked_collateral(user.id)
 
@@ -3296,8 +3306,7 @@ def trade_entry_page(user):
                         st.error("Please select the long option you want to sell."); return
                     if max_long_close is not None and qty > max_long_close:
                         st.error(f"Cannot sell more than {max_long_close} long contracts."); return
-
-                if linked_id and max_allowed is not None and qty > max_allowed:
+                if pos_mode.startswith("Short") and linked_id and max_allowed is not None and qty > max_allowed:
                     st.error(f"Limit exceeded. Max: {max_allowed}"); return
 
                 # Safety: ensure expiry comes from a valid date
@@ -3308,6 +3317,9 @@ def trade_entry_page(user):
                     # Long option (LEAP) is an ASSET position tracked in the assets table
                     asset_t = (str(selected_long.get("type")) if (action=="Sell" and sell_mode=="Sell Long (Close)" and selected_long) else f"LEAP_{opt_type}")
                     update_asset_position(user.id, symbol, qty, prem, action, trade_date, asset_t, exp_date, strike, fees=fees)
+                    # If this long option was being used as collateral for open shorts, detach links (shorts become uncovered)
+                    if action == "Sell" and globals().get("sell_mode", None) == "Sell Long (Close)" and selected_long and selected_long.get("id"):
+                        detach_collateral_links_for_asset(user.id, selected_long.get("id"))
                 else:
                     # Short option liability tracked in options table (buy = close / sell = open)
                     update_short_option_position(
