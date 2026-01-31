@@ -3069,11 +3069,95 @@ def trade_entry_page(user):
                 st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} (Fees: ${fees})."; st.session_state['te_reset_pending'] = True; st.session_state['te_reset_pending'] = True; st.rerun()
         else:
             c1, c2, c3 = st.columns(3)
-            exp_date = c1.date_input("Exp Date", value=_next_friday(trade_date), key="te_exp_date"); strike = c2.number_input("Strike", value=def_p, step=0.5); opt_type = c3.selectbox("Type", ["CALL", "PUT"])
-            pos_mode = st.radio("Option Position", ["Short (Sell Premium)", "Long (LEAP / Bought Option)"], horizontal=True, key="te_pos_mode")
-            linked_id = None; max_allowed = None
+
+            # --- Option attributes ---
+            # For BUY, ask whether this is buying back a SHORT (close) or buying a LONG option (open/add)
+            buy_mode = None
+            selected_short = None
+
+            if action == "Buy":
+                buy_mode = st.radio(
+                    "Buy Mode",
+                    ["Buy Back Short (Close)", "Buy Long Option"],
+                    horizontal=True,
+                    key="te_buy_mode",
+                )
+
+            # Default fields
+            exp_date = _next_friday(trade_date)
+            strike = def_p
+            opt_type = "CALL"
+
+            # If buying back a short option, select the open short position first
+            max_close = None
+            if action == "Buy" and buy_mode == "Buy Back Short (Close)":
+                # Pull open short options for this ticker
+                try:
+                    res = (
+                        supabase.table("options")
+                        .select("*")
+                        .eq("user_id", user.id)
+                        .eq("symbol", symbol)
+                        .eq("status", "open")
+                        .execute()
+                    )
+                    open_rows = res.data or []
+                except Exception:
+                    open_rows = []
+
+                if not open_rows:
+                    st.info("No open short options found for this symbol.")
+                else:
+                    # Build friendly labels
+                    opts = []
+                    idx_map = {}
+                    for r in open_rows:
+                        t = str(r.get("type") or "").upper()
+                        exp = str(r.get("expiration_date") or r.get("expiration") or "")
+                        stx = r.get("strike_price")
+                        cts = int(r.get("contracts") or 0)
+                        lbl = f"{t} {format_date_custom(exp)}  ${float(stx):.2f}  ({cts} open)"
+                        idx_map[lbl] = r
+                        opts.append(lbl)
+
+                    sel_lbl = st.selectbox("Select short option to buy back", opts, key="te_buyback_sel")
+                    selected_short = idx_map.get(sel_lbl)
+
+                    if selected_short:
+                        opt_type = str(selected_short.get("type") or "CALL").upper()
+                        exp_raw = str(selected_short.get("expiration_date") or selected_short.get("expiration") or "")
+                        exp_date = date.fromisoformat(exp_raw[:10]) if exp_raw else _next_friday(trade_date)
+                        strike = float(selected_short.get("strike_price") or def_p)
+                        max_close = int(selected_short.get("contracts") or 0)
+
+            # For non-buyback scenarios, allow user to choose details normally
+            if not (action == "Buy" and buy_mode == "Buy Back Short (Close)"):
+                exp_date = c1.date_input("Exp Date", value=_next_friday(trade_date), key="te_exp_date")
+                strike = c2.number_input("Strike", value=def_p, step=0.5)
+                opt_type = c3.selectbox("Type", ["CALL", "PUT"])
+
+            # --- Position mode (Short vs Long) ---
+            # Sell action always implies opening a SHORT (premium collection) OR selling a LONG option if user chooses.
+            # Buy action: if Buy Back Short -> treat as SHORT close; else treat as LONG buy.
+            if action == "Buy" and buy_mode == "Buy Back Short (Close)":
+                pos_mode = "Short (Sell Premium)"
+            elif action == "Buy":
+                pos_mode = "Long (LEAP / Bought Option)"
+            else:
+                pos_mode = st.radio(
+                    "Option Position",
+                    ["Short (Sell Premium)", "Long (LEAP / Bought Option)"],
+                    horizontal=True,
+                    key="te_pos_mode",
+                )
+
+            linked_id = None
+            max_allowed = None
+
+            # Collateral linking is only relevant for opening SHORT CALLs (Sell action)
             if pos_mode.startswith("Short") and action == "Sell" and opt_type == "CALL":
-                holdings_data = get_holdings_for_symbol(user.id, symbol); locked_map = get_locked_collateral(user.id)
+                holdings_data = get_holdings_for_symbol(user.id, symbol)
+                locked_map = get_locked_collateral(user.id)
 
                 # If some open short calls were imported without a linked_asset_id, infer collateral already consumed
                 total_open_calls = get_open_short_call_contracts(user.id, symbol)
@@ -3088,8 +3172,8 @@ def trade_entry_page(user):
                 remaining = unlinked_calls
                 for h in stock_holdings:
                     hid = str(h.get('id'))
-                    qty = float(h.get('quantity', 0) or 0)
-                    max_contracts = int(qty // 100)
+                    qty_h = float(h.get('quantity', 0) or 0)
+                    max_contracts = int(qty_h // 100)
                     take = min(remaining, max_contracts)
                     if take > 0:
                         unlinked_used[hid] = unlinked_used.get(hid, 0) + take
@@ -3101,13 +3185,14 @@ def trade_entry_page(user):
                     if remaining <= 0:
                         break
                     hid = str(h.get('id'))
-                    qty = int(float(h.get('quantity', 0) or 0))
-                    take = min(remaining, qty)
+                    qty_h = int(float(h.get('quantity', 0) or 0))
+                    take = min(remaining, qty_h)
                     if take > 0:
                         unlinked_used[hid] = unlinked_used.get(hid, 0) + take
                         remaining -= take
 
-                valid_opts = {"None (Unsecured)": {"id": None, "limit": float('inf')}}; coll_found = False
+                valid_opts = {"None (Unsecured)": {"id": None, "limit": float('inf')}}
+                coll_found = False
                 for h in holdings_data:
                     h_type = str(h.get('type', '')).upper()
                     h_qty = float(h.get('quantity', 0) or 0)
@@ -3128,27 +3213,41 @@ def trade_entry_page(user):
                             valid_opts[f"LEAP ${float(h.get('strike_price',0)):.2f}: {avail} avail"] = {"id": h_id, "limit": avail}
                 if coll_found:
                     sel_lbl = st.selectbox("Link Collateral", list(valid_opts.keys()))
-                    linked_id = valid_opts[sel_lbl]["id"]; max_allowed = valid_opts[sel_lbl]["limit"]
+                    linked_id = valid_opts[sel_lbl]["id"]
+                    max_allowed = valid_opts[sel_lbl]["limit"]
 
             c4, c5, c6 = st.columns(3)
-            qty = c4.number_input("Contracts", min_value=1, step=1)
+            qty = c4.number_input("Contracts", min_value=1, step=1, max_value=max_close if max_close is not None else None)
             prem = c5.number_input("Premium", min_value=0.01)
             fees = c6.number_input("Total Fees", min_value=0.0, step=0.01, value=0.0)
             
             if st.button("Submit Option Trade", type="primary"):
-                 if linked_id and max_allowed is not None and qty > max_allowed: st.error(f"Limit exceeded. Max: {max_allowed}"); return
-                                  # Safety: ensure expiry comes from the Exp Date widget, not the trade date
-                 if not isinstance(exp_date, date):
-                     st.error('Expiry (Exp Date) is invalid. Please re-select the expiration date.'); return
-                 
-                 if pos_mode.startswith("Long"):
-                     # Long option (LEAP) is an ASSET position tracked in the assets table
-                     update_asset_position(user.id, symbol, qty, prem, action, trade_date, f"LEAP_{opt_type}", exp_date, strike, fees=fees)
-                 else:
-                     # Short option liability tracked in options table
-                     update_short_option_position(user.id, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike, fees=fees, linked_asset_id_override=linked_id)
+                # If buying back a short, ensure a short position is selected
+                if action == "Buy" and buy_mode == "Buy Back Short (Close)":
+                    if not selected_short:
+                        st.error("Please select the short option you want to buy back."); return
+                    if max_close is not None and qty > max_close:
+                        st.error(f"Cannot buy back more than {max_close} open contracts."); return
 
-                 mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
+                if linked_id and max_allowed is not None and qty > max_allowed:
+                    st.error(f"Limit exceeded. Max: {max_allowed}"); return
+
+                # Safety: ensure expiry comes from a valid date
+                if not isinstance(exp_date, date):
+                    st.error("Expiry (Exp Date) is invalid. Please re-select the expiration date."); return
+
+                if pos_mode.startswith("Long"):
+                    # Long option (LEAP) is an ASSET position tracked in the assets table
+                    update_asset_position(user.id, symbol, qty, prem, action, trade_date, f"LEAP_{opt_type}", exp_date, strike, fees=fees)
+                else:
+                    # Short option liability tracked in options table (buy = close / sell = open)
+                    update_short_option_position(
+                        user.id, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike,
+                        fees=fees, linked_asset_id_override=linked_id
+                    )
+
+                mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
+ "LEAP" if pos_mode.startswith("Long") else "Short Option"
                  st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."; st.rerun()
 
 def settings_page(user):
