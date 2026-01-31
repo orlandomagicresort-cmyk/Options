@@ -504,7 +504,7 @@ def get_portfolio_data(user_id):
     assets_df = pd.DataFrame(assets_res.data)
     assets_df = normalize_columns(assets_df)
     
-    options_res = supabase.table("options").select("*").eq("user_id", user_id).execute()
+    options_res = supabase.table("options").select("*").eq("user_id", user_id).eq("status", "open").execute()
     options_df = pd.DataFrame(options_res.data)
     options_df = normalize_columns(options_df)
     return assets_df, options_df
@@ -647,7 +647,7 @@ def update_short_option_position(user_id, symbol, quantity, price, action, date_
         }
         supabase.table("options").insert(payload).execute()
     else:
-        res = supabase.table("options").select("*").eq("user_id", user_id).eq("ticker", symbol).eq("strike_price", strike).eq("expiration_date", exp_iso).eq("type", opt_type).execute()
+        res = supabase.table("options").select("*").eq("user_id", user_id).eq("symbol", symbol).eq("strike_price", strike).eq("expiration_date", exp_iso).eq("type", opt_type).eq("status", "open").execute()
         remaining_to_close = int(quantity)
         if res.data:
             for row in res.data:
@@ -722,6 +722,7 @@ def get_locked_collateral(user_id):
             supabase.table("options")
             .select("linked_asset_id, contracts")
             .eq("user_id", user_id)
+            .eq("status", "open")
             .not_.is_("linked_asset_id", "null")
             .execute()
         )
@@ -743,7 +744,7 @@ def detach_collateral_links_for_asset(user_id, asset_id):
     We detach the link by setting linked_asset_id = NULL for those open options.
     """
     try:
-        supabase.table("options").update({"linked_asset_id": None}).eq("user_id", user_id).eq("linked_asset_id", asset_id).execute()
+        supabase.table("options").update({"linked_asset_id": None}).eq("user_id", user_id).eq("status", "open").eq("linked_asset_id", asset_id).execute()
     except Exception:
         pass
 
@@ -754,7 +755,8 @@ def get_open_short_call_contracts(user_id, symbol):
             supabase.table("options")
             .select("contracts")
             .eq("user_id", user_id)
-            .eq("ticker", symbol)
+            .eq("symbol", symbol)
+            .eq("status", "open")
             .eq("type", "CALL")
             .execute()
         )
@@ -2872,7 +2874,7 @@ def ledger_page(user):
 
                 if side == "SELL":
                     # Reverse an open: remove contracts from open options
-                    res = supabase.table("options").select("*").eq("user_id", row["user_id"]).eq("symbol", ticker).eq("strike_price", strike).eq("expiration_date", exp).eq("type", right).order("open_date", desc=True).execute()
+                    res = supabase.table("options").select("*").eq("user_id", row["user_id"]).eq("symbol", ticker).eq("strike_price", strike).eq("expiration_date", exp).eq("type", right).eq("status", "open").order("open_date", desc=True).execute()
                     remaining = qty
                     if res.data:
                         for opt in res.data:
@@ -3116,7 +3118,8 @@ def trade_entry_page(user):
                         supabase.table("options")
                         .select("*")
                         .eq("user_id", user.id)
-                        .eq("ticker", symbol)
+                        .eq("symbol", symbol)
+                        .eq("status", "open")
                         .execute()
                     )
                     open_rows = res.data or []
@@ -3156,7 +3159,8 @@ def trade_entry_page(user):
                         supabase.table("assets")
                         .select("*")
                         .eq("user_id", user.id)
-                        .eq("ticker", symbol)
+                        .eq("symbol", symbol)
+                        .eq("status", "open")
                         .execute()
                     )
                     arows = ares.data or []
@@ -3169,7 +3173,7 @@ def trade_entry_page(user):
                     q = float(r.get("quantity") or 0)
                     if q <= 0:
                         continue
-                    if (("LEAP" in t) or ("LONG" in t) or ("OPTION" in t)) and (t != "STOCK") and (r.get("strike_price") is not None) and (r.get("expiration") is not None):
+                    if ("LEAP_" in t) or ("LONG_" in t):
                         long_rows.append(r)
 
                 if not long_rows:
