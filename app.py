@@ -3159,8 +3159,7 @@ def trade_entry_page(user):
                         supabase.table("assets")
                         .select("*")
                         .eq("user_id", user.id)
-                        .eq("symbol", symbol)
-                        .eq("status", "open")
+                        .eq("ticker", symbol)
                         .execute()
                     )
                     arows = ares.data or []
@@ -3173,7 +3172,7 @@ def trade_entry_page(user):
                     q = float(r.get("quantity") or 0)
                     if q <= 0:
                         continue
-                    if ("LEAP_" in t) or ("LONG_" in t):
+                    if ("LEAP_" in t) or ("LEAPS_" in t) or ("LONG_" in t):
                         long_rows.append(r)
 
                 if not long_rows:
