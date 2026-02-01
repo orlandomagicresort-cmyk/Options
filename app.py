@@ -25,6 +25,11 @@ def apply_global_ui_theme():
         /* Dataframe readability */
         [data-testid="stDataFrame"] thead tr th { font-weight: 700 !important; }
         [data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
+        
+        /* P/L conditional formatting (requested) */
+        .finance-table td.pl-pos { color: #0a7d22; font-weight: 700; }
+        .finance-table td.pl-neg { color: #b00020; font-weight: 700; }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -2298,19 +2303,29 @@ def option_details_page(active_user):
     if not stocks_df.empty:
         stock_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>Stock P/L</th><th>Market Value</th></tr></thead><tbody>"
         for _, row in stocks_df.iterrows():
-            stock_html += f"<tr><td>{row.get('symbol','UNK')}</td><td>{float(row.get('quantity',0)):g}</td><td>${float(row.get('cost_basis',0)):,.2f}</td><td>${float(row.get('current_price',0)):,.2f}</td><td>${(float(row.get('cost_basis',0)) - float(row.get('current_price',0))) * float(row.get('quantity',0)):,.2f}</td><td>${float(row.get('market_value',0)):,.2f}</td></tr>"
+            pl_val = (float(row.get('current_price',0)) - float(row.get('cost_basis',0))) * float(row.get('quantity',0))
+            pl_cls = 'pl-pos' if pl_val >= 0 else 'pl-neg'
+            stock_html += (
+                f"<tr><td>{row.get('symbol','UNK')}</td>"
+                f"<td>{float(row.get('quantity',0)):g}</td>"
+                f"<td>${float(row.get('cost_basis',0)):,.2f}</td>"
+                f"<td>${float(row.get('current_price',0)):,.2f}</td>"
+                f"<td class='{pl_cls}'>${pl_val:,.2f}</td>"
+                f"<td>${float(row.get('market_value',0)):,.2f}</td></tr>"
+            )
         # Totals: Stock P/L and Market Value
         try:
             q_s = pd.to_numeric(stocks_df.get('quantity', 0), errors='coerce').fillna(0)
             cb_s = pd.to_numeric(stocks_df.get('cost_basis', 0), errors='coerce').fillna(0)
             px_s = pd.to_numeric(stocks_df.get('current_price', 0), errors='coerce').fillna(0)
             mv_s = pd.to_numeric(stocks_df.get('market_value', 0), errors='coerce').fillna(0)
-            stock_pl_total = float(((cb_s - px_s) * q_s).sum())
+            stock_pl_total = float((((px_s - cb_s) * q_s)).sum())
             stock_mv_total = float(mv_s.sum())
         except Exception:
             stock_pl_total = 0.0
             stock_mv_total = 0.0
-        stock_html += f"<tr class='total-row'><td colspan='4'>Total</td><td>${stock_pl_total:,.2f}</td><td>${stock_mv_total:,.2f}</td></tr>"
+        stock_pl_cls = 'pl-pos' if stock_pl_total >= 0 else 'pl-neg'
+        stock_html += f"<tr class='total-row'><td colspan='4'>Total</td><td class='{stock_pl_cls}'>${stock_pl_total:,.2f}</td><td>${stock_mv_total:,.2f}</td></tr>"
         stock_html += "</tbody></table>"
         st.markdown(stock_html, unsafe_allow_html=True)
     else: st.info("No Stock Holdings.")
@@ -2319,18 +2334,31 @@ def option_details_page(active_user):
     if not leaps_df.empty:
         leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Type</th><th>Exp</th><th>Strike</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>LEAP P/L</th><th>Value</th></tr></thead><tbody>"
         for _, row in leaps_df.iterrows():
-            leap_html += f"<tr><td>{row.get('symbol','UNK')}</td><td>{row.get('type_disp','').replace('LEAP','').strip()}</td><td>{format_date_custom(row.get('expiration',''))}</td><td>${float(row.get('strike_price',0)):,.2f}</td><td>{float(row.get('quantity',0)):g}</td><td>${float(row.get('cost_basis',0)):,.2f}</td><td>${float(row.get('current_price',0)):,.2f}</td><td>${(float(row.get('cost_basis',0)) - float(row.get('current_price',0))) * float(row.get('quantity',0)) * 100.0:,.2f}</td><td>${float(row.get('market_value',0)):,.2f}</td></tr>"
+            pl_val = (float(row.get('current_price',0)) - float(row.get('cost_basis',0))) * float(row.get('quantity',0)) * 100.0
+            pl_cls = 'pl-pos' if pl_val >= 0 else 'pl-neg'
+            leap_html += (
+                f"<tr><td>{row.get('symbol','UNK')}</td>"
+                f"<td>{row.get('type_disp','').replace('LEAP','').strip()}</td>"
+                f"<td>{format_date_custom(row.get('expiration',''))}</td>"
+                f"<td>${float(row.get('strike_price',0)):,.2f}</td>"
+                f"<td>{float(row.get('quantity',0)):g}</td>"
+                f"<td>${float(row.get('cost_basis',0)):,.2f}</td>"
+                f"<td>${float(row.get('current_price',0)):,.2f}</td>"
+                f"<td class='{pl_cls}'>${pl_val:,.2f}</td>"
+                f"<td>${float(row.get('market_value',0)):,.2f}</td></tr>"
+            )
         # Total row (must exactly match the per-line Value = current_price * qty * 100)
         try:
             qty_s = pd.to_numeric(leaps_df.get('quantity', 0), errors='coerce').fillna(0)
             px_s = pd.to_numeric(leaps_df.get('current_price', 0), errors='coerce').fillna(0)
             cb_s = pd.to_numeric(leaps_df.get('cost_basis', 0), errors='coerce').fillna(0)
             leap_total = float((qty_s * 100.0 * px_s).sum())
-            leap_pl_total = float(((cb_s - px_s) * qty_s * 100.0).sum())
+            leap_pl_total = float((((px_s - cb_s) * qty_s * 100.0)).sum())
         except Exception:
             leap_total = 0.0
             leap_pl_total = 0.0
-        leap_html += f"<tr class='total-row'><td colspan='7'>Total</td><td>${leap_pl_total:,.2f}</td><td>${leap_total:,.2f}</td></tr>"
+        leap_pl_cls = 'pl-pos' if leap_pl_total >= 0 else 'pl-neg'
+        leap_html += f"<tr class='total-row'><td colspan='7'>Total</td><td class='{leap_pl_cls}'>${leap_pl_total:,.2f}</td><td>${leap_total:,.2f}</td></tr>"
         leap_html += "</tbody></table>"
         st.markdown(leap_html, unsafe_allow_html=True)
     else: st.info("No Long Option Holdings.")
@@ -4366,4 +4394,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
