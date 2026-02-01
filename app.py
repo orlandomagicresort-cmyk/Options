@@ -3523,62 +3523,68 @@ def bulk_entries_page(user):
     for idx, row in enumerate(list(st.session_state["bulk_tx_rows"])):
         rid = row.get("id") or str(uuid.uuid4())
         with st.container(border=True):
-            c = st.columns([1.2, 1.7, 1.2, 1.6, 1.2, 1.2, 1.1, 0.6])
-
-            asset = c[0].selectbox("Asset", ["Stock", "LEAP", "Shorts"], key=f"bulk_asset_{rid}")
+            # Row 1: Asset / Action / Date / Delete
+            r1 = st.columns([1.2, 1.8, 1.4, 0.6])
+            asset = r1[0].selectbox("Asset", ["Stock", "LEAP", "Shorts"], key=f"bulk_asset_{rid}")
             if asset == "Stock":
                 actions = ["Buy", "Sell"]
             elif asset == "LEAP":
                 actions = ["Sell to Open", "Buy to Close", "Roll", "Expire", "Assign"]
             else:
                 actions = ["Sell to Open", "Buy to Close", "Roll", "Expire", "Assign"]
+            action = r1[1].selectbox("Action", actions, key=f"bulk_action_{rid}")
+            d = r1[2].date_input("Date", value=today, key=f"bulk_date_{rid}")
+            if r1[3].button("🗑️ Delete", key=f"bulk_del_{rid}"):
+                _remove_row(idx)
+                st.rerun()
 
-            action = c[1].selectbox("Action", actions, key=f"bulk_action_{rid}")
-            d = c[2].date_input("Date", value=today, key=f"bulk_date_{rid}")
-            # Contract / Ticker selection
+            # Row 2: Contract / Ticker (full width)
             selected_contract = None
+            selected_option_id = None
             ticker = ""
 
             if asset == "Stock" and action == "Sell" and stock_owned:
-                ticker = c[3].selectbox("Ticker", stock_owned, key=f"bulk_ticker_{rid}")
+                ticker = st.selectbox("Ticker", stock_owned, key=f"bulk_ticker_{rid}")
             elif asset == "Stock":
-                ticker = c[3].text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
+                ticker = st.text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
             elif asset == "Shorts" and action == "Sell to Open" and holdings_symbols:
-                ticker = c[3].selectbox("Ticker", holdings_symbols, key=f"bulk_ticker_{rid}")
+                ticker = st.selectbox("Ticker", holdings_symbols, key=f"bulk_ticker_{rid}")
             elif asset == "LEAP" and action == "Sell to Open" and holdings_symbols:
-                ticker = c[3].selectbox("Ticker", holdings_symbols, key=f"bulk_ticker_{rid}")
+                ticker = st.selectbox("Ticker", holdings_symbols, key=f"bulk_ticker_{rid}")
             else:
-                # Existing-contract actions: pick the exact contract with details
                 if asset == "Shorts" and action in ["Buy to Close", "Roll", "Expire", "Assign"] and short_opt_labels:
-                    lbl = c[3].selectbox("Contract", short_opt_labels, key=f"bulk_contract_{rid}")
+                    lbl = st.selectbox("Contract (Ticker • Exp • Strike • Type • Open Contracts)", short_opt_labels, key=f"bulk_contract_{rid}")
                     selected_contract = short_opt_map.get(lbl)
                 elif asset == "LEAP" and action in ["Buy to Close", "Roll", "Expire", "Assign"] and leap_opt_labels:
-                    lbl = c[3].selectbox("Contract", leap_opt_labels, key=f"bulk_contract_{rid}")
+                    lbl = st.selectbox("Contract (Ticker • Exp • Strike • Type • Open Contracts)", leap_opt_labels, key=f"bulk_contract_{rid}")
                     selected_contract = leap_opt_map.get(lbl)
                 else:
-                    ticker = c[3].text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
+                    ticker = st.text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
 
             if selected_contract is not None:
+                selected_option_id = selected_contract.get("id")
                 ticker = str(selected_contract.get("symbol") or "").upper().strip()
+                # Show full contract details beneath the dropdown (so nothing is hidden)
+                exp_s = str(selected_contract.get("expiration_date") or "")[:10]
+                strike_s = float(selected_contract.get("strike_price") or 0)
+                typ_s = str(selected_contract.get("type") or "").upper()
+                ctr_s = int(selected_contract.get("contracts") or 0)
+                st.caption(f"Selected: **{ticker}** • **{exp_s}** • **{strike_s:g}** • **{typ_s}** • **{ctr_s} contracts**")
 
+            # Row 3: Qty / Price / Fees (wider and clearer)
+            r3 = st.columns([1.2, 1.2, 1.0])
             qty_default = 100 if asset == "Stock" else 1
-
             max_qty = int(selected_contract.get("contracts") or 1) if selected_contract is not None else None
-            qty = c[4].number_input("Qty/Contracts", min_value=1, max_value=max_qty, step=1, value=min(qty_default, max_qty) if max_qty else qty_default, key=f"bulk_qty_{rid}")
+            qty = r3[0].number_input("Qty/Contracts", min_value=1, max_value=max_qty, step=1, value=min(qty_default, max_qty) if max_qty else qty_default, key=f"bulk_qty_{rid}")
 
-            # Price/Premium default
             def_price = 0.0
             if ticker and asset == "Stock":
                 try:
                     def_price = float(get_current_price(ticker) or 0.0)
                 except Exception:
                     def_price = 0.0
-            price = c[5].number_input("Price/Premium", step=0.01, value=float(def_price), key=f"bulk_price_{rid}")
-            fees = c[6].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}")
-
-            if c[7].button("🗑️", key=f"bulk_del_{rid}"):
-                _remove_row(idx)
-                st.rerun()
+            price = r3[1].number_input("Price/Premium", step=0.01, value=float(def_price), key=f"bulk_price_{rid}")
+            fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}")
 
             opt_type = ""
             exp_dt = None
@@ -3594,7 +3600,7 @@ def bulk_entries_page(user):
                 selected_option_id = selected_contract.get("id")
             
             if asset in ["LEAP", "Shorts"] and ticker:
-                c2 = st.columns([1.2, 1.2, 1.2, 1.2, 2.2])
+                c2 = st.columns([1.1, 1.3, 1.1, 3.5])  # widen Notes
                 type_idx = 0
                 if selected_contract is not None and str(selected_contract.get("type") or "").upper() == "PUT":
                     type_idx = 1
@@ -3609,10 +3615,10 @@ def bulk_entries_page(user):
                 exp_dt = c2[1].date_input("Exp", value=exp_default, key=f"bulk_exp_{rid}")
                 strike_def = float(selected_contract.get("strike_price") or 0.0) if selected_contract is not None else 0.0
                 strike = c2[2].number_input("Strike", step=0.5, value=strike_def, key=f"bulk_strike_{rid}")
-                notes = c2[4].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}")
+                notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}")
 
                 if action == "Roll":
-                    c3 = st.columns([1.2, 1.2, 1.2, 2.4])
+                    c3 = st.columns([1.1, 1.1, 1.1, 3.7])  # widen New Exp picker
                     btc_price = c3[0].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}")
                     new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}")
                     new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}")
