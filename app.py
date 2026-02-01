@@ -52,7 +52,7 @@ import math
 import os
 import uuid
 
-def _price_refresh_controls(user, page_name: str, force_leap_mid: bool = False):
+def _price_refresh_controls(active_user, page_name: str, force_leap_mid: bool = False):
     """
     Standard price refresh behavior:
     - On first entry to the page (navigation), clear cached pricing so values re-fetch.
@@ -352,7 +352,7 @@ def _safe_upsert_preferences(user_id, display_name: str | None, share_stats: boo
             pass
 
 def community_page(user):
-    _price_refresh_controls(user, "Community", force_leap_mid=False)
+    _price_refresh_controls(active_user, "Community", force_leap_mid=False)
     st.header("🌎 Community Stats")
     st.caption("Only users who opted-in to share stats appear here.")
 
@@ -394,7 +394,7 @@ def community_page(user):
     st.dataframe(show[cols], use_container_width=True)
 
 def account_sharing_page(user):
-    _price_refresh_controls(user, "Account & Sharing", force_leap_mid=False)
+    _price_refresh_controls(active_user, "Account & Sharing", force_leap_mid=False)
     st.header("👥 Account Access & Sharing")
 
     # Preferences
@@ -1003,7 +1003,7 @@ def dashboard_page(active_user):
     st.header("📊 Executive Dashboard")
 
 
-    _price_refresh_controls(user, 'Dashboard', force_leap_mid=False)
+    _price_refresh_controls(active_user, 'Dashboard', force_leap_mid=False)
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
     fx = float(get_usd_to_cad_rate() or 1.0)
@@ -1788,7 +1788,7 @@ def option_details_page(active_user):
     st.header("📊 Executive Dashboard")
     
 
-    _price_refresh_controls(user, 'Option Details', force_leap_mid=False)
+    _price_refresh_controls(active_user, 'Option Details', force_leap_mid=False)
 
     # --- Top Controls ---
     c_ctrl_1, c_ctrl_2, c_ctrl_3 = st.columns([2, 4, 1])
@@ -2776,7 +2776,7 @@ def pricing_page(active_user):
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
 
 
-    _price_refresh_controls(user, 'Update LEAP Prices', force_leap_mid=True)
+    _price_refresh_controls(active_user, 'Update LEAP Prices', force_leap_mid=True)
 
     assets, _ = get_portfolio_data(user.id)
     if assets.empty:
