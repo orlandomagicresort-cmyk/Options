@@ -289,15 +289,37 @@ def _mask_name_before_at(name: str) -> str:
     return s.split("@", 1)[0] if "@" in s else s
 
 def _ensure_user_preferences_row(user):
-    """Ensure user_preferences has a row for this user (safe with RLS)."""
+    """Ensure user_preferences has a row for this user (safe with RLS).
+    Also ensures display_name is never blank (defaults to user's email).
+    """
     try:
-        supabase.table("user_preferences").insert({
-            "user_id": user.id,
-            "display_name": getattr(user, "email", "") or None,
-            "share_stats": False,
-        }).execute()
+        uid = getattr(user, "id", None)
+        email = (getattr(user, "email", "") or "").strip()
+        if not uid:
+            return
+
+        # Try read existing row
+        existing = []
+        try:
+            existing = supabase.table("user_preferences").select("display_name").eq("user_id", uid).execute().data or []
+        except Exception:
+            existing = []
+
+        if not existing:
+            # Create row if missing
+            supabase.table("user_preferences").insert({
+                "user_id": uid,
+                "display_name": email or None,
+                "share_stats": False,
+            }).execute()
+        else:
+            dn = (existing[0].get("display_name") or "").strip()
+            if (not dn) and email:
+                # Repair blank name so delegated labels can render
+                supabase.table("user_preferences").update({
+                    "display_name": email,
+                }).eq("user_id", uid).execute()
     except Exception:
-        # likely already exists (conflict) or RLS prevented insert; ignore
         pass
 
 def _activate_pending_invites(user):
@@ -549,7 +571,7 @@ def account_sharing_page(user):
     disp = st.text_input("Display name (shown in Community)", value=pref.get("display_name") or getattr(user, "email", ""), key="pref_display")
     share = st.toggle("Share my stats with the community", value=bool(pref.get("share_stats")), key="pref_share")
     if st.button("Save Preferences", type="primary"):
-        _safe_upsert_preferences(uid, disp.strip() if disp else None, bool(share))
+        _safe_upsert_preferences(uid, (disp.strip() if disp and disp.strip() else (getattr(user, "email", "") or None)), bool(share))
         st.success("Saved.")
 
     st.divider()
