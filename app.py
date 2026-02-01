@@ -352,7 +352,10 @@ def _get_accessible_accounts(user):
         # Include:
         # - active delegated rows where delegate_user_id = me
         # - pending/active rows where delegate_email matches my email (used to "claim" invites)
-        q = supabase.table("account_access").select("id, owner_user_id, role, status, delegate_user_id, delegate_email")
+        try:
+            q = supabase.table("account_access").select("id, owner_user_id, role, status, delegate_user_id, delegate_email, owner_email")
+        except Exception:
+            q = supabase.table("account_access").select("id, owner_user_id, role, status, delegate_user_id, delegate_email")
         if email:
             q = q.or_(f"delegate_user_id.eq.{user.id},delegate_email.eq.{email}")
         else:
@@ -376,9 +379,11 @@ def _get_accessible_accounts(user):
             nm = names.get(str(oid), "")
             masked = _mask_name_before_at(nm)
             if masked == "Unknown":
-                # Fallback to delegate_email (email of the owner that granted access)
-                de = (r.get("delegate_email") or "").strip()
-                masked = _mask_name_before_at(de)
+                # Fallback to owner_email (email of the account granting access)
+                oe = (r.get("owner_email") or "").strip()
+                masked = _mask_name_before_at(oe)
+                if masked == "Unknown":
+                    masked = f"acct {str(oid)[:8]}"
             label = f"Delegated ({masked})"
             role = (r.get("role") or "viewer")
             if r.get("status") == "pending":
@@ -596,6 +601,7 @@ def account_sharing_page(user):
             try:
                 supabase.table("account_access").insert({
                     "owner_user_id": uid,
+                    "owner_email": (getattr(user, "email", None) or None),
                     "delegate_email": email_clean,
                     "role": role,
                     "status": "pending",
