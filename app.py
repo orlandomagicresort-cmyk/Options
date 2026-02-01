@@ -249,6 +249,216 @@ def ensure_supabase_auth():
             # Compatible with older supabase-py versions
             pass
 
+
+# --------------------------------------------------------------------------------
+# 2B. MULTI-ACCOUNT (DELEGATED ACCESS) + COMMUNITY SHARING
+# --------------------------------------------------------------------------------
+from types import SimpleNamespace
+
+def _ensure_user_preferences_row(user):
+    """Ensure user_preferences has a row for this user (safe with RLS)."""
+    try:
+        supabase.table("user_preferences").insert({
+            "user_id": user.id,
+            "display_name": getattr(user, "email", "") or None,
+            "share_stats": False,
+        }).execute()
+    except Exception:
+        # likely already exists (conflict) or RLS prevented insert; ignore
+        pass
+
+def _activate_pending_invites(user):
+    """Activate pending invites that match this user's email."""
+    try:
+        email = (getattr(user, "email", "") or "").lower().strip()
+        if not email:
+            return
+        pending = supabase.table("account_access").select("id").eq("delegate_email", email).eq("status", "pending").execute().data or []
+        for r in pending:
+            try:
+                supabase.table("account_access").update({
+                    "delegate_user_id": user.id,
+                    "status": "active",
+                }).eq("id", r["id"]).execute()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+def _get_accessible_accounts(user):
+    """Return list of dicts: {label, owner_user_id, role}. Includes My Account as first."""
+    out = [{"label": "My Account", "owner_user_id": user.id, "role": "editor"}]
+    try:
+        rows = supabase.table("account_access").select("owner_user_id, role").eq("delegate_user_id", user.id).eq("status", "active").execute().data or []
+        owner_ids = [r["owner_user_id"] for r in rows if r.get("owner_user_id")]
+        names = {}
+        if owner_ids:
+            prefs = supabase.table("user_preferences").select("user_id, display_name").in_("user_id", owner_ids).execute().data or []
+            for p in prefs:
+                names[str(p.get("user_id"))] = p.get("display_name") or ""
+        for r in rows:
+            oid = r.get("owner_user_id")
+            if not oid:
+                continue
+            nm = names.get(str(oid), "")
+            label = nm.strip() if nm else f"Delegated ({str(oid)[:8]})"
+            out.append({"label": label, "owner_user_id": oid, "role": (r.get("role") or "viewer")})
+    except Exception:
+        pass
+    return out
+
+def _set_active_account(user):
+    """Render account selector + set active user context."""
+    _ensure_user_preferences_row(user)
+    _activate_pending_invites(user)
+
+    accts = _get_accessible_accounts(user)
+    labels = [a["label"] for a in accts]
+    cur = st.session_state.get("active_account_label") or labels[0]
+    if cur not in labels:
+        cur = labels[0]
+
+    sel = st.sidebar.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
+    st.session_state["active_account_label"] = sel
+    chosen = next(a for a in accts if a["label"] == sel)
+
+    st.session_state["active_user_id"] = chosen["owner_user_id"]
+    st.session_state["active_role"] = chosen["role"]
+    st.session_state["read_only"] = (chosen["owner_user_id"] != user.id and chosen["role"] != "editor")
+
+    # Provide a lightweight user-like object for downstream code
+    return SimpleNamespace(id=chosen["owner_user_id"], email=getattr(user, "email", ""))
+
+def _require_editor():
+    if st.session_state.get("read_only"):
+        st.error("Read-only access: you don't have permission to modify this account.")
+        st.stop()
+
+def _safe_upsert_preferences(user_id, display_name: str | None, share_stats: bool):
+    try:
+        # Upsert via update first, then insert if needed
+        supabase.table("user_preferences").update({
+            "display_name": display_name,
+            "share_stats": share_stats,
+        }).eq("user_id", user_id).execute()
+    except Exception:
+        try:
+            supabase.table("user_preferences").insert({
+                "user_id": user_id,
+                "display_name": display_name,
+                "share_stats": share_stats,
+            }).execute()
+        except Exception:
+            pass
+
+def community_page(user):
+    _price_refresh_controls(user, "Community", force_leap_mid=False)
+    st.header("🌎 Community Stats")
+    st.caption("Only users who opted-in to share stats appear here.")
+
+    try:
+        # Prefer view if created
+        rows = supabase.table("community_leaderboard").select("*").execute().data or []
+    except Exception:
+        # Fallback: join preferences + latest metrics in Python
+        prefs = supabase.table("user_preferences").select("user_id, display_name").eq("share_stats", True).execute().data or []
+        rows = []
+        for p in prefs:
+            uid = p.get("user_id")
+            if not uid:
+                continue
+            mets = supabase.table("user_metrics").select("wtd_pct,mtd_pct,ytd_pct,as_of_date,updated_at").eq("user_id", uid).order("as_of_date", desc=True).limit(1).execute().data or []
+            if mets:
+                r = mets[0]
+                r["user_id"] = uid
+                r["display_name"] = p.get("display_name") or "Anonymous"
+                rows.append(r)
+
+    if not rows:
+        st.info("No shared stats yet.")
+        return
+
+    df = pd.DataFrame(rows)
+    # Normalize columns
+    for c in ["wtd_pct", "mtd_pct", "ytd_pct"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    show = df.rename(columns={
+        "display_name": "User",
+        "wtd_pct": "WTD %",
+        "mtd_pct": "MTD %",
+        "ytd_pct": "YTD %",
+        "as_of_date": "As Of",
+    })
+    cols = [c for c in ["User","WTD %","MTD %","YTD %","As Of"] if c in show.columns]
+    st.dataframe(show[cols], use_container_width=True)
+
+def account_sharing_page(user):
+    _price_refresh_controls(user, "Account & Sharing", force_leap_mid=False)
+    st.header("👥 Account Access & Sharing")
+
+    # Preferences
+    try:
+        pref = supabase.table("user_preferences").select("*").eq("user_id", user.id).limit(1).execute().data
+        pref = pref[0] if pref else {}
+    except Exception:
+        pref = {}
+
+    st.subheader("Your Profile")
+    disp = st.text_input("Display name (shown in Community)", value=pref.get("display_name") or getattr(user, "email", ""), key="pref_display")
+    share = st.toggle("Share my stats with the community", value=bool(pref.get("share_stats")), key="pref_share")
+    if st.button("Save Preferences", type="primary"):
+        _safe_upsert_preferences(user.id, disp.strip() if disp else None, bool(share))
+        st.success("Saved.")
+
+    st.divider()
+    st.subheader("Grant Access")
+    st.caption("Grant another user Viewer (read-only) or Editor access to your account via their email.")
+
+    with st.form("grant_access_form", clear_on_submit=True):
+        email = st.text_input("Delegate email")
+        role = st.selectbox("Role", ["viewer", "editor"], index=0)
+        submitted = st.form_submit_button("Grant Access", type="primary")
+    if submitted:
+        _require_editor()  # owner only, but keep consistent
+        email_clean = (email or "").strip().lower()
+        if not email_clean or "@" not in email_clean:
+            st.error("Please enter a valid email.")
+        else:
+            try:
+                supabase.table("account_access").insert({
+                    "owner_user_id": user.id,
+                    "delegate_email": email_clean,
+                    "role": role,
+                    "status": "pending",
+                }).execute()
+                st.success("Access granted (pending). It will become active when that user logs in.")
+            except Exception as e:
+                st.error(f"Could not grant access: {e}")
+
+    st.subheader("Your Delegates")
+    try:
+        rows = supabase.table("account_access").select("*").eq("owner_user_id", user.id).order("created_at", desc=True).execute().data or []
+    except Exception:
+        rows = []
+    if rows:
+        df = pd.DataFrame(rows)
+        df["delegate"] = df.get("delegate_email")
+        view_cols = [c for c in ["delegate","role","status","created_at"] if c in df.columns]
+        st.dataframe(df[view_cols], use_container_width=True)
+        revoke_id = st.selectbox("Revoke access for", [""] + [str(r["id"]) for r in rows], format_func=lambda x: "" if x=="" else x, key="revoke_sel")
+        if revoke_id and st.button("Revoke Selected", type="secondary"):
+            _require_editor()
+            try:
+                supabase.table("account_access").update({"status":"revoked"}).eq("id", revoke_id).execute()
+                st.success("Revoked.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to revoke: {e}")
+    else:
+        st.info("No delegates yet.")
+
+
 # --------------------------------------------------------------------------------
 # 3. AUTHENTICATION & SESSION
 # --------------------------------------------------------------------------------
@@ -539,6 +749,9 @@ def get_baseline_snapshot(user_id):
     except: return None
 
 def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, currency="USD", txg: str | None = None):
+    if st.session_state.get("read_only"):
+        st.error("Read-only access: you don't have permission to modify this account.")
+        st.stop()
     # 1. Force Amount to Float (prevents Numpy errors)
     try: safe_amount = float(amount)
     except: safe_amount = 0.0
@@ -578,6 +791,9 @@ def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, 
 # 5. CORE LOGIC
 # --------------------------------------------------------------------------------
 def update_asset_position(user_id, symbol, quantity, price, action, date_obj, asset_type="STOCK", expiration=None, strike=None, fees=0.0, txg: str | None = None):
+    if st.session_state.get("read_only"):
+        st.error("Read-only access: you don't have permission to modify this account.")
+        st.stop()
     cost = quantity * price
     multiplier = 100 if "LEAP" in asset_type or "OPTION" in asset_type else 1
     txn_gross = cost * multiplier
@@ -625,6 +841,9 @@ def update_asset_position(user_id, symbol, quantity, price, action, date_obj, as
         supabase.table("assets").insert(data).execute()
 
 def update_short_option_position(user_id, symbol, quantity, price, action, date_obj, opt_type, expiration, strike, fees=0.0, linked_asset_id_override=None, txg: str | None = None):
+    if st.session_state.get("read_only"):
+        st.error("Read-only access: you don't have permission to modify this account.")
+        st.stop()
     premium = quantity * price * 100
     exp_iso = _iso_date(expiration)
     
@@ -780,7 +999,7 @@ def get_open_short_call_contracts(user_id, symbol):
 # 6. DASHBOARD & PAGES
 # --------------------------------------------------------------------------------
 
-def dashboard_page(user):
+def dashboard_page(active_user):
     st.header("📊 Executive Dashboard")
 
 
@@ -1565,7 +1784,7 @@ def dashboard_page(user):
         st.info("No Active Short Options.")
 
 
-def option_details_page(user):
+def option_details_page(active_user):
     st.header("📊 Executive Dashboard")
     
 
@@ -2529,7 +2748,7 @@ def import_page(user):
                         
             except Exception as e: st.error(f"Critical Error reading file: {e}")
 
-def cash_management_page(user):
+def cash_management_page(active_user):
     st.header("💸 Cash Management")
     c1, c2 = st.columns(2)
     with c1:
@@ -2553,7 +2772,7 @@ def cash_management_page(user):
         st.success(f"Processed {txn_type}")
 
 
-def pricing_page(user):
+def pricing_page(active_user):
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
 
 
@@ -2709,7 +2928,7 @@ def safe_reverse_ledger_transaction(transaction_id):
     supabase.table("transactions").delete().eq("id", transaction_id).execute()
     return True, "Deleted."
 
-def ledger_page(user):
+def ledger_page(active_user):
     st.header("📜 Transaction Ledger")
 
     # --- Date Filtering ---
@@ -3039,7 +3258,7 @@ def ledger_page(user):
                 })
             st.dataframe(pd.DataFrame(sub), use_container_width=True)
 
-def trade_entry_page(user):
+def trade_entry_page(active_user):
     st.header("⚡ Smart Trade Entry")
 
     # Helper: default option expiry is the next Friday from the selected trade date
@@ -3428,7 +3647,7 @@ def _bulk_expire_option(option_id: int):
 
 
 
-def bulk_entries_page(user):
+def bulk_entries_page(active_user):
     st.header("🧾 Bulk Entries")
     st.caption("Add transactions one line at a time. Fields appear based on Asset + Action. Review, then submit as a batch.")
 
@@ -3793,18 +4012,20 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data",
-        "Bulk Entries", "Settings"])
+    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
     user = st.session_state.user
-    if page == "Dashboard": dashboard_page(user)
-    elif page == "Option Details": option_details_page(user)
-    elif page == "Update LEAP Prices": pricing_page(user)
+    active_user = _set_active_account(user)
+    if page == "Dashboard": dashboard_page(active_user)
+    elif page == "Option Details": option_details_page(active_user)
+    elif page == "Update LEAP Prices": pricing_page(active_user)
     elif page == "Weekly Snapshot": snapshot_page(user)
-    elif page == "Cash Management": cash_management_page(user)
-    elif page == "Enter Trade": trade_entry_page(user)
-    elif page == "Ledger": ledger_page(user)
+    elif page == "Cash Management": cash_management_page(active_user)
+    elif page == "Enter Trade": trade_entry_page(active_user)
+    elif page == "Ledger": ledger_page(active_user)
     elif page == "Import Data": import_page(user)
-    elif page == "Bulk Entries": bulk_entries_page(user)
+    elif page == "Bulk Entries": bulk_entries_page(active_user)
+    elif page == "Account & Sharing": account_sharing_page(user)
+    elif page == "Community": community_page(user)
     elif page == "Settings": settings_page(user)
 
 if __name__ == "__main__":
