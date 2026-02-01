@@ -3477,6 +3477,46 @@ def bulk_entries_page(user):
         leap_open = []
         leap_symbols_open = []
 
+
+    # Build contract label maps for selecting specific existing contracts
+    short_opt_map = {}
+    short_opt_labels = []
+    for o in open_shorts:
+        try:
+            sym = str(o.get("symbol") or "").upper()
+            exp = str(o.get("expiration_date") or "")[:10]
+            strike = float(o.get("strike_price") or 0)
+            typ = str(o.get("type") or "").upper()
+            contracts = int(o.get("contracts") or 0)
+            oid = o.get("id")
+            if not sym or not exp or not typ or oid is None:
+                continue
+            lbl = f"{sym} {exp} {strike:g} {typ}  ({contracts}c)"
+            short_opt_map[lbl] = o
+            short_opt_labels.append(lbl)
+        except Exception:
+            continue
+    short_opt_labels = sorted(short_opt_labels)
+
+    leap_opt_map = {}
+    leap_opt_labels = []
+    for o in leap_open:
+        try:
+            sym = str(o.get("symbol") or "").upper()
+            exp = str(o.get("expiration_date") or "")[:10]
+            strike = float(o.get("strike_price") or 0)
+            typ = str(o.get("type") or "").upper()
+            contracts = int(o.get("contracts") or 0)
+            oid = o.get("id")
+            if not sym or not exp or not typ or oid is None:
+                continue
+            lbl = f"{sym} {exp} {strike:g} {typ}  ({contracts}c)"
+            leap_opt_map[lbl] = o
+            leap_opt_labels.append(lbl)
+        except Exception:
+            continue
+    leap_opt_labels = sorted(leap_opt_labels)
+
     st.subheader("Transactions")
     rows_out = []
 
@@ -3495,22 +3535,36 @@ def bulk_entries_page(user):
 
             action = c[1].selectbox("Action", actions, key=f"bulk_action_{rid}")
             d = c[2].date_input("Date", value=today, key=f"bulk_date_{rid}")
-
-            # Ticker selection
+            # Contract / Ticker selection
+            selected_contract = None
             ticker = ""
+
             if asset == "Stock" and action == "Sell" and stock_owned:
                 ticker = c[3].selectbox("Ticker", stock_owned, key=f"bulk_ticker_{rid}")
-            elif asset == "Shorts" and action in ["Buy to Close", "Roll", "Expire", "Assign"] and short_symbols:
-                ticker = c[3].selectbox("Ticker", short_symbols, key=f"bulk_ticker_{rid}")
+            elif asset == "Stock":
+                ticker = c[3].text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
             elif asset == "Shorts" and action == "Sell to Open" and holdings_symbols:
                 ticker = c[3].selectbox("Ticker", holdings_symbols, key=f"bulk_ticker_{rid}")
-            elif asset == "LEAP" and action in ["Buy to Close", "Roll", "Expire", "Assign"] and leap_symbols_open:
-                ticker = c[3].selectbox("Ticker", leap_symbols_open, key=f"bulk_ticker_{rid}")
+            elif asset == "LEAP" and action == "Sell to Open" and holdings_symbols:
+                ticker = c[3].selectbox("Ticker", holdings_symbols, key=f"bulk_ticker_{rid}")
             else:
-                ticker = c[3].text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
+                # Existing-contract actions: pick the exact contract with details
+                if asset == "Shorts" and action in ["Buy to Close", "Roll", "Expire", "Assign"] and short_opt_labels:
+                    lbl = c[3].selectbox("Contract", short_opt_labels, key=f"bulk_contract_{rid}")
+                    selected_contract = short_opt_map.get(lbl)
+                elif asset == "LEAP" and action in ["Buy to Close", "Roll", "Expire", "Assign"] and leap_opt_labels:
+                    lbl = c[3].selectbox("Contract", leap_opt_labels, key=f"bulk_contract_{rid}")
+                    selected_contract = leap_opt_map.get(lbl)
+                else:
+                    ticker = c[3].text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
+
+            if selected_contract is not None:
+                ticker = str(selected_contract.get("symbol") or "").upper().strip()
 
             qty_default = 100 if asset == "Stock" else 1
-            qty = c[4].number_input("Qty/Contracts", min_value=1, step=1, value=qty_default, key=f"bulk_qty_{rid}")
+
+            max_qty = int(selected_contract.get("contracts") or 1) if selected_contract is not None else None
+            qty = c[4].number_input("Qty/Contracts", min_value=1, max_value=max_qty, step=1, value=min(qty_default, max_qty) if max_qty else qty_default, key=f"bulk_qty_{rid}")
 
             # Price/Premium default
             def_price = 0.0
@@ -3529,18 +3583,32 @@ def bulk_entries_page(user):
             opt_type = ""
             exp_dt = None
             strike = 0.0
+            selected_option_id = None
             btc_price = 0.0
             new_strike = 0.0
             new_prem = 0.0
             new_exp = nf
             notes = ""
 
+            if selected_contract is not None:
+                selected_option_id = selected_contract.get("id")
+            
             if asset in ["LEAP", "Shorts"] and ticker:
                 c2 = st.columns([1.2, 1.2, 1.2, 1.2, 2.2])
-                opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], key=f"bulk_type_{rid}")
-                exp_default = (dec_third if asset == "LEAP" else nf)
+                type_idx = 0
+                if selected_contract is not None and str(selected_contract.get("type") or "").upper() == "PUT":
+                    type_idx = 1
+                opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}")
+                if selected_contract is not None:
+                    try:
+                        exp_default = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
+                    except Exception:
+                        exp_default = (dec_third if asset == "LEAP" else nf)
+                else:
+                    exp_default = (dec_third if asset == "LEAP" else nf)
                 exp_dt = c2[1].date_input("Exp", value=exp_default, key=f"bulk_exp_{rid}")
-                strike = c2[2].number_input("Strike", step=0.5, value=0.0, key=f"bulk_strike_{rid}")
+                strike_def = float(selected_contract.get("strike_price") or 0.0) if selected_contract is not None else 0.0
+                strike = c2[2].number_input("Strike", step=0.5, value=strike_def, key=f"bulk_strike_{rid}")
                 notes = c2[4].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}")
 
                 if action == "Roll":
@@ -3574,6 +3642,7 @@ def bulk_entries_page(user):
                 "Type": opt_type,
                 "Exp": exp_dt.isoformat() if exp_dt else "",
                 "Strike": strike if exp_dt else "",
+                "Option ID": selected_option_id if selected_contract is not None else "",
                 "BTC Price": btc_price if action == "Roll" else "",
                 "New Strike": new_strike if action == "Roll" else "",
                 "New Premium": new_prem if action == "Roll" else "",
@@ -3604,6 +3673,7 @@ def bulk_entries_page(user):
                     price = float(r["Price/Premium"] or 0)
                     fees = float(r["Fees"] or 0)
                     opt_type = str(r.get("Type") or "CALL").upper()
+                    option_id = r.get("Option ID")
                     exp = r.get("Exp") or ""
                     strike = float(r.get("Strike") or 0)
                     exp_dt = date.fromisoformat(exp[:10]) if exp else (_third_friday_next_december(d) if asset == "LEAP" else _next_friday(d))
@@ -3634,7 +3704,11 @@ def bulk_entries_page(user):
                         elif action == "Expire":
                             if fees:
                                 log_transaction(user.id, f"Expire {qty} {sym} {format_date_custom(_iso_date(exp_dt))} ${strike} {opt_type} (Fees)", -abs(float(fees)), "OPTION_FEES", sym, d, currency="USD")
-                            open_rows = [o for o in _fetch_open_shorts(user, sym) if str(o.get("type","")).upper()==opt_type and float(o.get("strike_price") or 0)==strike and str(o.get("expiration_date") or "")[:10]==exp_dt.isoformat()]
+                            all_open = _fetch_open_shorts(user, sym)
+                            if option_id:
+                                open_rows = [o for o in all_open if str(o.get("id")) == str(option_id)]
+                            else:
+                                open_rows = [o for o in all_open if str(o.get("type","")).upper()==opt_type and float(o.get("strike_price") or 0)==strike and str(o.get("expiration_date") or "")[:10]==exp_dt.isoformat()]
                             open_rows = sorted(open_rows, key=lambda x: (str(x.get("expiration_date") or ""), int(x.get("id") or 0)))
                             remaining = qty
                             for o in open_rows:
@@ -3655,7 +3729,11 @@ def bulk_entries_page(user):
                                     remaining=0
                             ok += 1
                         elif action == "Assign":
-                            open_rows = [o for o in _fetch_open_shorts(user, sym) if str(o.get("type","")).upper()==opt_type and float(o.get("strike_price") or 0)==strike]
+                            all_open = _fetch_open_shorts(user, sym)
+                            if option_id:
+                                open_rows = [o for o in all_open if str(o.get("id")) == str(option_id)]
+                            else:
+                                open_rows = [o for o in all_open if str(o.get("type","")).upper()==opt_type and float(o.get("strike_price") or 0)==strike]
                             open_rows = sorted(open_rows, key=lambda x: (str(x.get("expiration_date") or ""), int(x.get("id") or 0)))
                             remaining = qty
                             for o in open_rows:
