@@ -68,42 +68,38 @@ def _active_user_id(u):
 def _price_refresh_controls(user, page_name: str, force_leap_mid: bool = False):
     """
     Standard price refresh behavior:
-    - On first entry to the page (navigation), clear cached pricing so values re-fetch.
-    - Provide a top-of-page Refresh Prices button to manually refresh while staying on the page.
-    NOTE: Colors are controlled via .streamlit/config.toml; this only affects data freshness.
+    - Clears cached pricing when navigating to a new page
+    - Provides a Refresh Prices button at the top of the page
     """
-    # user can be a User object, dict, or raw uuid string depending on delegated mode
-    uid = _active_user_id(user)
-    try:
-    uid = getattr(user, "id", None)
-    except Exception:
+    # Resolve a stable user id (works for User obj, dict, or raw uuid)
     uid = None
-    if uid is None:
-    try:
-    uid = user.get("id")
-    except Exception:
-    uid = None
-    if uid is None:
-    uid = str(user)
+    if user is not None:
+        if hasattr(user, "id"):
+            uid = user.id
+        elif isinstance(user, dict) and "id" in user:
+            uid = user["id"]
+        else:
+            uid = str(user)
+    uid = str(uid)
 
-    prev = st.session_state.get("_current_page_name")
-    if prev != page_name:
-    try:
-    st.cache_data.clear()
-    except Exception:
-    pass
-    if force_leap_mid:
-    st.session_state[f"leap_mid_autorefresh_{uid}"] = "__force__"
-    st.session_state["_current_page_name"] = page_name
+    prev_page = st.session_state.get("_current_page_name")
+    if prev_page != page_name:
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        if force_leap_mid:
+            st.session_state[f"leap_mid_autorefresh_{uid}"] = True
+        st.session_state["_current_page_name"] = page_name
 
     if st.button("🔄 Refresh Prices", key=f"refresh_prices_{page_name}_{uid}", type="primary"):
-    try:
-    st.cache_data.clear()
-    except Exception:
-    pass
-    if force_leap_mid:
-    st.session_state[f"leap_mid_autorefresh_{uid}"] = "__force__"
-    st.rerun()
+        try:
+            st.cache_data.clear()
+        except Exception:
+            pass
+        if force_leap_mid:
+            st.session_state[f"leap_mid_autorefresh_{uid}"] = True
+        st.rerun()
 
 def force_light_mode():
     st.markdown("""
