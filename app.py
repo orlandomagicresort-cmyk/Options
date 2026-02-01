@@ -374,7 +374,10 @@ def _get_accessible_accounts(user):
             if not oid:
                 continue
             nm = names.get(str(oid), "")
-            label = f"Delegated ({_mask_name_before_at(nm)})"
+            masked = _mask_name_before_at(nm)
+            if masked == "Unknown":
+                masked = f"acct {str(oid)[:8]}"
+            label = f"Delegated ({masked})"
             role = (r.get("role") or "viewer")
             if r.get("status") == "pending":
                 label = f"{label} (pending)"
