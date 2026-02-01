@@ -65,7 +65,7 @@ def _active_user_id(u):
             uid = None
     return str(uid if uid is not None else u)
 
-def _price_refresh_controls(active_user, page_name: str, force_leap_mid: bool = False):
+def _price_refresh_controls(user, page_name: str, force_leap_mid: bool = False):
     """
     Standard price refresh behavior:
     - On first entry to the page (navigation), clear cached pricing so values re-fetch.
@@ -378,7 +378,8 @@ def _safe_upsert_preferences(user_id, display_name: str | None, share_stats: boo
             pass
 
 def community_page(user):
-    _price_refresh_controls(active_user, "Community", force_leap_mid=False)
+    uid = _active_user_id(user)
+    _price_refresh_controls(user, "Community", force_leap_mid=False)
     st.header("🌎 Community Stats")
     st.caption("Only users who opted-in to share stats appear here.")
 
@@ -420,12 +421,13 @@ def community_page(user):
     st.dataframe(show[cols], use_container_width=True)
 
 def account_sharing_page(user):
-    _price_refresh_controls(active_user, "Account & Sharing", force_leap_mid=False)
+    uid = _active_user_id(user)
+    _price_refresh_controls(user, "Account & Sharing", force_leap_mid=False)
     st.header("👥 Account Access & Sharing")
 
     # Preferences
     try:
-        pref = supabase.table("user_preferences").select("*").eq("user_id", user.id).limit(1).execute().data
+        pref = supabase.table("user_preferences").select("*").eq("user_id", uid).limit(1).execute().data
         pref = pref[0] if pref else {}
     except Exception:
         pref = {}
@@ -434,7 +436,7 @@ def account_sharing_page(user):
     disp = st.text_input("Display name (shown in Community)", value=pref.get("display_name") or getattr(user, "email", ""), key="pref_display")
     share = st.toggle("Share my stats with the community", value=bool(pref.get("share_stats")), key="pref_share")
     if st.button("Save Preferences", type="primary"):
-        _safe_upsert_preferences(user.id, disp.strip() if disp else None, bool(share))
+        _safe_upsert_preferences(uid, disp.strip() if disp else None, bool(share))
         st.success("Saved.")
 
     st.divider()
@@ -453,7 +455,7 @@ def account_sharing_page(user):
         else:
             try:
                 supabase.table("account_access").insert({
-                    "owner_user_id": user.id,
+                    "owner_user_id": uid,
                     "delegate_email": email_clean,
                     "role": role,
                     "status": "pending",
@@ -464,7 +466,7 @@ def account_sharing_page(user):
 
     st.subheader("Your Delegates")
     try:
-        rows = supabase.table("account_access").select("*").eq("owner_user_id", user.id).order("created_at", desc=True).execute().data or []
+        rows = supabase.table("account_access").select("*").eq("owner_user_id", uid).order("created_at", desc=True).execute().data or []
     except Exception:
         rows = []
     if rows:
@@ -1030,7 +1032,7 @@ def dashboard_page(active_user):
     st.header("📊 Executive Dashboard")
 
 
-    _price_refresh_controls(active_user, 'Dashboard', force_leap_mid=False)
+    _price_refresh_controls(user, 'Dashboard', force_leap_mid=False)
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
     fx = float(get_usd_to_cad_rate() or 1.0)
@@ -1816,7 +1818,7 @@ def option_details_page(active_user):
     st.header("📊 Executive Dashboard")
     
 
-    _price_refresh_controls(active_user, 'Option Details', force_leap_mid=False)
+    _price_refresh_controls(user, 'Option Details', force_leap_mid=False)
 
     # --- Top Controls ---
     c_ctrl_1, c_ctrl_2, c_ctrl_3 = st.columns([2, 4, 1])
@@ -2806,7 +2808,7 @@ def pricing_page(active_user):
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
 
 
-    _price_refresh_controls(active_user, 'Update LEAP Prices', force_leap_mid=True)
+    _price_refresh_controls(user, 'Update LEAP Prices', force_leap_mid=True)
 
     assets, _ = get_portfolio_data(uid)
     if assets.empty:
