@@ -59,6 +59,20 @@ def _price_refresh_controls(active_user, page_name: str, force_leap_mid: bool = 
     - Provide a top-of-page Refresh Prices button to manually refresh while staying on the page.
     NOTE: Colors are controlled via .streamlit/config.toml; this only affects data freshness.
     """
+    # active_user can be a User object, dict, or raw uuid string depending on delegated mode
+    uid = None
+    try:
+        uid = getattr(active_user, "id", None)
+    except Exception:
+        uid = None
+    if uid is None:
+        try:
+            uid = active_user.get("id")
+        except Exception:
+            uid = None
+    if uid is None:
+        uid = str(active_user)
+
     prev = st.session_state.get("_current_page_name")
     if prev != page_name:
         try:
@@ -66,18 +80,17 @@ def _price_refresh_controls(active_user, page_name: str, force_leap_mid: bool = 
         except Exception:
             pass
         if force_leap_mid:
-            st.session_state[f"leap_mid_autorefresh_{user.id}"] = "__force__"
+            st.session_state[f"leap_mid_autorefresh_{uid}"] = "__force__"
         st.session_state["_current_page_name"] = page_name
 
-    if st.button("🔄 Refresh Prices", key=f"refresh_prices_{page_name}_{user.id}", type="primary"):
+    if st.button("🔄 Refresh Prices", key=f"refresh_prices_{page_name}_{uid}", type="primary"):
         try:
             st.cache_data.clear()
         except Exception:
             pass
         if force_leap_mid:
-            st.session_state[f"leap_mid_autorefresh_{user.id}"] = "__force__"
+            st.session_state[f"leap_mid_autorefresh_{uid}"] = "__force__"
         st.rerun()
-
 def force_light_mode():
     st.markdown("""
         <style>
