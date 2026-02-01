@@ -73,37 +73,38 @@ def _price_refresh_controls(user, page_name: str, force_leap_mid: bool = False):
     NOTE: Colors are controlled via .streamlit/config.toml; this only affects data freshness.
     """
     # user can be a User object, dict, or raw uuid string depending on delegated mode
-        uid = _active_user_id(user)
+    uid = _active_user_id(user)
     try:
-        uid = getattr(user, "id", None)
+    uid = getattr(user, "id", None)
     except Exception:
-        uid = None
+    uid = None
     if uid is None:
-        try:
-            uid = user.get("id")
-        except Exception:
-            uid = None
+    try:
+    uid = user.get("id")
+    except Exception:
+    uid = None
     if uid is None:
-        uid = str(user)
+    uid = str(user)
 
     prev = st.session_state.get("_current_page_name")
     if prev != page_name:
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        if force_leap_mid:
-            st.session_state[f"leap_mid_autorefresh_{uid}"] = "__force__"
-        st.session_state["_current_page_name"] = page_name
+    try:
+    st.cache_data.clear()
+    except Exception:
+    pass
+    if force_leap_mid:
+    st.session_state[f"leap_mid_autorefresh_{uid}"] = "__force__"
+    st.session_state["_current_page_name"] = page_name
 
     if st.button("🔄 Refresh Prices", key=f"refresh_prices_{page_name}_{uid}", type="primary"):
-        try:
-            st.cache_data.clear()
-        except Exception:
-            pass
-        if force_leap_mid:
-            st.session_state[f"leap_mid_autorefresh_{uid}"] = "__force__"
-        st.rerun()
+    try:
+    st.cache_data.clear()
+    except Exception:
+    pass
+    if force_leap_mid:
+    st.session_state[f"leap_mid_autorefresh_{uid}"] = "__force__"
+    st.rerun()
+
 def force_light_mode():
     st.markdown("""
         <style>
