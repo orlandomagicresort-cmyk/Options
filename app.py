@@ -288,14 +288,6 @@ def _mask_name_before_at(name: str) -> str:
         return "Unknown"
     return s.split("@", 1)[0] if "@" in s else s
 
-
-def _mask_name_before_at_with_fallback(name: str, fallback: str) -> str:
-    """Mask a name/email; if blank, use fallback (already human-friendly)."""
-    masked = _mask_name_before_at(name)
-    if masked == "Unknown":
-        return fallback
-    return masked
-
 def _ensure_user_preferences_row(user):
     """Ensure user_preferences has a row for this user (safe with RLS).
     Also ensures display_name is never blank (defaults to user's email).
@@ -360,7 +352,7 @@ def _get_accessible_accounts(user):
         # Include:
         # - active delegated rows where delegate_user_id = me
         # - pending/active rows where delegate_email matches my email (used to "claim" invites)
-        q = supabase.table("account_access").select("id, owner_user_id, role, status, delegate_user_id, delegate_email, owner_label")
+        q = supabase.table("account_access").select("id, owner_user_id, role, status, delegate_user_id, delegate_email")
         if email:
             q = q.or_(f"delegate_user_id.eq.{user.id},delegate_email.eq.{email}")
         else:
@@ -382,12 +374,7 @@ def _get_accessible_accounts(user):
             if not oid:
                 continue
             nm = names.get(str(oid), "")
-            # Prefer label stored on the access row (works even when delegates cannot read user_preferences due to RLS)
-            row_owner_label = (r.get("owner_label") or "").strip()
-            fallback = (row_owner_label.split("@", 1)[0] if "@" in row_owner_label else row_owner_label)
-            if not fallback:
-                fallback = f"acct {str(oid)[:8]}"
-            label = f"Delegated ({_mask_name_before_at_with_fallback(nm or row_owner_label, fallback)})"
+            label = f"Delegated ({_mask_name_before_at(nm)})"
             role = (r.get("role") or "viewer")
             if r.get("status") == "pending":
                 label = f"{label} (pending)"
@@ -602,29 +589,12 @@ def account_sharing_page(user):
             st.error("Please enter a valid email.")
         else:
             try:
-                owner_label = None
-                try:
-                    # Prefer user's selected display_name; fallback to email
-                    pref = supabase.table("user_preferences").select("display_name").eq("user_id", uid).limit(1).execute().data
-                    pref = pref[0] if pref else {}
-                    owner_label = (pref.get("display_name") or getattr(user, "email", "") or "").strip()
-                except Exception:
-                    owner_label = (getattr(user, "email", "") or "").strip()
-
-                payload = {
+                supabase.table("account_access").insert({
                     "owner_user_id": uid,
                     "delegate_email": email_clean,
                     "role": role,
                     "status": "pending",
-                }
-                # Best-effort: store a human label for delegates to display
-                payload_with_label = dict(payload)
-                payload_with_label["owner_label"] = owner_label
-                try:
-                    supabase.table("account_access").insert(payload_with_label).execute()
-                except Exception:
-                    # If column doesn't exist yet, fall back gracefully
-                    supabase.table("account_access").insert(payload).execute()
+                }).execute()
                 st.success("Access granted (pending). It will become active when that user logs in.")
             except Exception as e:
                 st.error(f"Could not grant access: {e}")
