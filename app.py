@@ -72,19 +72,19 @@ def _price_refresh_controls(user, page_name: str, force_leap_mid: bool = False):
     - Provide a top-of-page Refresh Prices button to manually refresh while staying on the page.
     NOTE: Colors are controlled via .streamlit/config.toml; this only affects data freshness.
     """
-    # active_user can be a User object, dict, or raw uuid string depending on delegated mode
-    uid = None
+    # user can be a User object, dict, or raw uuid string depending on delegated mode
+        uid = _active_user_id(user)
     try:
-        uid = getattr(active_user, "id", None)
+        uid = getattr(user, "id", None)
     except Exception:
         uid = None
     if uid is None:
         try:
-            uid = active_user.get("id")
+            uid = user.get("id")
         except Exception:
             uid = None
     if uid is None:
-        uid = str(active_user)
+        uid = str(user)
 
     prev = st.session_state.get("_current_page_name")
     if prev != page_name:
