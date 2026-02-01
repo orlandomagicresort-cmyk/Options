@@ -278,6 +278,16 @@ def ensure_supabase_auth():
 # --------------------------------------------------------------------------------
 from types import SimpleNamespace
 
+def _mask_name_before_at(name: str) -> str:
+    """Mask a name/email to text before '@'. If no '@', return full name. Empty -> 'Unknown'."""
+    try:
+        s = (name or "").strip()
+    except Exception:
+        s = ""
+    if not s:
+        return "Unknown"
+    return s.split("@", 1)[0] if "@" in s else s
+
 def _ensure_user_preferences_row(user):
     """Ensure user_preferences has a row for this user (safe with RLS)."""
     try:
@@ -342,7 +352,7 @@ def _get_accessible_accounts(user):
             if not oid:
                 continue
             nm = names.get(str(oid), "")
-            label = nm.strip() if nm else ("Delegated (" + str(oid)[:8] + ")")
+            label = f"Delegated ({_mask_name_before_at(nm)})"
             role = (r.get("role") or "viewer")
             if r.get("status") == "pending":
                 label = f"{label} (pending)"
@@ -366,12 +376,22 @@ def _set_active_account(user):
     st.session_state["active_account_label"] = sel
     chosen = next(a for a in accts if a["label"] == sel)
 
-    st.session_state["active_user_id"] = chosen["owner_user_id"]
+    # Try to resolve the chosen account's display name (used for masking / UI)
+    chosen_display = None
+    try:
+        prefs = supabase.table("user_preferences").select("display_name").eq("user_id", chosen["owner_user_id"]).limit(1).execute().data or []
+        if prefs:
+            chosen_display = prefs[0].get("display_name")
+    except Exception:
+        chosen_display = None
+    st.session_state["active_account_display_name"] = chosen_display
+
+    st.session_state["active_user_id"] = chosen["owner_user_id"] = chosen["owner_user_id"]
     st.session_state["active_role"] = chosen["role"]
     st.session_state["read_only"] = (chosen["owner_user_id"] != user.id and chosen["role"] != "editor")
 
     # Provide a lightweight user-like object for downstream code
-    return SimpleNamespace(id=chosen["owner_user_id"], email=getattr(user, "email", ""))
+    return SimpleNamespace(id=chosen["owner_user_id"], email=(st.session_state.get("active_account_display_name") or getattr(user, "email", "")))
 
 def _require_editor():
     if st.session_state.get("read_only"):
@@ -4243,13 +4263,13 @@ def main():
     if page == "Dashboard": dashboard_page(active_user)
     elif page == "Option Details": option_details_page(active_user)
     elif page == "Update LEAP Prices": pricing_page(active_user)
-    elif page == "Weekly Snapshot": snapshot_page(user)
+    elif page == "Weekly Snapshot": snapshot_page(active_user)
     elif page == "Cash Management": cash_management_page(active_user)
     elif page == "Enter Trade": trade_entry_page(active_user)
     elif page == "Ledger": ledger_page(active_user)
-    elif page == "Import Data": import_page(user)
+    elif page == "Import Data": import_page(active_user)
     elif page == "Bulk Entries": bulk_entries_page(active_user)
-    elif page == "Account & Sharing": account_sharing_page(user)
+    elif page == "Account & Sharing": account_sharing_page(active_user)
     elif page == "Community": community_page(user)
     elif page == "Settings": settings_page(user)
 
