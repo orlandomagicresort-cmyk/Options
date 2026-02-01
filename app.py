@@ -25,11 +25,6 @@ def apply_global_ui_theme():
         /* Dataframe readability */
         [data-testid="stDataFrame"] thead tr th { font-weight: 700 !important; }
         [data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
-        
-        /* P/L conditional formatting (requested) */
-        .finance-table td.pl-pos { color: #0a7d22; font-weight: 700; }
-        .finance-table td.pl-neg { color: #b00020; font-weight: 700; }
-
         </style>
         """,
         unsafe_allow_html=True,
@@ -2104,220 +2099,228 @@ def dashboard_page(active_user):
         st.info("No Active Short Options.")
 
 
-
-    # --- P/L by Ticker (Realized + Unrealized + ITM), USD ---
-
-st.subheader("P/L by Ticker (USD)")
-
 # --- P/L by Ticker (USD) ---
-# Ensure holdings dataframes exist here
+st.subheader("P/L by Ticker (USD)")
 try:
-    if 'assets' in locals() and not assets.empty:
-        tmp_assets = assets.copy()
-        if 'type_norm' not in tmp_assets.columns:
-            tmp_assets['type_norm'] = tmp_assets.get('type', 'STOCK').astype(str).str.upper().str.strip()
-        stocks_df = tmp_assets[tmp_assets['type_norm'] == 'STOCK'].copy()
-        leaps_df = tmp_assets[tmp_assets['type_norm'] != 'STOCK'].copy()
-    else:
-        stocks_df = pd.DataFrame()
-        leaps_df = pd.DataFrame()
-except Exception:
-    stocks_df = pd.DataFrame()
-    leaps_df = pd.DataFrame()
+    # Ensure holdings dataframes exist (fallback to assets if needed)
     try:
-        # --------------------------
-        # Unrealized P/L (from holdings)
-        # --------------------------
-        unreal_stock = {}
-        if not stocks_df.empty:
-            tmp = stocks_df.copy()
-            tmp['sym'] = tmp.get('symbol', tmp.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
-            tmp['qty'] = pd.to_numeric(tmp.get('quantity', 0), errors='coerce').fillna(0.0)
-            tmp['avg'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0.0)
-            tmp['px']  = pd.to_numeric(tmp.get('current_price', 0), errors='coerce').fillna(0.0)
-            tmp['pl'] = (tmp['px'] - tmp['avg']) * tmp['qty']
-            unreal_stock = tmp.groupby('sym')['pl'].sum().to_dict()
+        _stocks_df = stocks_df
+    except Exception:
+        _stocks_df = pd.DataFrame()
+        if 'assets' in locals() and not assets.empty:
+            tmp_a = assets.copy()
+            if 'type_norm' not in tmp_a.columns:
+                tmp_a['type_norm'] = tmp_a.get('type', 'STOCK').astype(str).str.upper().str.strip()
+            _stocks_df = tmp_a[tmp_a['type_norm'] == 'STOCK'].copy()
 
-        unreal_leap = {}
-        if not leaps_df.empty:
-            tmp = leaps_df.copy()
-            tmp['sym'] = tmp.get('symbol', tmp.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
-            tmp['qty'] = pd.to_numeric(tmp.get('quantity', 0), errors='coerce').fillna(0.0)
-            tmp['avg'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0.0)
-            tmp['px']  = pd.to_numeric(tmp.get('current_price', tmp.get('last_price', 0)), errors='coerce').fillna(0.0)
-            tmp['pl'] = (tmp['px'] - tmp['avg']) * tmp['qty'] * 100.0
-            unreal_leap = tmp.groupby('sym')['pl'].sum().to_dict()
+    try:
+        _leaps_df = leaps_df
+    except Exception:
+        _leaps_df = pd.DataFrame()
+        if 'assets' in locals() and not assets.empty:
+            tmp_a = assets.copy()
+            if 'type_norm' not in tmp_a.columns:
+                tmp_a['type_norm'] = tmp_a.get('type', 'STOCK').astype(str).str.upper().str.strip()
+            _leaps_df = tmp_a[tmp_a['type_norm'] != 'STOCK'].copy()
 
-        # --------------------------
-        # ITM (liability) by ticker (from grouped short options)
-        # We'll treat as a NEGATIVE number (deduction from P/L).
-        # --------------------------
-        itm_by_sym = {}
-        if grouped_options:
+    # --------------------------
+    # Unrealized P/L (open holdings)
+    # --------------------------
+    unreal_stock = {}
+    if _stocks_df is not None and not _stocks_df.empty:
+        tmp = _stocks_df.copy()
+        tmp['sym'] = tmp.get('symbol', tmp.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
+        tmp['qty'] = pd.to_numeric(tmp.get('quantity', 0), errors='coerce').fillna(0.0)
+        tmp['avg'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0.0)
+        tmp['px']  = pd.to_numeric(tmp.get('current_price', 0), errors='coerce').fillna(0.0)
+        tmp['pl'] = (tmp['px'] - tmp['avg']) * tmp['qty']
+        unreal_stock = tmp.groupby('sym')['pl'].sum().to_dict()
+
+    unreal_leap = {}
+    if _leaps_df is not None and not _leaps_df.empty:
+        tmp = _leaps_df.copy()
+        tmp['sym'] = tmp.get('symbol', tmp.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
+        tmp['qty'] = pd.to_numeric(tmp.get('quantity', 0), errors='coerce').fillna(0.0)
+        tmp['avg'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0.0)
+        tmp['px']  = pd.to_numeric(tmp.get('current_price', tmp.get('last_price', 0)), errors='coerce').fillna(0.0)
+        tmp['pl'] = (tmp['px'] - tmp['avg']) * tmp['qty'] * 100.0
+        unreal_leap = tmp.groupby('sym')['pl'].sum().to_dict()
+
+    # --------------------------
+    # ITM $ by ticker (short calls liability)
+    # Show as a NEGATIVE deduction in P/L
+    # --------------------------
+    itm_by_sym = {}
+    try:
+        if 'grouped_options' in locals() and grouped_options:
             for r in grouped_options.values():
                 sym = str(r.get('symbol', 'UNK')).upper().strip()
                 itm_by_sym[sym] = itm_by_sym.get(sym, 0.0) + float(r.get('liability', 0.0) or 0.0)
+    except Exception:
+        itm_by_sym = {}
 
-        # --------------------------
-        # Realized P/L (from transactions)
-        # - Stocks and LEAP trades: reconstruct using running average cost
-        # - Shorts: net option premium cash flows (OPTION_PREMIUM)
-        # --------------------------
-        def _parse_trade_desc(desc: str):
-            """Parse 'Buy 10 AAPL @ $150.00' (and similar) -> (action, qty, sym, price)"""
-            d = (desc or "").strip()
-            m = re.search(r'^(Buy|Sell)\s+([0-9]*\.?[0-9]+)\s+([A-Za-z0-9\.\-]+).*?@\s*\$?([0-9,]*\.?[0-9]+)', d)
-            if not m:
-                return None
-            action = m.group(1)
-            qty = float(m.group(2))
-            sym = m.group(3).upper().strip()
-            price = float(m.group(4).replace(',', ''))
-            return action, qty, sym, price
+    # --------------------------
+    # Realized P/L (from transactions)
+    # - Stocks and LEAP trades: reconstruct via running average cost
+    # - Shorts: net option premium cashflows (OPTION_PREMIUM)
+    # --------------------------
+    def _parse_trade_desc(desc: str):
+        d = (desc or "").strip()
+        m = re.search(r'^(Buy|Sell)\s+([0-9]*\.?[0-9]+)\s+([A-Za-z0-9\.\-]+).*?@\s*\$?([0-9,]*\.?[0-9]+)', d)
+        if not m:
+            return None
+        action = m.group(1)
+        qty = float(m.group(2))
+        sym = m.group(3).upper().strip()
+        price = float(m.group(4).replace(',', ''))
+        return action, qty, sym, price
 
-        # Fetch only needed tx rows
+    tx_rows = []
+    try:
+        qb = supabase.table("transactions").select("transaction_date,type,amount,description,related_symbol").eq("user_id", uid)
+        tx_rows = _fetch_all(qb) or []
+    except Exception:
         tx_rows = []
-        try:
-            qb = supabase.table("transactions").select("transaction_date,type,amount,description,related_symbol").eq("user_id", uid)
-            tx_rows = _fetch_all(qb) or []
-        except Exception:
-            tx_rows = []
 
-        stock_real = {}
-        leap_real = {}
-        short_real = {}
+    # best-effort ordering
+    try:
+        tx_rows = sorted(tx_rows, key=lambda r: str(r.get('transaction_date') or ''))
+    except Exception:
+        pass
 
-        # State for avg-cost reconstruction
-        stock_state = {}  # sym -> (qty, cost_total)
-        leap_state = {}   # sym -> (qty_contracts, cost_total)
+    stock_real = {}
+    leap_real = {}
+    short_real = {}
 
-        # Order by date ascending (best-effort)
-        try:
-            tx_rows = sorted(tx_rows, key=lambda r: str(r.get('transaction_date') or ''))
-        except Exception:
-            pass
+    stock_state = {}  # sym -> (qty, cost_total)
+    leap_state = {}   # sym -> (contracts, cost_total)  (cost_total includes *100 already)
 
-        for r in tx_rows:
-            ttype = str(r.get('type', '') or '').upper().strip()
-            sym = str(r.get('related_symbol', '') or '').upper().strip()
-            amt = float(clean_number(r.get('amount', 0) or 0))
-            desc = str(r.get('description', '') or '')
+    for r in tx_rows:
+        ttype = str(r.get('type', '') or '').upper().strip()
+        sym = str(r.get('related_symbol', '') or '').upper().strip()
+        amt = float(clean_number(r.get('amount', 0) or 0))
+        desc = str(r.get('description', '') or '')
 
-            if not sym or sym == "CASH":
+        if not sym or sym == "CASH":
+            continue
+
+        # Short option premiums (net cashflow)
+        if ttype == "OPTION_PREMIUM":
+            short_real[sym] = short_real.get(sym, 0.0) + amt
+            continue
+
+        # Stock trades
+        if ttype == "TRADE_STOCK":
+            parsed = _parse_trade_desc(desc)
+            if not parsed:
                 continue
+            action, qty, psym, price = parsed
+            if psym:
+                sym = psym
 
-            # Short premiums: net cash flow by ticker
-            if ttype == "OPTION_PREMIUM":
-                short_real[sym] = short_real.get(sym, 0.0) + amt
-                continue
-
-            # Stock trades
-            if ttype == "TRADE_STOCK":
-                parsed = _parse_trade_desc(desc)
-                if not parsed:
+            gross = qty * price
+            if action == "Buy":
+                total_paid = -amt  # should be positive
+                fees = max(0.0, total_paid - gross)
+                st_qty, st_cost = stock_state.get(sym, (0.0, 0.0))
+                stock_state[sym] = (st_qty + qty, st_cost + gross + fees)
+            else:  # Sell
+                proceeds = amt  # net proceeds (gross - fees)
+                st_qty, st_cost = stock_state.get(sym, (0.0, 0.0))
+                if st_qty <= 0:
                     continue
-                action, qty, psym, price = parsed
-                if psym:
-                    sym = psym
-                gross = qty * price
-                if action == "Buy":
-                    total_paid = -amt  # should be positive
-                    fees = max(0.0, total_paid - gross)
-                    st_qty, st_cost = stock_state.get(sym, (0.0, 0.0))
-                    stock_state[sym] = (st_qty + qty, st_cost + gross + fees)
-                else:  # Sell
-                    proceeds = amt  # net proceeds (gross - fees)
-                    st_qty, st_cost = stock_state.get(sym, (0.0, 0.0))
-                    if st_qty <= 0:
-                        continue
-                    sell_qty = min(qty, st_qty)
-                    avg_cost = (st_cost / st_qty) if st_qty else 0.0
-                    cost_sold = avg_cost * sell_qty
-                    pnl = proceeds - cost_sold
-                    stock_real[sym] = stock_real.get(sym, 0.0) + pnl
-                    stock_state[sym] = (st_qty - sell_qty, st_cost - cost_sold)
-                continue
+                sell_qty = min(qty, st_qty)
+                avg_cost = (st_cost / st_qty) if st_qty else 0.0
+                cost_sold = avg_cost * sell_qty
+                pnl = proceeds - cost_sold
+                stock_real[sym] = stock_real.get(sym, 0.0) + pnl
+                stock_state[sym] = (st_qty - sell_qty, st_cost - cost_sold)
+            continue
 
-            # LEAP trades: type starts with TRADE_LEAP
-            if ttype.startswith("TRADE_LEAP"):
-                parsed = _parse_trade_desc(desc)
-                if not parsed:
+        # LEAP trades: TRADE_LEAP* (e.g., TRADE_LEAP_CALL)
+        if ttype.startswith("TRADE_LEAP"):
+            parsed = _parse_trade_desc(desc)
+            if not parsed:
+                continue
+            action, qty, psym, price = parsed
+            if psym:
+                sym = psym
+
+            gross = qty * price * 100.0
+            if action == "Buy":
+                total_paid = -amt
+                fees = max(0.0, total_paid - gross)
+                l_qty, l_cost = leap_state.get(sym, (0.0, 0.0))
+                leap_state[sym] = (l_qty + qty, l_cost + gross + fees)
+            else:
+                proceeds = amt
+                l_qty, l_cost = leap_state.get(sym, (0.0, 0.0))
+                if l_qty <= 0:
                     continue
-                action, qty, psym, price = parsed
-                if psym:
-                    sym = psym
-                gross = qty * price * 100.0
-                if action == "Buy":
-                    total_paid = -amt
-                    fees = max(0.0, total_paid - gross)
-                    l_qty, l_cost = leap_state.get(sym, (0.0, 0.0))
-                    leap_state[sym] = (l_qty + qty, l_cost + gross + fees)
-                else:
-                    proceeds = amt
-                    l_qty, l_cost = leap_state.get(sym, (0.0, 0.0))
-                    if l_qty <= 0:
-                        continue
-                    sell_qty = min(qty, l_qty)
-                    avg_cost = (l_cost / l_qty) if l_qty else 0.0
-                    cost_sold = avg_cost * sell_qty
-                    pnl = proceeds - cost_sold
-                    leap_real[sym] = leap_real.get(sym, 0.0) + pnl
-                    leap_state[sym] = (l_qty - sell_qty, l_cost - cost_sold)
-                continue
+                sell_qty = min(qty, l_qty)
+                avg_cost = (l_cost / l_qty) if l_qty else 0.0
+                cost_sold = avg_cost * sell_qty
+                pnl = proceeds - cost_sold
+                leap_real[sym] = leap_real.get(sym, 0.0) + pnl
+                leap_state[sym] = (l_qty - sell_qty, l_cost - cost_sold)
+            continue
 
-        # --------------------------
-        # Build final table rows
-        # --------------------------
-        tickers = sorted(set(list(unreal_stock.keys()) + list(unreal_leap.keys()) + list(itm_by_sym.keys())
-                             + list(stock_real.keys()) + list(leap_real.keys()) + list(short_real.keys())))
+    # --------------------------
+    # Build final table
+    # --------------------------
+    tickers = sorted(set(
+        list(unreal_stock.keys()) + list(unreal_leap.keys()) + list(itm_by_sym.keys()) +
+        list(stock_real.keys()) + list(leap_real.keys()) + list(short_real.keys())
+    ))
 
-        if tickers:
-            pl_html = "<table class='finance-table'><thead><tr>"                       "<th>Ticker</th><th>Stock P/L</th><th>LEAP P/L</th><th>Short P/L</th>"                       "<th>Unrealized P/L</th><th>ITM $</th><th>Total P/L</th>"                       "</tr></thead><tbody>"
+    if not tickers:
+        st.info("No P/L data available yet.")
+    else:
+        pl_html = (
+            "<table class='finance-table'><thead><tr>"
+            "<th>Ticker</th><th>Stock P/L</th><th>LEAP P/L</th><th>Short P/L</th>"
+            "<th>Unrealized P/L</th><th>ITM $</th><th>Total P/L</th>"
+            "</tr></thead><tbody>"
+        )
 
-            tot_stock = tot_leap = tot_short = tot_unreal = tot_itm = tot_total = 0.0
+        tot_stock = tot_leap = tot_short = tot_unreal = tot_itm = tot_total = 0.0
 
-            for sym in tickers:
-                v_stock = float(stock_real.get(sym, 0.0))
-                v_leap = float(leap_real.get(sym, 0.0))
-                v_short = float(short_real.get(sym, 0.0))
+        def _pl_td(v: float) -> str:
+            cls = "pl-pos" if v >= 0 else "pl-neg"
+            return f"<td class='{cls}'>${v:,.2f}</td>"
 
-                v_unreal = float(unreal_stock.get(sym, 0.0)) + float(unreal_leap.get(sym, 0.0))
-                # ITM is a liability (deduction)
-                liab = float(itm_by_sym.get(sym, 0.0))
-                v_itm = -liab
+        for sym in tickers:
+            v_stock = float(stock_real.get(sym, 0.0))
+            v_leap = float(leap_real.get(sym, 0.0))
+            v_short = float(short_real.get(sym, 0.0))
+            v_unreal = float(unreal_stock.get(sym, 0.0)) + float(unreal_leap.get(sym, 0.0))
+            liab = float(itm_by_sym.get(sym, 0.0))  # positive liability
+            v_itm = -liab  # show as deduction
+            v_total = v_stock + v_leap + v_short + v_unreal + v_itm
 
-                v_total = v_stock + v_leap + v_short + v_unreal + v_itm
+            pl_html += f"<tr><td>{sym}</td>{_pl_td(v_stock)}{_pl_td(v_leap)}{_pl_td(v_short)}{_pl_td(v_unreal)}{_pl_td(v_itm)}{_pl_td(v_total)}</tr>"
 
-                def _pl_td(v):
-                    cls = "pl-pos" if v >= 0 else "pl-neg"
-                    return f"<td class='{cls}'>${v:,.2f}</td>"
+            tot_stock += v_stock
+            tot_leap += v_leap
+            tot_short += v_short
+            tot_unreal += v_unreal
+            tot_itm += v_itm
+            tot_total += v_total
 
-                pl_html += f"<tr><td>{sym}</td>{_pl_td(v_stock)}{_pl_td(v_leap)}{_pl_td(v_short)}{_pl_td(v_unreal)}{_pl_td(v_itm)}{_pl_td(v_total)}</tr>"
+        pl_html += (
+            f"<tr class='total-row'><td>Total</td>"
+            f"<td class='{'pl-pos' if tot_stock >= 0 else 'pl-neg'}'>${tot_stock:,.2f}</td>"
+            f"<td class='{'pl-pos' if tot_leap >= 0 else 'pl-neg'}'>${tot_leap:,.2f}</td>"
+            f"<td class='{'pl-pos' if tot_short >= 0 else 'pl-neg'}'>${tot_short:,.2f}</td>"
+            f"<td class='{'pl-pos' if tot_unreal >= 0 else 'pl-neg'}'>${tot_unreal:,.2f}</td>"
+            f"<td class='{'pl-pos' if tot_itm >= 0 else 'pl-neg'}'>${tot_itm:,.2f}</td>"
+            f"<td class='{'pl-pos' if tot_total >= 0 else 'pl-neg'}'>${tot_total:,.2f}</td></tr>"
+        )
+        pl_html += "</tbody></table>"
+        st.markdown(pl_html, unsafe_allow_html=True)
 
-                tot_stock += v_stock
-                tot_leap += v_leap
-                tot_short += v_short
-                tot_unreal += v_unreal
-                tot_itm += v_itm
-                tot_total += v_total
-
-            pl_html += (
-                f"<tr class='total-row'><td>Total</td>"
-                f"<td class='{'pl-pos' if tot_stock >= 0 else 'pl-neg'}'>${tot_stock:,.2f}</td>"
-                f"<td class='{'pl-pos' if tot_leap >= 0 else 'pl-neg'}'>${tot_leap:,.2f}</td>"
-                f"<td class='{'pl-pos' if tot_short >= 0 else 'pl-neg'}'>${tot_short:,.2f}</td>"
-                f"<td class='{'pl-pos' if tot_unreal >= 0 else 'pl-neg'}'>${tot_unreal:,.2f}</td>"
-                f"<td class='{'pl-pos' if tot_itm >= 0 else 'pl-neg'}'>${tot_itm:,.2f}</td>"
-                f"<td class='{'pl-pos' if tot_total >= 0 else 'pl-neg'}'>${tot_total:,.2f}</td></tr>"
-            )
-
-            pl_html += "</tbody></table>"
-            st.markdown(pl_html, unsafe_allow_html=True)
-        else:
-            st.info("No P/L data available yet.")
-    except Exception as e:
-        st.warning(f"P/L by Ticker unavailable: {e}")
-
+except Exception as e:
+    st.warning(f"P/L by Ticker unavailable: {e}")
 
 def option_details_page(active_user):
     uid = _active_user_id(active_user)
@@ -2518,29 +2521,19 @@ def option_details_page(active_user):
     if not stocks_df.empty:
         stock_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>Stock P/L</th><th>Market Value</th></tr></thead><tbody>"
         for _, row in stocks_df.iterrows():
-            pl_val = (float(row.get('current_price',0)) - float(row.get('cost_basis',0))) * float(row.get('quantity',0))
-            pl_cls = 'pl-pos' if pl_val >= 0 else 'pl-neg'
-            stock_html += (
-                f"<tr><td>{row.get('symbol','UNK')}</td>"
-                f"<td>{float(row.get('quantity',0)):g}</td>"
-                f"<td>${float(row.get('cost_basis',0)):,.2f}</td>"
-                f"<td>${float(row.get('current_price',0)):,.2f}</td>"
-                f"<td class='{pl_cls}'>${pl_val:,.2f}</td>"
-                f"<td>${float(row.get('market_value',0)):,.2f}</td></tr>"
-            )
+            stock_html += f"<tr><td>{row.get('symbol','UNK')}</td><td>{float(row.get('quantity',0)):g}</td><td>${float(row.get('cost_basis',0)):,.2f}</td><td>${float(row.get('current_price',0)):,.2f}</td><td>${(float(row.get('cost_basis',0)) - float(row.get('current_price',0))) * float(row.get('quantity',0)):,.2f}</td><td>${float(row.get('market_value',0)):,.2f}</td></tr>"
         # Totals: Stock P/L and Market Value
         try:
             q_s = pd.to_numeric(stocks_df.get('quantity', 0), errors='coerce').fillna(0)
             cb_s = pd.to_numeric(stocks_df.get('cost_basis', 0), errors='coerce').fillna(0)
             px_s = pd.to_numeric(stocks_df.get('current_price', 0), errors='coerce').fillna(0)
             mv_s = pd.to_numeric(stocks_df.get('market_value', 0), errors='coerce').fillna(0)
-            stock_pl_total = float((((px_s - cb_s) * q_s)).sum())
+            stock_pl_total = float(((cb_s - px_s) * q_s).sum())
             stock_mv_total = float(mv_s.sum())
         except Exception:
             stock_pl_total = 0.0
             stock_mv_total = 0.0
-        stock_pl_cls = 'pl-pos' if stock_pl_total >= 0 else 'pl-neg'
-        stock_html += f"<tr class='total-row'><td colspan='4'>Total</td><td class='{stock_pl_cls}'>${stock_pl_total:,.2f}</td><td>${stock_mv_total:,.2f}</td></tr>"
+        stock_html += f"<tr class='total-row'><td colspan='4'>Total</td><td>${stock_pl_total:,.2f}</td><td>${stock_mv_total:,.2f}</td></tr>"
         stock_html += "</tbody></table>"
         st.markdown(stock_html, unsafe_allow_html=True)
     else: st.info("No Stock Holdings.")
@@ -2549,31 +2542,18 @@ def option_details_page(active_user):
     if not leaps_df.empty:
         leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Type</th><th>Exp</th><th>Strike</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>LEAP P/L</th><th>Value</th></tr></thead><tbody>"
         for _, row in leaps_df.iterrows():
-            pl_val = (float(row.get('current_price',0)) - float(row.get('cost_basis',0))) * float(row.get('quantity',0)) * 100.0
-            pl_cls = 'pl-pos' if pl_val >= 0 else 'pl-neg'
-            leap_html += (
-                f"<tr><td>{row.get('symbol','UNK')}</td>"
-                f"<td>{row.get('type_disp','').replace('LEAP','').strip()}</td>"
-                f"<td>{format_date_custom(row.get('expiration',''))}</td>"
-                f"<td>${float(row.get('strike_price',0)):,.2f}</td>"
-                f"<td>{float(row.get('quantity',0)):g}</td>"
-                f"<td>${float(row.get('cost_basis',0)):,.2f}</td>"
-                f"<td>${float(row.get('current_price',0)):,.2f}</td>"
-                f"<td class='{pl_cls}'>${pl_val:,.2f}</td>"
-                f"<td>${float(row.get('market_value',0)):,.2f}</td></tr>"
-            )
+            leap_html += f"<tr><td>{row.get('symbol','UNK')}</td><td>{row.get('type_disp','').replace('LEAP','').strip()}</td><td>{format_date_custom(row.get('expiration',''))}</td><td>${float(row.get('strike_price',0)):,.2f}</td><td>{float(row.get('quantity',0)):g}</td><td>${float(row.get('cost_basis',0)):,.2f}</td><td>${float(row.get('current_price',0)):,.2f}</td><td>${(float(row.get('cost_basis',0)) - float(row.get('current_price',0))) * float(row.get('quantity',0)) * 100.0:,.2f}</td><td>${float(row.get('market_value',0)):,.2f}</td></tr>"
         # Total row (must exactly match the per-line Value = current_price * qty * 100)
         try:
             qty_s = pd.to_numeric(leaps_df.get('quantity', 0), errors='coerce').fillna(0)
             px_s = pd.to_numeric(leaps_df.get('current_price', 0), errors='coerce').fillna(0)
             cb_s = pd.to_numeric(leaps_df.get('cost_basis', 0), errors='coerce').fillna(0)
             leap_total = float((qty_s * 100.0 * px_s).sum())
-            leap_pl_total = float((((px_s - cb_s) * qty_s * 100.0)).sum())
+            leap_pl_total = float(((cb_s - px_s) * qty_s * 100.0).sum())
         except Exception:
             leap_total = 0.0
             leap_pl_total = 0.0
-        leap_pl_cls = 'pl-pos' if leap_pl_total >= 0 else 'pl-neg'
-        leap_html += f"<tr class='total-row'><td colspan='7'>Total</td><td class='{leap_pl_cls}'>${leap_pl_total:,.2f}</td><td>${leap_total:,.2f}</td></tr>"
+        leap_html += f"<tr class='total-row'><td colspan='7'>Total</td><td>${leap_pl_total:,.2f}</td><td>${leap_total:,.2f}</td></tr>"
         leap_html += "</tbody></table>"
         st.markdown(leap_html, unsafe_allow_html=True)
     else: st.info("No Long Option Holdings.")
