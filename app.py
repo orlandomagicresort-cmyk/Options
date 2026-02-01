@@ -440,25 +440,43 @@ def community_page(user):
         return
 
     df = pd.DataFrame(rows)
-    # Normalize columns
-    for c in ["wtd_pct", "mtd_pct", "ytd_pct"]:
+
+    # Normalize numeric columns (stored as decimals, e.g. 0.034 -> 3.4%)
+    for c in ["wtd_pct", "mtd_pct", "ytd_pct", "w52_pct"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
     show = df.rename(columns={
         "display_name": "User",
         "wtd_pct": "WTD %",
         "mtd_pct": "MTD %",
         "ytd_pct": "YTD %",
+        "w52_pct": "52W %",
+        # keep as_of_date in the raw df but we won't display it
         "as_of_date": "As Of",
     })
-    cols = [c for c in ["User","WTD %","MTD %","YTD %","As Of"] if c in show.columns]
-    # Convert decimals to percentage numbers for display (0.034 -> 3.4)
-# ---- Community table formatting ----
+
+    # Mask User to only characters before "@"
+    if "User" in show.columns:
+        show["User"] = (
+            show["User"]
+            .astype(str)
+            .fillna("")
+            .str.strip()
+            .str.split("@", n=1)
+            .str[0]
+        )
+
+    # Display columns (hide user_id + As Of)
+    display_cols = [c for c in ["User", "WTD %", "MTD %", "YTD %", "52W %"] if c in show.columns]
+    show = show[display_cols].copy()
+
+    # Convert decimals to percent numbers for display (0.034 -> 3.4)
     for col in ["WTD %", "MTD %", "YTD %", "52W %"]:
         if col in show.columns:
             show[col] = pd.to_numeric(show[col], errors="coerce") * 100
-
     st.dataframe(
+
         show,
         use_container_width=True,
         hide_index=True,
