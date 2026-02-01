@@ -1032,7 +1032,7 @@ def dashboard_page(active_user):
     st.header("📊 Executive Dashboard")
 
 
-    _price_refresh_controls(user, 'Dashboard', force_leap_mid=False)
+    _price_refresh_controls(active_user, 'Dashboard', force_leap_mid=False)
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
     fx = float(get_usd_to_cad_rate() or 1.0)
@@ -1818,7 +1818,7 @@ def option_details_page(active_user):
     st.header("📊 Executive Dashboard")
     
 
-    _price_refresh_controls(user, 'Option Details', force_leap_mid=False)
+    _price_refresh_controls(active_user, 'Option Details', force_leap_mid=False)
 
     # --- Top Controls ---
     c_ctrl_1, c_ctrl_2, c_ctrl_3 = st.columns([2, 4, 1])
@@ -2808,7 +2808,7 @@ def pricing_page(active_user):
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
 
 
-    _price_refresh_controls(user, 'Update LEAP Prices', force_leap_mid=True)
+    _price_refresh_controls(active_user, 'Update LEAP Prices', force_leap_mid=True)
 
     assets, _ = get_portfolio_data(uid)
     if assets.empty:
@@ -3467,7 +3467,7 @@ def trade_entry_page(active_user):
                             pass
                         strike = float(selected_long.get("strike_price") or strike)
                         max_long_close = int(float(selected_long.get("quantity") or 0))
-# For non-buyback scenarios, allow user to choose details normally
+# For non-buyback scenarios, allow active_user to choose details normally
             if not ((action == "Buy" and buy_mode == "Buy Back Short (Close)") or (action == "Sell" and sell_mode == "Sell Long (Close)")):
                 exp_date = c1.date_input("Exp Date", value=_next_friday_local(trade_date), key="te_exp_date")
                 strike = c2.number_input("Strike", value=def_p, step=0.5)
@@ -3715,10 +3715,10 @@ def bulk_entries_page(active_user):
         return
 
     # Dropdown sources
-    stock_owned = _fetch_stock_tickers(user) if "supabase" in globals() else []
+    stock_owned = _fetch_stock_tickers(active_user) if "supabase" in globals() else []
     holdings_symbols = get_distinct_holdings(uid)
 
-    open_shorts = _fetch_open_shorts(user)
+    open_shorts = _fetch_open_shorts(active_user)
     short_symbols = sorted({str(r.get("symbol") or "").upper() for r in open_shorts if str(r.get("symbol") or "")})
 
     # LEAP Shorts (longer dated options in options table: >= 90 days out)
@@ -3964,7 +3964,7 @@ def bulk_entries_page(active_user):
                         elif action == "Expire":
                             if fees:
                                 log_transaction(uid, f"Expire {qty} {sym} {format_date_custom(_iso_date(exp_dt))} ${strike} {opt_type} (Fees)", -abs(float(fees)), "OPTION_FEES", sym, d, currency="USD")
-                            all_open = _fetch_open_shorts(user, sym)
+                            all_open = _fetch_open_shorts(active_user, sym)
                             if option_id:
                                 open_rows = [o for o in all_open if str(o.get("id")) == str(option_id)]
                             else:
@@ -3989,7 +3989,7 @@ def bulk_entries_page(active_user):
                                     remaining=0
                             ok += 1
                         elif action == "Assign":
-                            all_open = _fetch_open_shorts(user, sym)
+                            all_open = _fetch_open_shorts(active_user, sym)
                             if option_id:
                                 open_rows = [o for o in all_open if str(o.get("id")) == str(option_id)]
                             else:
