@@ -52,6 +52,19 @@ import math
 import os
 import uuid
 
+def _active_user_id(u):
+    """Return a stable user id string for User objects, dicts, or raw ids."""
+    try:
+        uid = getattr(u, "id", None)
+    except Exception:
+        uid = None
+    if uid is None:
+        try:
+            uid = u.get("id")
+        except Exception:
+            uid = None
+    return str(uid if uid is not None else u)
+
 def _price_refresh_controls(active_user, page_name: str, force_leap_mid: bool = False):
     """
     Standard price refresh behavior:
@@ -1013,6 +1026,7 @@ def get_open_short_call_contracts(user_id, symbol):
 # --------------------------------------------------------------------------------
 
 def dashboard_page(active_user):
+    uid = _active_user_id(active_user)
     st.header("📊 Executive Dashboard")
 
 
@@ -1023,8 +1037,8 @@ def dashboard_page(active_user):
     st.caption(f"Exchange Rate (live): 1 USD = {fx:.4f} CAD")
 
     # --- Data Loading ---
-    cash_usd = float(get_cash_balance(user.id) or 0.0)
-    assets, options = get_portfolio_data(user.id)
+    cash_usd = float(get_cash_balance(uid) or 0.0)
+    assets, options = get_portfolio_data(uid)
 
     # Normalize asset types
     try:
@@ -1149,7 +1163,7 @@ def dashboard_page(active_user):
         """Net DEPOSIT/WITHDRAWAL flows in USD between (d0, d1], using transaction_date."""
         try:
             tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
-                .eq("user_id", user.id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
             tx = pd.DataFrame(tx_res.data)
             if tx.empty:
                 return 0.0
@@ -1162,7 +1176,7 @@ def dashboard_page(active_user):
             return 0.0
 
     # Pull snapshots once
-    hist = get_portfolio_history(user.id)
+    hist = get_portfolio_history(uid)
     if not hist.empty:
         hist = hist.copy()
         hist["snapshot_date"] = pd.to_datetime(hist["snapshot_date"], errors="coerce")
@@ -1277,7 +1291,7 @@ def dashboard_page(active_user):
     # This compounds week-over-week and therefore ignores deposits/withdrawals (they are normalized out in Weekly %).
     def _lifetime_compound_from_weekly_snapshot_pct():
         try:
-            hist_df = get_portfolio_history(user.id)
+            hist_df = get_portfolio_history(uid)
             if hist_df is None or hist_df.empty:
                 return None
 
@@ -1293,7 +1307,7 @@ def dashboard_page(active_user):
                 return None
 
             # Transactions needed to compute Weekly % (flow-normalized)
-            tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")                .eq("user_id", user.id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+            tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")                .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
             tx_df = pd.DataFrame(tx_res.data)
             if not tx_df.empty:
                 tx_df = normalize_columns(tx_df)
@@ -1373,7 +1387,7 @@ def dashboard_page(active_user):
         Uses portfolio_history weekly snapshots and flow-normalizes weekly returns using DEPOSIT/WITHDRAWAL transactions.
         """
         try:
-            hist_df = get_portfolio_history(user.id)
+            hist_df = get_portfolio_history(uid)
             if hist_df is None or hist_df.empty:
                 return None
 
@@ -1389,7 +1403,7 @@ def dashboard_page(active_user):
                 return 0.0, 0.0
 
             # Transactions needed to compute Weekly % (flow-normalized)
-            tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")                .eq("user_id", user.id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+            tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")                .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
             tx_df = pd.DataFrame(tx_res.data)
             if not tx_df.empty:
                 tx_df = normalize_columns(tx_df)
@@ -1476,7 +1490,7 @@ def dashboard_page(active_user):
         # Fallback: previous behavior (vs total net deposits)
         try:
             tx_res = supabase.table("transactions").select("amount,type,currency")\
-                .eq("user_id", user.id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
             tx = pd.DataFrame(tx_res.data)
             life_flow = float(tx[tx["currency"] == "USD"]["amount"].sum()) if not tx.empty else 0.0
         except Exception:
