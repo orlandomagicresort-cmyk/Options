@@ -598,6 +598,24 @@ def account_sharing_page(user):
         st.success("Saved.")
 
     st.divider()
+
+    # If your Supabase schema includes account_access.owner_email, you can backfill it for existing grants
+    with st.expander("Admin: Fix delegated dropdown name", expanded=False):
+        st.caption("If delegated labels show as acct XXXXXXXX, your delegates can't read your display name due to Supabase RLS. Add a text column account_access.owner_email, then click below to populate it on all access rows you granted.")
+        if st.button("Backfill owner_email on my grants"):
+            try:
+                owner_email = (getattr(st.session_state.user, "email", None) or getattr(user, "email", None) or "").strip()
+                if not owner_email:
+                    st.error("Couldn't determine your email to backfill.")
+                else:
+                    try:
+                        supabase.table("account_access").update({"owner_email": owner_email}).eq("owner_user_id", uid).is_("owner_email", None).execute()
+                    except Exception:
+                        supabase.table("account_access").update({"owner_email": owner_email}).eq("owner_user_id", uid).execute()
+                    st.success("Backfill complete. Delegates should refresh the page.")
+            except Exception:
+                st.error("Backfill failed. Make sure account_access.owner_email exists in Supabase.")
+
     st.subheader("Grant Access")
     st.caption("Grant another user Viewer (read-only) or Editor access to your account via their email.")
 
@@ -1273,6 +1291,18 @@ def get_open_short_call_contracts(user_id, symbol):
 def dashboard_page(active_user):
     uid = _active_user_id(active_user)
     st.header("📊 Executive Dashboard")
+
+    # Delegated mode diagnostics: if key tables are unreadable, the dashboard will show zeros.
+    try:
+        logged_in = st.session_state.get("user")
+        logged_in_uid = getattr(logged_in, "id", None)
+        if logged_in_uid and str(uid) != str(logged_in_uid):
+            ph = supabase.table("portfolio_history").select("id").eq("user_id", uid).limit(1).execute().data or []
+            tx = supabase.table("transactions").select("id").eq("user_id", uid).limit(1).execute().data or []
+            if (not ph) and (not tx):
+                st.warning("Delegated access is active, but portfolio_history / transactions are not readable. This is a Supabase Row Level Security (RLS) policy issue, so calculations fall back to 0. To make delegated mode behave exactly like the owner, allow delegates to SELECT the owner's rows in these tables.")
+    except Exception:
+        pass
 
 
     _price_refresh_controls(active_user, 'Dashboard', force_leap_mid=False)
