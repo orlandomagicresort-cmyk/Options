@@ -376,7 +376,9 @@ def _get_accessible_accounts(user):
             nm = names.get(str(oid), "")
             masked = _mask_name_before_at(nm)
             if masked == "Unknown":
-                masked = f"acct {str(oid)[:8]}"
+                # Fallback to delegate_email (email of the owner that granted access)
+                de = (r.get("delegate_email") or "").strip()
+                masked = _mask_name_before_at(de)
             label = f"Delegated ({masked})"
             role = (r.get("role") or "viewer")
             if r.get("status") == "pending":
