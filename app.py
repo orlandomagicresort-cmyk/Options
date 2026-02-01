@@ -385,6 +385,7 @@ def _upsert_user_metrics(user_id: str, wtd_pct: float | None, mtd_pct: float | N
         payload = {
             "user_id": str(user_id),
             "as_of_date": today,
+            "updated_at": datetime.utcnow().isoformat(),
             "wtd_pct": float(wtd_pct) if wtd_pct is not None else None,
             "mtd_pct": float(mtd_pct) if mtd_pct is not None else None,
             "ytd_pct": float(ytd_pct) if ytd_pct is not None else None,
@@ -1706,7 +1707,7 @@ def dashboard_page(active_user):
     except Exception:
         share_stats = False
     if share_stats:
-        _upsert_user_metrics(uid, wtd_pct, mtd_pct, ytd_pct, (w52_pct if 'w52_pct' in locals() else None))
+        _upsert_user_metrics(uid, wtd_pct, mtd_pct, ytd_pct, w52_pct)
 
     summ_html = "<table class='finance-table'><thead><tr><th>Profit/Loss</th><th>%</th><th>US$</th><th>CA$</th></tr></thead><tbody>"
     for lbl, pct, usd, cad in summ_rows:
