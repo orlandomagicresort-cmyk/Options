@@ -296,8 +296,10 @@ def _activate_pending_invites(user):
         email = (getattr(user, "email", "") or "").lower().strip()
         if not email:
             return
-        pending = supabase.table("account_access").select("id").eq("delegate_email", email).eq("status", "pending").execute().data or []
+        pending = supabase.table("account_access").select("id, delegate_user_id").eq("delegate_email", email).eq("status", "pending").execute().data or []
         for r in pending:
+            if r.get("delegate_user_id"):
+                continue
             try:
                 supabase.table("account_access").update({
                     "delegate_user_id": user.id,
@@ -307,25 +309,44 @@ def _activate_pending_invites(user):
                 pass
     except Exception:
         pass
+    except Exception:
+        pass
 
 def _get_accessible_accounts(user):
     """Return list of dicts: {label, owner_user_id, role}. Includes My Account as first."""
     out = [{"label": "My Account", "owner_user_id": user.id, "role": "editor"}]
     try:
-        rows = supabase.table("account_access").select("owner_user_id, role").eq("delegate_user_id", user.id).eq("status", "active").execute().data or []
+        email = (getattr(user, "email", "") or "").lower().strip()
+        # Include:
+        # - active delegated rows where delegate_user_id = me
+        # - pending/active rows where delegate_email matches my email (used to "claim" invites)
+        q = supabase.table("account_access").select("id, owner_user_id, role, status, delegate_user_id, delegate_email")
+        if email:
+            q = q.or_(f"delegate_user_id.eq.{user.id},delegate_email.eq.{email}")
+        else:
+            q = q.eq("delegate_user_id", user.id)
+        rows = q.execute().data or []
+
+        # Filter to active or pending (pending will be claimed on login)
+        rows = [r for r in rows if (r.get("status") in ("active","pending"))]
+
         owner_ids = [r["owner_user_id"] for r in rows if r.get("owner_user_id")]
         names = {}
         if owner_ids:
             prefs = supabase.table("user_preferences").select("user_id, display_name").in_("user_id", owner_ids).execute().data or []
             for p in prefs:
                 names[str(p.get("user_id"))] = p.get("display_name") or ""
+
         for r in rows:
             oid = r.get("owner_user_id")
             if not oid:
                 continue
             nm = names.get(str(oid), "")
-            label = nm.strip() if nm else f"Delegated ({str(oid)[:8]})"
-            out.append({"label": label, "owner_user_id": oid, "role": (r.get("role") or "viewer")})
+            label = nm.strip() if nm else ("Delegated (" + str(oid)[:8] + ")")
+            role = (r.get("role") or "viewer")
+            if r.get("status") == "pending":
+                label = f"{label} (pending)"
+            out.append({"label": label, "owner_user_id": oid, "role": role})
     except Exception:
         pass
     return out
@@ -356,6 +377,21 @@ def _require_editor():
     if st.session_state.get("read_only"):
         st.error("Read-only access: you don't have permission to modify this account.")
         st.stop()
+
+def _upsert_user_metrics(user_id: str, wtd_pct: float | None, mtd_pct: float | None, ytd_pct: float | None):
+    """Upsert today's metrics for community sharing."""
+    try:
+        today = date.today().isoformat()
+        payload = {
+            "user_id": str(user_id),
+            "as_of_date": today,
+            "wtd_pct": float(wtd_pct) if wtd_pct is not None else None,
+            "mtd_pct": float(mtd_pct) if mtd_pct is not None else None,
+            "ytd_pct": float(ytd_pct) if ytd_pct is not None else None,
+        }
+        supabase.table("user_metrics").upsert(payload, on_conflict="user_id,as_of_date").execute()
+    except Exception:
+        pass
 
 def _safe_upsert_preferences(user_id, display_name: str | None, share_stats: bool):
     try:
@@ -1515,6 +1551,15 @@ def dashboard_page(active_user):
         ("Lifetime", life_pct, life_profit, life_profit * fx),
         ("FY Run Rate", fy_pct, fy_profit, fy_profit * fx),
     ]
+
+    # If user opted-in to sharing, publish today's WTD/MTD/YTD metrics
+    try:
+        pref = supabase.table("user_preferences").select("share_stats").eq("user_id", uid).limit(1).execute().data
+        share_stats = bool(pref[0].get("share_stats")) if pref else False
+    except Exception:
+        share_stats = False
+    if share_stats:
+        _upsert_user_metrics(uid, wtd_pct, mtd_pct, ytd_pct)
 
     summ_html = "<table class='finance-table'><thead><tr><th>Profit/Loss</th><th>%</th><th>US$</th><th>CA$</th></tr></thead><tbody>"
     for lbl, pct, usd, cad in summ_rows:
