@@ -431,6 +431,11 @@ def community_page(user):
             mets = supabase.table("user_metrics").select("wtd_pct,mtd_pct,ytd_pct,w52_pct,as_of_date,updated_at").eq("user_id", uid).order("as_of_date", desc=True).limit(1).execute().data or []
             if mets:
                 r = mets[0]
+
+                # Support both w52_pct and w_52_pct column names
+                if r.get("w52_pct") is None and r.get("w_52_pct") is not None:
+                    r["w52_pct"] = r.get("w_52_pct")
+
                 r["user_id"] = uid
                 r["display_name"] = p.get("display_name") or "Anonymous"
                 rows.append(r)
@@ -440,6 +445,11 @@ def community_page(user):
         return
 
     df = pd.DataFrame(rows)
+
+    # Handle naming differences from DB/view (some deployments use w_52_pct)
+    if "w52_pct" not in df.columns and "w_52_pct" in df.columns:
+        df["w52_pct"] = df["w_52_pct"]
+
 
     # Normalize numeric columns (stored as decimals, e.g. 0.034 -> 3.4%)
     for c in ["wtd_pct", "mtd_pct", "ytd_pct", "w52_pct"]:
@@ -452,6 +462,7 @@ def community_page(user):
         "mtd_pct": "MTD %",
         "ytd_pct": "YTD %",
         "w52_pct": "52W %",
+        "w_52_pct": "52W %",
         # keep as_of_date in the raw df but we won't display it
         "as_of_date": "As Of",
     })
