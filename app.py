@@ -451,7 +451,21 @@ def community_page(user):
         "as_of_date": "As Of",
     })
     cols = [c for c in ["User","WTD %","MTD %","YTD %","As Of"] if c in show.columns]
-    st.dataframe(show[cols], use_container_width=True)
+    # Convert decimals to percentage numbers for display (0.034 -> 3.4)
+    for _c in ["WTD %", "MTD %", "YTD %"]:
+        if _c in show.columns:
+            show[_c] = pd.to_numeric(show[_c], errors="coerce") * 100
+
+    st.dataframe(
+        show,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "WTD %": st.column_config.NumberColumn("WTD %", format="%.2f%%"),
+            "MTD %": st.column_config.NumberColumn("MTD %", format="%.2f%%"),
+            "YTD %": st.column_config.NumberColumn("YTD %", format="%.2f%%"),
+        },
+    )
 
 def account_sharing_page(user):
     uid = _active_user_id(user)
