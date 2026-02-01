@@ -352,15 +352,28 @@ def _get_accessible_accounts(user):
         # Include:
         # - active delegated rows where delegate_user_id = me
         # - pending/active rows where delegate_email matches my email (used to "claim" invites)
+        rows = []
+        if email:
+            flt = f"delegate_user_id.eq.{user.id},delegate_email.eq.{email}"
+        else:
+            flt = None
+
+        # Try selecting owner_email if the column exists; if it fails (schema/RLS), retry without it.
         try:
             q = supabase.table("account_access").select("id, owner_user_id, role, status, delegate_user_id, delegate_email, owner_email")
+            if flt:
+                q = q.or_(flt)
+            else:
+                q = q.eq("delegate_user_id", user.id)
+            rows = q.execute().data or []
         except Exception:
             q = supabase.table("account_access").select("id, owner_user_id, role, status, delegate_user_id, delegate_email")
-        if email:
-            q = q.or_(f"delegate_user_id.eq.{user.id},delegate_email.eq.{email}")
-        else:
-            q = q.eq("delegate_user_id", user.id)
-        rows = q.execute().data or []
+            if flt:
+                q = q.or_(flt)
+            else:
+                q = q.eq("delegate_user_id", user.id)
+            rows = q.execute().data or []
+
 
         # Filter to active or pending (pending will be claimed on login)
         rows = [r for r in rows if (r.get("status") in ("active","pending"))]
