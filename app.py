@@ -378,7 +378,7 @@ def _require_editor():
         st.error("Read-only access: you don't have permission to modify this account.")
         st.stop()
 
-def _upsert_user_metrics(user_id: str, wtd_pct: float | None, mtd_pct: float | None, ytd_pct: float | None):
+def _upsert_user_metrics(user_id: str, wtd_pct: float | None, mtd_pct: float | None, ytd_pct: float | None, w52_pct: float | None):
     """Upsert today's metrics for community sharing."""
     try:
         today = date.today().isoformat()
@@ -388,6 +388,7 @@ def _upsert_user_metrics(user_id: str, wtd_pct: float | None, mtd_pct: float | N
             "wtd_pct": float(wtd_pct) if wtd_pct is not None else None,
             "mtd_pct": float(mtd_pct) if mtd_pct is not None else None,
             "ytd_pct": float(ytd_pct) if ytd_pct is not None else None,
+            "w52_pct": float(w52_pct) if w52_pct is not None else None,
         }
         supabase.table("user_metrics").upsert(payload, on_conflict="user_id,as_of_date").execute()
     except Exception:
@@ -427,7 +428,7 @@ def community_page(user):
             uid = p.get("user_id")
             if not uid:
                 continue
-            mets = supabase.table("user_metrics").select("wtd_pct,mtd_pct,ytd_pct,as_of_date,updated_at").eq("user_id", uid).order("as_of_date", desc=True).limit(1).execute().data or []
+            mets = supabase.table("user_metrics").select("wtd_pct,mtd_pct,ytd_pct,w52_pct,as_of_date,updated_at").eq("user_id", uid).order("as_of_date", desc=True).limit(1).execute().data or []
             if mets:
                 r = mets[0]
                 r["user_id"] = uid
@@ -452,7 +453,7 @@ def community_page(user):
     })
     cols = [c for c in ["User","WTD %","MTD %","YTD %","As Of"] if c in show.columns]
     # Convert decimals to percentage numbers for display (0.034 -> 3.4)
-    for _c in ["WTD %", "MTD %", "YTD %"]:
+    for _c in ["WTD %", "MTD %", "YTD %", "52W %"]:
         if _c in show.columns:
             show[_c] = pd.to_numeric(show[_c], errors="coerce") * 100
 
@@ -464,6 +465,7 @@ def community_page(user):
             "WTD %": st.column_config.NumberColumn("WTD %", format="%.2f%%"),
             "MTD %": st.column_config.NumberColumn("MTD %", format="%.2f%%"),
             "YTD %": st.column_config.NumberColumn("YTD %", format="%.2f%%"),
+            "52W %": st.column_config.NumberColumn("52W %", format="%.2f%%"),
         },
     )
 
@@ -1573,7 +1575,7 @@ def dashboard_page(active_user):
     except Exception:
         share_stats = False
     if share_stats:
-        _upsert_user_metrics(uid, wtd_pct, mtd_pct, ytd_pct)
+        _upsert_user_metrics(uid, wtd_pct, mtd_pct, ytd_pct, (w52_pct if 'w52_pct' in locals() else None))
 
     summ_html = "<table class='finance-table'><thead><tr><th>Profit/Loss</th><th>%</th><th>US$</th><th>CA$</th></tr></thead><tbody>"
     for lbl, pct, usd, cad in summ_rows:
