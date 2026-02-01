@@ -451,10 +451,23 @@ def community_page(user):
         df["w52_pct"] = df["w_52_pct"]
 
 
+    # Compute 52W % on-the-fly if missing/blank (uses portfolio_history snapshots)
+    if "user_id" in df.columns:
+        if "w52_pct" not in df.columns:
+            df["w52_pct"] = pd.NA
+        missing_mask = df["w52_pct"].isna()
+        if missing_mask.any():
+            df.loc[missing_mask, "w52_pct"] = df.loc[missing_mask, "user_id"].apply(
+                lambda _uid: compute_52w_pct_from_history(_uid)
+            )
+
     # Normalize numeric columns (stored as decimals, e.g. 0.034 -> 3.4%)
     for c in ["wtd_pct", "mtd_pct", "ytd_pct", "w52_pct"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    if "w52_pct" in df.columns:
+        df["w52_pct"] = df["w52_pct"].fillna(0.0)
 
     show = df.rename(columns={
         "display_name": "User",
@@ -843,6 +856,90 @@ def get_portfolio_history(user_id):
         res = supabase.table("portfolio_history").select("*").eq("user_id", user_id).order("snapshot_date", desc=False).execute()
         return pd.DataFrame(res.data)
     except: return pd.DataFrame()
+
+
+@st.cache_data(show_spinner=False, ttl=600)
+def compute_52w_pct_from_history(user_id: str):
+    """Compute trailing 52W % on-the-fly from portfolio_history weekly snapshots.
+
+    This mirrors the dashboard's flow-normalized weekly return logic, but uses
+    snapshots only (does not include the current, unfrozen week).
+    Returns a decimal (e.g., 0.1234 for 12.34%).
+    """
+    try:
+        hist_df = get_portfolio_history(user_id)
+        if hist_df is None or hist_df.empty:
+            return None
+
+        hist_df = normalize_columns(hist_df)
+        if "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+            return None
+
+        hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
+        hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
+        hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
+        hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
+        if len(hist_df) < 2:
+            return 0.0
+
+        # Deposits/withdrawals in USD to flow-normalize returns
+        tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+            .eq("user_id", user_id).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+        tx_df = pd.DataFrame(tx_res.data)
+        if not tx_df.empty:
+            tx_df = normalize_columns(tx_df)
+            tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+            tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce")
+            tx_df = tx_df.dropna(subset=["transaction_date", "amount"])
+            if "currency" in tx_df.columns:
+                tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+        else:
+            tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
+
+        weekly_rets = []
+        for i in range(len(hist_df)):
+            curr_date = hist_df.iloc[i]["snapshot_date"]
+            curr_eq = float(hist_df.iloc[i]["total_equity"])
+
+            if i == 0:
+                prev_date = pd.Timestamp.min
+                prev_eq = 0.0
+            else:
+                prev_date = hist_df.iloc[i-1]["snapshot_date"]
+                prev_eq = float(hist_df.iloc[i-1]["total_equity"])
+
+            net_flow = 0.0
+            if not tx_df.empty:
+                mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
+                net_flow = float(tx_df.loc[mask, "amount"].sum())
+
+            base_capital = prev_eq + net_flow
+            weekly_profit = curr_eq - base_capital
+
+            if i == 0 or base_capital == 0:
+                weekly_ret = 0.0
+            else:
+                weekly_ret = weekly_profit / base_capital
+
+            weekly_rets.append(float(weekly_ret))
+
+        # Trailing 52 snapshot weeks (exclude i=0)
+        end_i = len(hist_df) - 1
+        start_k = max(1, end_i - 51)
+        window_rets = [float(weekly_rets[k]) for k in range(start_k, end_i + 1)]
+
+        prod = 1.0
+        for r in window_rets:
+            if r is None or (isinstance(r, float) and (math.isinf(r) or math.isnan(r))):
+                r = 0.0
+            prod *= (1.0 + float(r))
+
+        return float(prod - 1.0) if window_rets else 0.0
+
+    except Exception:
+        return None
+
+
 
 def get_baseline_snapshot(user_id):
     try:
