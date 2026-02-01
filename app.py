@@ -453,9 +453,10 @@ def community_page(user):
     })
     cols = [c for c in ["User","WTD %","MTD %","YTD %","As Of"] if c in show.columns]
     # Convert decimals to percentage numbers for display (0.034 -> 3.4)
-    for _c in ["WTD %", "MTD %", "YTD %", "52W %"]:
-        if _c in show.columns:
-            show[_c] = pd.to_numeric(show[_c], errors="coerce") * 100
+# ---- Community table formatting ----
+    for col in ["WTD %", "MTD %", "YTD %", "52W %"]:
+        if col in show.columns:
+            show[col] = pd.to_numeric(show[col], errors="coerce") * 100
 
     st.dataframe(
         show,
@@ -466,9 +467,9 @@ def community_page(user):
             "MTD %": st.column_config.NumberColumn("MTD %", format="%.2f%%"),
             "YTD %": st.column_config.NumberColumn("YTD %", format="%.2f%%"),
             "52W %": st.column_config.NumberColumn("52W %", format="%.2f%%"),
-        },
-    )
-
+    },
+)
+    
 def account_sharing_page(user):
     uid = _active_user_id(user)
     _price_refresh_controls(user, "Account & Sharing", force_leap_mid=False)
