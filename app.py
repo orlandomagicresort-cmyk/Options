@@ -1585,7 +1585,11 @@ def dashboard_page(active_user):
         perf_52w_profit, perf_52w_pct = _52w
     else:
         perf_52w_profit, perf_52w_pct = 0.0, 0.0
-# Summary table (%, US$, CA$)
+
+    # Keep a stable variable name for community sharing
+    w52_pct = perf_52w_pct
+
+    # Summary table (%, US$, CA$)
     def _fmt_money(x): return f"${x:,.2f}"
     def _fmt_pct(x): return f"{x*100:.2f}%"
 
