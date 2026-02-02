@@ -540,6 +540,11 @@ def community_page(user):
     if "w52_pct" in df.columns:
         df["w52_pct"] = df["w52_pct"].fillna(0.0)
 
+    # Sort by WTD % (highest to lowest)
+    if "wtd_pct" in df.columns:
+        df["wtd_pct"] = df["wtd_pct"].fillna(0.0)
+        df = df.sort_values(by="wtd_pct", ascending=False).reset_index(drop=True)
+
     show = df.rename(columns={
         "display_name": "User",
         "wtd_pct": "WTD %",
