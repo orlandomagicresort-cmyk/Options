@@ -1642,7 +1642,7 @@ def dashboard_page(active_user):
 
             # Compound Weekly % week-over-week (skip first row which is always 0)
             prod = 1.0
-            for r in weekly_rets[1:]:
+            for r in weekly_rets:
                 if r is None or (isinstance(r, float) and (math.isinf(r) or math.isnan(r))):
                     r = 0.0
                 prod *= (1.0 + float(r))
@@ -1654,7 +1654,7 @@ def dashboard_page(active_user):
             life_pct_local = float(prod - 1.0)
 
             # Lifetime profit dollars: sum of flow-normalized weekly P/L values + current week P/L.
-            life_profit_local = float(sum(weekly_profits[1:])) if len(weekly_profits) > 1 else 0.0
+            life_profit_local = float(sum(weekly_profits)) if len(weekly_profits) > 0 else 0.0
             life_profit_local += float(cur_profit)
 
             return life_profit_local, life_pct_local
@@ -2863,7 +2863,7 @@ def snapshot_page(user):
 
                 # YTD weekly returns: include weekly returns for rows in same year up to i (excluding row 0)
                 year_idx = [k for k in range(len(calc_df)) if pd.to_datetime(calc_df.loc[k, "Date"]).date().year == yr and k <= i]
-                year_rets = [float(calc_df.loc[k, "Weekly %"]) for k in year_idx if k > 0]
+                year_rets = [float(calc_df.loc[k, "Weekly %"]) for k in year_idx]
 
                 ytd_prod = 1.0
                 for r in year_rets:
@@ -2876,8 +2876,8 @@ def snapshot_page(user):
                 wkly_avg_vals.append(wkly_avg)
 
                 # 52W rolling window: last 52 weekly returns ending at i (or since inception)
-                start_k = max(1, i - 51)
-                window_rets = [float(calc_df.loc[k, "Weekly %"]) for k in range(start_k, i + 1) if k > 0]
+                start_k = max(0, i - 51)
+                window_rets = [float(calc_df.loc[k, "Weekly %"]) for k in range(start_k, i + 1)]
 
                 roll_prod = 1.0
                 for r in window_rets:
