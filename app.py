@@ -1013,9 +1013,9 @@ def compute_52w_pct_from_history(user_id: str):
 
             weekly_rets.append(float(weekly_ret))
 
-        # Trailing 52 snapshot weeks (exclude i=0)
+        # Trailing 52 snapshot weeks (include i=0)
         end_i = len(hist_df) - 1
-        start_k = max(1, end_i - 51)
+        start_k = max(0, end_i - 51)
         window_rets = [float(weekly_rets[k]) for k in range(start_k, end_i + 1)]
 
         prod = 1.0
