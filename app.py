@@ -1503,63 +1503,25 @@ def dashboard_page(active_user):
     mtd_profit = net_liq_usd - m_base_cap
     mtd_pct = (mtd_profit / m_base_cap) if m_base_cap != 0 else 0.0
 
-    # --- YTD base: snapshot on Dec 31 of prior year if present, else last snapshot before Jan 1 ---
+        # --- YTD base: equity as of Dec 31 prior year (opening balance). If no Dec 31 snapshot, assume 0 opening equity. ---
     year_start = date(today.year, 1, 1)
     dec31 = date(today.year - 1, 12, 31)
+
     y_base_eq, y_base_d = _last_snapshot_on_or_before(dec31)
     if y_base_eq is None:
-        # If nothing before year start, use first snapshot in year
-        if not hist.empty:
-            sub = hist[hist["snap_d"] >= year_start]
-            if not sub.empty:
-                r = sub.iloc[0]
-                y_base_eq, y_base_d = float(r["total_equity"]), r["snap_d"]
-            else:
-                y_base_eq, y_base_d = 0.0, year_start
-        else:
-            y_base_eq, y_base_d = 0.0, year_start
+        # No opening snapshot -> assume 0 opening equity at Jan 1
+        y_base_eq, y_base_d = 0.0, year_start
 
-    # --- YTD compound: product of weekly (flow-adjusted) returns since Jan 1 ---
-    def _ytd_compound_from_snapshots():
-        if hist.empty:
-            return 0.0, 0.0, 0
-        snaps = hist[hist["snap_d"] >= year_start].copy()
-        if snaps.empty:
-            return 0.0, 0.0, 0
-        # Ensure we include the base snapshot if it's before Jan 1 (e.g., Dec 31)
-        base_eq, base_d = y_base_eq, y_base_d
-        prod = 1.0
-        prev_d = base_d
-        prev_eq = base_eq
+    # Net flows from Jan 1 to today (USD)
+    ytd_flows = _net_flows_usd(year_start, today)
+    ytd_base_cap = y_base_eq + ytd_flows
 
-        for _, r in snaps.iterrows():
-            d = r["snap_d"]
-            eq = float(r["total_equity"])
-            if d <= prev_d:
-                continue
-            net_flow = _net_flows_usd(prev_d, d)
-            base_cap = prev_eq + net_flow
-            profit = eq - base_cap
-            ret = (profit / base_cap) if base_cap != 0 else 0.0
-            prod *= (1.0 + ret)
-            prev_d, prev_eq = d, eq
+    # YTD profit and % return (flow-adjusted)
+    ytd_profit = net_liq_usd - ytd_base_cap
+    ytd_pct = (ytd_profit / ytd_base_cap) if ytd_base_cap != 0 else 0.0
 
-        # Include partial period from last snapshot to today
-        net_flow = _net_flows_usd(prev_d, today)
-        base_cap = prev_eq + net_flow
-        profit = net_liq_usd - base_cap
-        ret = (profit / base_cap) if base_cap != 0 else 0.0
-        prod *= (1.0 + ret)
-
-        ytd_pct_local = prod - 1.0
-
-        # YTD profit dollars relative to base (also flow-adjusted)
-        total_flows = _net_flows_usd(y_base_d, today)
-        ytd_profit_local = net_liq_usd - (y_base_eq + total_flows)
-        weeks_elapsed = max(1, int((today - year_start).days // 7) + 1)
-        return ytd_profit_local, ytd_pct_local, weeks_elapsed
-
-    ytd_profit, ytd_pct, ytd_weeks = _ytd_compound_from_snapshots()
+    # Weeks elapsed (used for averages elsewhere)
+    ytd_weeks = max(1, int((today - year_start).days // 7) + 1)
 
     # FY Run Rate: annualize YTD return (based on elapsed days)
     days_elapsed = max(1, (today - year_start).days)
