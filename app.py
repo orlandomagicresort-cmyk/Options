@@ -4290,25 +4290,49 @@ def bulk_entries_page(active_user):
             continue
 
     short_opt_labels = sorted(short_opt_labels)
-
     leap_opt_map = {}
     leap_opt_labels = []
+
+    leap_agg = {}  # (sym, exp, strike, typ) -> aggregate dict
     for o in leap_open:
         try:
-            sym = str(o.get("symbol") or "").upper()
+            sym = str(o.get("symbol") or "").upper().strip()
             exp = str(o.get("expiration_date") or "")[:10]
             strike = float(o.get("strike_price") or 0)
-            typ = str(o.get("type") or "").upper()
+            typ = str(o.get("type") or "").upper().strip()
             contracts = int(o.get("contracts") or 0)
             oid = o.get("id")
-            if not sym or not exp or not typ or oid is None:
+
+            if not sym or not exp or not typ or contracts <= 0:
                 continue
-            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(contracts)}"
-            leap_opt_map[lbl] = o
+
+            k = (sym, exp, strike, typ)
+            if k not in leap_agg:
+                leap_agg[k] = {
+                    "id": oid,  # representative
+                    "ids": [oid] if oid is not None else [],
+                    "symbol": sym,
+                    "expiration_date": exp,
+                    "strike_price": strike,
+                    "type": typ,
+                    "contracts": 0,
+                }
+            leap_agg[k]["contracts"] += contracts
+            if oid is not None and oid not in leap_agg[k]["ids"]:
+                leap_agg[k]["ids"].append(oid)
+        except Exception:
+            continue
+
+    for (sym, exp, strike, typ), agg in leap_agg.items():
+        try:
+            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(agg.get('contracts') or 0)} | {typ}"
+            leap_opt_map[lbl] = agg
             leap_opt_labels.append(lbl)
         except Exception:
             continue
+
     leap_opt_labels = sorted(leap_opt_labels)
+
 
     st.subheader("Transactions")
     rows_out = []
