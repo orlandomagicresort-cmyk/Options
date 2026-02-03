@@ -4259,7 +4259,7 @@ def bulk_entries_page(active_user):
             oid = o.get("id")
             if not sym or not exp or not typ or oid is None:
                 continue
-            lbl = f"{sym} {exp} {strike:g} {typ}  ({contracts}c)"
+            lbl = f"{sym}, {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp}, strike (${strike:,.2f}), {typ}, contracts (Qty: {contracts})"
             short_opt_map[lbl] = o
             short_opt_labels.append(lbl)
         except Exception:
@@ -4278,7 +4278,7 @@ def bulk_entries_page(active_user):
             oid = o.get("id")
             if not sym or not exp or not typ or oid is None:
                 continue
-            lbl = f"{sym} {exp} {strike:g} {typ}  ({contracts}c)"
+            lbl = f"{sym}, {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp}, strike (${strike:,.2f}), {typ}, contracts (Qty: {contracts})"
             leap_opt_map[lbl] = o
             leap_opt_labels.append(lbl)
         except Exception:
@@ -4339,30 +4339,109 @@ def bulk_entries_page(active_user):
                 ctr_s = int(selected_contract.get("contracts") or 0)
                 st.caption(f"Selected: **{ticker}** • **{exp_s}** • **{strike_s:g}** • **{typ_s}** • **{ctr_s} contracts**")
 
-            # Row 3: Qty / Price / Fees (wider and clearer)
-            r3 = st.columns([1.2, 1.2, 1.0])
-            qty_default = 100 if asset == "Stock" else 1
-            max_qty = int(selected_contract.get("contracts") or 1) if selected_contract is not None else None
-            qty = r3[0].number_input("Qty/Contracts", min_value=1, max_value=max_qty, step=1, value=min(qty_default, max_qty) if max_qty else qty_default, key=f"bulk_qty_{rid}")
-
-            def_price = 0.0
-            if ticker and asset == "Stock":
-                try:
-                    def_price = float(get_current_price(ticker) or 0.0)
-                except Exception:
-                    def_price = 0.0
-            price = r3[1].number_input("Price/Premium", step=0.01, value=float(def_price), key=f"bulk_price_{rid}")
-            fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}")
+                        # Flags for special layouts
+            is_short_sto = (asset == "Shorts" and action == "Sell to Open")
+            is_short_roll = (asset == "Shorts" and action == "Roll" and selected_contract is not None)
 
             opt_type = ""
             exp_dt = None
             strike = 0.0
             selected_option_id = None
             btc_price = 0.0
+            price = 0.0
             new_strike = 0.0
             new_prem = 0.0
             new_exp = nf
             notes = ""
+
+            # If a contract is selected, pull its details
+            if selected_contract is not None:
+                selected_option_id = selected_contract.get("id")
+                try:
+                    opt_type = str(selected_contract.get("type") or "").upper().strip()
+                except Exception:
+                    opt_type = ""
+                try:
+                    exp_dt = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
+                except Exception:
+                    exp_dt = (dec_third if asset == "LEAP" else nf)
+                try:
+                    strike = float(selected_contract.get("strike_price") or 0.0)
+                except Exception:
+                    strike = 0.0
+
+            # Layout rules:
+            # - Shorts Sell to Open: Date, Ticker, Type, Strike, Expiry, Qty, Premium, Fees
+            # - Shorts Roll: dropdown already shows ticker/date/strike/type/contracts. Then show Qty (default contracts), BTC, New Strike, New Expiry, New Premium, Fees.
+            if is_short_sto:
+                c2 = st.columns([1.1, 1.1, 1.1, 3.7])
+                type_idx = 0
+                if str(opt_type or "").upper() == "PUT":
+                    type_idx = 1
+                opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}_sto")
+                exp_default = (dec_third if asset == "LEAP" else nf)
+                exp_dt = c2[1].date_input("Expiry", value=exp_default, key=f"bulk_exp_{rid}_sto")
+                strike = c2[2].number_input("Strike", step=0.5, value=float(strike or 0.0), key=f"bulk_strike_{rid}_sto")
+                notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}_sto")
+
+                r3 = st.columns([1.2, 1.2, 1.0])
+                qty = r3[0].number_input("Qty", min_value=1, step=1, value=1, key=f"bulk_qty_{rid}_sto")
+                price = r3[1].number_input("Premium", step=0.01, value=0.0, key=f"bulk_price_{rid}_sto")
+                fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}_sto")
+
+            elif is_short_roll:
+                max_qty = int(selected_contract.get("contracts") or 1)
+                r3 = st.columns([1.1, 1.1, 1.1, 1.1, 1.1])
+                qty = r3[0].number_input("Qty", min_value=1, max_value=max_qty, step=1, value=max_qty, key=f"bulk_qty_{rid}_roll")
+                btc_price = r3[1].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}_roll")
+                new_strike = r3[2].number_input("New Strike", step=0.5, value=float(strike or 0.0), key=f"bulk_new_strike_{rid}_roll")
+                new_exp = r3[3].date_input("New Expiry", value=nf, key=f"bulk_new_exp_{rid}_roll")
+                new_prem = r3[4].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_roll")
+                price = new_prem
+
+                fees = st.number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}_roll")
+                notes = st.text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}_roll")
+
+            else:
+                # Default layout (existing behavior)
+                r3 = st.columns([1.2, 1.2, 1.0])
+                qty_default = 100 if asset == "Stock" else 1
+                max_qty = int(selected_contract.get("contracts") or 1) if selected_contract is not None else None
+                qty = r3[0].number_input("Qty/Contracts", min_value=1, max_value=max_qty, step=1, value=min(qty_default, max_qty) if max_qty else qty_default, key=f"bulk_qty_{rid}")
+
+                def_price = 0.0
+                if ticker and asset == "Stock":
+                    try:
+                        def_price = float(get_current_price(ticker) or 0.0)
+                    except Exception:
+                        def_price = 0.0
+                price = r3[1].number_input("Price/Premium", step=0.01, value=float(def_price), key=f"bulk_price_{rid}")
+                fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}")
+
+                if asset in ["LEAP", "Shorts"] and ticker:
+                    c2 = st.columns([1.1, 1.3, 1.1, 3.5])
+                    type_idx = 0
+                    if selected_contract is not None and str(selected_contract.get("type") or "").upper() == "PUT":
+                        type_idx = 1
+                    opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}")
+                    if selected_contract is not None:
+                        try:
+                            exp_default = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
+                        except Exception:
+                            exp_default = (dec_third if asset == "LEAP" else nf)
+                    else:
+                        exp_default = (dec_third if asset == "LEAP" else nf)
+                    exp_dt = c2[1].date_input("Exp", value=exp_default, key=f"bulk_exp_{rid}")
+                    strike_def = float(selected_contract.get("strike_price") or 0.0) if selected_contract is not None else 0.0
+                    strike = c2[2].number_input("Strike", step=0.5, value=strike_def, key=f"bulk_strike_{rid}")
+                    notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}")
+
+                    if action == "Roll":
+                        c3 = st.columns([1.1, 1.1, 1.1, 3.7])
+                        btc_price = c3[0].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}_defroll")
+                        new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}_defroll")
+                        new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_defroll")
+                        new_exp = c3[3].date_input("New Exp", value=nf, key=f"bulk_new_exp_{rid}_defroll")
 
             if selected_contract is not None:
                 selected_option_id = selected_contract.get("id")
@@ -4387,10 +4466,10 @@ def bulk_entries_page(active_user):
 
                 if action == "Roll":
                     c3 = st.columns([1.1, 1.1, 1.1, 3.7])  # widen New Exp picker
-                    btc_price = c3[0].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}")
-                    new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}")
-                    new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}")
-                    new_exp = c3[3].date_input("New Exp", value=nf, key=f"bulk_new_exp_{rid}")
+                    btc_price = c3[0].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}_defroll")
+                    new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}_defroll")
+                    new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_defroll")
+                    new_exp = c3[3].date_input("New Exp", value=nf, key=f"bulk_new_exp_{rid}_defroll")
 
             # Net cash
             if action == "Roll":
