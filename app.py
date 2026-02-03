@@ -4259,7 +4259,7 @@ def bulk_entries_page(active_user):
             oid = o.get("id")
             if not sym or not exp or not typ or oid is None:
                 continue
-            lbl = f"{sym}, {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp}, strike (${strike:,.2f}), {typ}, contracts (Qty: {contracts})"
+            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(contracts)}"
             short_opt_map[lbl] = o
             short_opt_labels.append(lbl)
         except Exception:
@@ -4278,7 +4278,7 @@ def bulk_entries_page(active_user):
             oid = o.get("id")
             if not sym or not exp or not typ or oid is None:
                 continue
-            lbl = f"{sym}, {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp}, strike (${strike:,.2f}), {typ}, contracts (Qty: {contracts})"
+            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(contracts)}"
             leap_opt_map[lbl] = o
             leap_opt_labels.append(lbl)
         except Exception:
