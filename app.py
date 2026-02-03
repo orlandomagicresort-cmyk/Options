@@ -4249,6 +4249,7 @@ def bulk_entries_page(active_user):
     # Build contract label maps for selecting specific existing contracts
     short_opt_map = {}
     short_opt_labels = []
+    seen_labels = set()
     for o in open_shorts:
         try:
             sym = str(o.get("symbol") or "").upper()
@@ -4259,7 +4260,16 @@ def bulk_entries_page(active_user):
             oid = o.get("id")
             if not sym or not exp or not typ or oid is None:
                 continue
-            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(contracts)}"
+            base_lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(contracts)} | {typ}"
+            lbl = base_lbl
+            if lbl in seen_labels:
+                # Disambiguate duplicates (same ticker/expiry/strike/contracts) by adding type + short id suffix
+                lbl = f"{base_lbl} | {str(oid)[-4:]}"
+            n = 2
+            while lbl in seen_labels:
+                lbl = f"{base_lbl} | {str(oid)[-4:]} | #{n}"
+                n += 1
+            seen_labels.add(lbl)
             short_opt_map[lbl] = o
             short_opt_labels.append(lbl)
         except Exception:
