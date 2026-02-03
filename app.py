@@ -4442,34 +4442,8 @@ def bulk_entries_page(active_user):
                         new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}_defroll")
                         new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_defroll")
                         new_exp = c3[3].date_input("New Exp", value=nf, key=f"bulk_new_exp_{rid}_defroll")
-
             if selected_contract is not None:
                 selected_option_id = selected_contract.get("id")
-            
-            if asset in ["LEAP", "Shorts"] and ticker:
-                c2 = st.columns([1.1, 1.3, 1.1, 3.5])  # widen Notes
-                type_idx = 0
-                if selected_contract is not None and str(selected_contract.get("type") or "").upper() == "PUT":
-                    type_idx = 1
-                opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}")
-                if selected_contract is not None:
-                    try:
-                        exp_default = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
-                    except Exception:
-                        exp_default = (dec_third if asset == "LEAP" else nf)
-                else:
-                    exp_default = (dec_third if asset == "LEAP" else nf)
-                exp_dt = c2[1].date_input("Exp", value=exp_default, key=f"bulk_exp_{rid}")
-                strike_def = float(selected_contract.get("strike_price") or 0.0) if selected_contract is not None else 0.0
-                strike = c2[2].number_input("Strike", step=0.5, value=strike_def, key=f"bulk_strike_{rid}")
-                notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}")
-
-                if action == "Roll":
-                    c3 = st.columns([1.1, 1.1, 1.1, 3.7])  # widen New Exp picker
-                    btc_price = c3[0].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}_defroll")
-                    new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}_defroll")
-                    new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_defroll")
-                    new_exp = c3[3].date_input("New Exp", value=nf, key=f"bulk_new_exp_{rid}_defroll")
 
             # Net cash
             if action == "Roll":
