@@ -4247,33 +4247,48 @@ def bulk_entries_page(active_user):
 
 
     # Build contract label maps for selecting specific existing contracts
+    # For Shorts: show UNIQUE contracts (symbol + expiry + strike + type), combining contracts across lots.
     short_opt_map = {}
     short_opt_labels = []
-    seen_labels = set()
+
+    short_agg = {}  # (sym, exp, strike, typ) -> aggregate dict
     for o in open_shorts:
         try:
-            sym = str(o.get("symbol") or "").upper()
+            sym = str(o.get("symbol") or "").upper().strip()
             exp = str(o.get("expiration_date") or "")[:10]
             strike = float(o.get("strike_price") or 0)
-            typ = str(o.get("type") or "").upper()
+            typ = str(o.get("type") or "").upper().strip()
             contracts = int(o.get("contracts") or 0)
             oid = o.get("id")
-            if not sym or not exp or not typ or oid is None:
+
+            if not sym or not exp or not typ or contracts <= 0:
                 continue
-            base_lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(contracts)} | {typ}"
-            lbl = base_lbl
-            if lbl in seen_labels:
-                # Disambiguate duplicates (same ticker/expiry/strike/contracts) by adding type + short id suffix
-                lbl = f"{base_lbl} | {str(oid)[-4:]}"
-            n = 2
-            while lbl in seen_labels:
-                lbl = f"{base_lbl} | {str(oid)[-4:]} | #{n}"
-                n += 1
-            seen_labels.add(lbl)
-            short_opt_map[lbl] = o
+
+            k = (sym, exp, strike, typ)
+            if k not in short_agg:
+                short_agg[k] = {
+                    "id": oid,  # representative
+                    "ids": [oid] if oid is not None else [],
+                    "symbol": sym,
+                    "expiration_date": exp,
+                    "strike_price": strike,
+                    "type": typ,
+                    "contracts": 0,
+                }
+            short_agg[k]["contracts"] += contracts
+            if oid is not None and oid not in short_agg[k]["ids"]:
+                short_agg[k]["ids"].append(oid)
+        except Exception:
+            continue
+
+    for (sym, exp, strike, typ), agg in short_agg.items():
+        try:
+            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(agg.get('contracts') or 0)} | {typ}"
+            short_opt_map[lbl] = agg
             short_opt_labels.append(lbl)
         except Exception:
             continue
+
     short_opt_labels = sorted(short_opt_labels)
 
     leap_opt_map = {}
