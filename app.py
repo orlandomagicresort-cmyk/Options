@@ -2642,30 +2642,80 @@ def option_details_page(active_user):
 
                 if "Roll" in action_choice:
                     st.markdown("---")
-                    st.caption("🔄 **Roll Details**: Buy back current position and sell a new one.")
-                    
-                    r_c0, r_c1, r_c2, r_c3 = st.columns([1, 1, 1, 1])
-                    with r_c0:
-                        qty_to_process = st.number_input("Qty to Roll", min_value=1, max_value=total_avail, value=total_avail, step=1)
-                    with r_c1:
-                        btc_price = st.number_input("BTC Price ($)", min_value=0.0, format="%.2f", step=0.01)
-                    with r_c2:
-                        new_strike = st.number_input("New Strike ($)", value=float(sel_row['strike']), format="%.2f")
-                    with r_c3:
-                        new_premium = st.number_input("New Premium ($)", min_value=0.0, format="%.2f", step=0.01)
-                    
-                    def _next_friday_local(d: date) -> date:
-                        days_ahead = (4 - d.weekday()) % 7
-                        if days_ahead == 0:
-                            days_ahead = 7
-                        return d + timedelta(days=days_ahead)
+                    st.caption("🔄 **Roll Details**: Split into Buy-To-Close (current) and Sell-To-Open (new).")
 
-                    def_date = _next_friday_local(date.today())
-                    new_exp = st.date_input("New Expiration Date", value=def_date)
-                    # Ensure standard float/int calculation (prevents numpy errors)
+                    roll_key = f"roll_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                    qty_to_process = st.number_input(
+                        "Contracts to Roll",
+                        min_value=1,
+                        max_value=total_avail,
+                        value=total_avail,
+                        step=1,
+                        key=f"{roll_key}_qty"
+                    )
+
+                    roll_date = st.date_input(
+                        "Roll Transaction Date",
+                        value=date.today(),
+                        key=f"{roll_key}_date"
+                    )
+
+                    st.markdown("#### Step 1 — Buy-To-Close current contract")
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        btc_price = st.number_input(
+                            "BTC Price ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_btc_price"
+                        )
+                    with b2:
+                        roll_btc_fees = st.number_input(
+                            "BTC Fees ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_btc_fees"
+                        )
+
+                    st.markdown("#### Step 2 — Sell-To-Open new contract")
+                    s1, s2, s3 = st.columns(3)
+                    with s1:
+                        new_strike = st.number_input(
+                            "New Strike ($)",
+                            value=float(sel_row['strike']),
+                            format="%.2f",
+                            key=f"{roll_key}_new_strike"
+                        )
+                    with s2:
+                        def_date = _next_friday_local(date.today())
+                        new_exp = st.date_input(
+                            "New Expiration Date",
+                            value=def_date,
+                            key=f"{roll_key}_new_exp"
+                        )
+                    with s3:
+                        new_premium = st.number_input(
+                            "New Premium ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_new_prem"
+                        )
+
+                    new_fees = st.number_input(
+                        "New Option Fees ($)",
+                        min_value=0.0,
+                        format="%.2f",
+                        step=0.01,
+                        key=f"{roll_key}_new_fees"
+                    )
+
+                    # Cash impact (fees reduce cash)
                     calc_btc = float(btc_price) * int(qty_to_process) * 100
                     calc_sto = float(new_premium) * int(qty_to_process) * 100
-                    net_cash = calc_sto - calc_btc
+                    net_cash = calc_sto - calc_btc - float(roll_btc_fees) - float(new_fees)
                     st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
 
                 with c_btn:
@@ -2773,41 +2823,41 @@ def option_details_page(active_user):
                                         inherited_link_id = c['linked_asset_id']
                                         break
 
-                            txn_date_today = date.today()
                             txg = uuid.uuid4().hex[:12]
 
-                            # A) BTC: Buy-to-close existing contract(s) -> logs negative cash impact
+                            # A) BTC: Buy-to-close existing contract(s)
                             update_short_option_position(
                                 uid,
                                 sel_row['symbol'],
                                 qty_safe,
                                 float(btc_price),
                                 "Buy",
-                                txn_date_today,
+                                roll_date,
                                 sel_row['type'],
                                 sel_row['expiration'],
                                 float(sel_row['strike']),
-                                fees=0.0,
+                                fees=float(roll_btc_fees),
                                 txg=txg
                             )
 
-                            # B) STO: Sell-to-open new contract -> logs positive cash impact
+                            # B) STO: Sell-to-open new contract
                             update_short_option_position(
                                 uid,
                                 sel_row['symbol'],
                                 qty_safe,
                                 float(new_premium),
                                 "Sell",
-                                txn_date_today,
+                                roll_date,
                                 sel_row['type'],
                                 new_exp,
                                 float(new_strike),
-                                fees=0.0,
+                                fees=float(new_fees),
                                 linked_asset_id_override=inherited_link_id,
                                 txg=txg
                             )
 
-                            st.success(f"Rolled {qty_safe} contracts. Net Cash: ${(float(new_premium) - float(btc_price)) * qty_safe * 100:+,.2f}")
+                            net_cash = (float(new_premium) * qty_safe * 100) - (float(btc_price) * qty_safe * 100) - float(roll_btc_fees) - float(new_fees)
+                            st.success(f"Rolled {qty_safe} contracts. Net Cash: ${net_cash:+,.2f}")
                             st.cache_data.clear()
                             st.rerun()
     else:
