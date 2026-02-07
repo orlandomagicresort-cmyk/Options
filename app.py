@@ -2069,10 +2069,7 @@ def dashboard_page(active_user):
         st.markdown(opt_html, unsafe_allow_html=True)
     else:
         st.info("No Active Short Options.")
-
-
-
-    # --- P/L by Ticker (USD) ---
+# --- P/L by Ticker (USD) ---
     st.subheader("P/L by Ticker (USD)")
     try:
         # Ensure holdings dataframes exist (fallback to assets if needed)
@@ -2611,7 +2608,7 @@ def option_details_page(active_user):
                         btc_close_date = st.date_input(
                             "Transaction Date",
                             value=date.today(),
-                            key=f"btc_date_{selected_option_id}"
+                            key=f"btc_date_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
                         )
                     with b_c1:
                         btc_close_price = st.number_input(
@@ -2619,7 +2616,7 @@ def option_details_page(active_user):
                             min_value=0.0,
                             format="%.2f",
                             step=0.01,
-                            key=f"btc_prem_{selected_option_id}"
+                            key=f"btc_prem_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
                         )
                     with b_c2:
                         btc_close_fees = st.number_input(
@@ -2627,7 +2624,7 @@ def option_details_page(active_user):
                             min_value=0.0,
                             format="%.2f",
                             step=0.01,
-                            key=f"btc_fees_{selected_option_id}"
+                            key=f"btc_fees_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
                         )
 
                     calc_btc = float(btc_close_price) * int(qty_to_process) * 100
@@ -2656,7 +2653,7 @@ def option_details_page(active_user):
 
                     def_date = _next_friday_local(date.today())
                     new_exp = st.date_input("New Expiration Date", value=def_date)
-# Ensure standard float/int calculation (prevents numpy errors)
+                    # Ensure standard float/int calculation (prevents numpy errors)
                     calc_btc = float(btc_price) * int(qty_to_process) * 100
                     calc_sto = float(new_premium) * int(qty_to_process) * 100
                     net_cash = calc_sto - calc_btc
@@ -2730,7 +2727,7 @@ def option_details_page(active_user):
                             st.cache_data.clear()
                             st.rerun()
 
-                                                # 3. BUY-TO-CLOSE (BTC only; writes to ledger via update_short_option_position)
+                        # 3. BUY-TO-CLOSE (BTC only; writes to ledger via update_short_option_position)
                         elif "Buy-To-Close" in action_choice:
                             qty_safe = int(qty_to_process)
                             txg = uuid.uuid4().hex[:12]
@@ -2750,9 +2747,10 @@ def option_details_page(active_user):
                             )
 
                             st.success("Buy-To-Close recorded.")
+                            st.cache_data.clear()
                             st.rerun()
 
-# 3. ROLL (BTC then STO; both write to ledger via update_short_option_position)
+                        # 3. ROLL (BTC then STO; both write to ledger via update_short_option_position)
                         elif "Roll" in action_choice:
                             qty_safe = int(qty_to_process)
 
@@ -2803,75 +2801,8 @@ def option_details_page(active_user):
                             st.success(f"Rolled {qty_safe} contracts. Net Cash: ${(float(new_premium) - float(btc_price)) * qty_safe * 100:+,.2f}")
                             st.cache_data.clear()
                             st.rerun()
-
-
-        st.markdown("---")
-        st.subheader("🧾 Buy-To-Close a Short Option")
-
-        # Build a BTC dropdown using a cleaner combined label format
-        btc_map = {}
-        try:
-            for row in final_display_list:
-                try:
-                    sym = str(row.get("symbol") or "").upper().strip()
-                    exp_raw = str(row.get("expiration") or "")[:10]
-                    exp_disp = format_date_custom(exp_raw)
-                    strike_val = float(row.get("strike") or 0)
-                    typ = str(row.get("type") or "").upper().strip()
-                    qty_open = int(float(row.get("qty") or 0))
-                    if not sym or qty_open <= 0:
-                        continue
-                    lbl = f"{sym} | {exp_disp} | Strike: ${strike_val:,.2f} | Contracts: {qty_open} | {typ}"
-                    btc_map[lbl] = row
-                except Exception:
-                    continue
-        except Exception:
-            btc_map = {}
-
-        if not btc_map:
-            st.info("No open short options available to buy back.")
-        else:
-            btc_sel = st.selectbox("Select short option", options=list(btc_map.keys()), key="btc_sel_contract")
-            btc_row = btc_map.get(btc_sel)
-
-            b1, b2, b3, b4 = st.columns([1.2, 1.0, 1.0, 1.0])
-            with b1:
-                btc_date = st.date_input("Transaction date", value=date.today(), key="btc_txn_date")
-            with b2:
-                max_qty = int(float(btc_row.get("qty") or 0)) if btc_row else 1
-                btc_qty = st.number_input("Contracts to close", min_value=1, max_value=max_qty, value=max_qty, step=1, key="btc_qty")
-            with b3:
-                btc_premium = st.number_input("Premium to buy back", min_value=0.0, step=0.01, format="%.2f", key="btc_premium")
-            with b4:
-                btc_fees = st.number_input("Fees", min_value=0.0, step=0.01, format="%.2f", value=0.0, key="btc_fees")
-
-            btc_disabled = bool(st.session_state.get("read_only"))
-            if st.button("Submit Buy-To-Close", type="primary", disabled=btc_disabled, key="btc_submit"):
-                _require_editor()
-
-                if not btc_row:
-                    st.error("Please select a short option to buy back.")
-                    st.stop()
-
-                # Record BTC via the same ledger logic as roll (Buy closes short)
-                update_short_option_position(
-                    uid,
-                    str(btc_row.get("symbol") or "").upper().strip(),
-                    int(btc_qty),
-                    float(btc_premium),
-                    "Buy",
-                    btc_date,
-                    str(btc_row.get("type") or "PUT").upper().strip(),
-                    str(btc_row.get("expiration") or "")[:10],
-                    float(btc_row.get("strike") or 0),
-                    fees=float(btc_fees or 0.0),
-                )
-
-                st.success("Buy-To-Close recorded.")
-                st.cache_data.clear()
-                st.rerun()
-
-    else: st.info("No Active Short Options.")
+    else:
+        st.info("No Active Short Options.")
 
 def snapshot_page(user):
     st.header("📸 Weekly Snapshot & History")
