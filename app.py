@@ -2204,7 +2204,6 @@ def dashboard_page(active_user):
         stock_real = {}
         leap_real = {}
         short_real = {}
-        interest_total = 0.0  # separate Interest line
 
         for r in tx_rows:
             # Parse date
@@ -2217,6 +2216,8 @@ def dashboard_page(active_user):
             sym = str(r.get("related_symbol", "") or "").upper().strip()
             amt = float(clean_number(r.get("amount", 0) or 0))
             desc = str(r.get("description", "") or "")
+
+            classified = False
 
             def _infer_symbol_from_text(text: str) -> str:
                 # Attempt to find a ticker-like token in the description when related_symbol is missing
@@ -2242,35 +2243,33 @@ def dashboard_page(active_user):
                     sym2 = "USD"
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
                     short_real[sym2] = short_real.get(sym2, 0.0) + amt
+                classified = True
                 continue
 
-            # Interest is shown on a separate line ("Interest") under Stock P/L.
+            # Interest: capture on a dedicated pseudo-ticker row "Interest" (requested).
+            # We keep it under the Stock P/L column by adding it to stock_real["Interest"].
             if "INTEREST" in ttype:
                 adj_amt = amt
                 ttype_u = ttype.upper()
                 desc_u = desc.upper()
-                # treat paid/expense as negative
                 if ("PAID" in ttype_u) or ("EXPENSE" in ttype_u) or ("PAID" in desc_u) or ("EXPENSE" in desc_u):
                     adj_amt = -abs(adj_amt)
                 else:
-                    # received/earned
                     adj_amt = abs(adj_amt)
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    interest_total += adj_amt
+                    stock_real["Interest"] = stock_real.get("Interest", 0.0) + adj_amt
+                classified = True
                 continue
 
-            # General fees (non-option fees) reduce P/L. Attribute to ticker if available, else USD.
+            # General fees (non-option). Attribute to ticker if present; otherwise to USD.
             if ttype in ("FEES", "FEE", "COMMISSION", "COMMISSIONS"):
                 sym2 = sym or "USD"
-                fee_amt = amt
-                # fees should reduce profit
-                if fee_amt > 0:
-                    fee_amt = -abs(fee_amt)
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    stock_real[sym2] = stock_real.get(sym2, 0.0) + fee_amt
+                    stock_real[sym2] = stock_real.get(sym2, 0.0) - abs(amt)
+                classified = True
                 continue
 
-# Dividends must be tied to a ticker; otherwise ignore
+            # Dividends must be tied to a ticker; otherwise ignore
             if ttype == "DIVIDEND":
                 if sym:
                     if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
@@ -2345,6 +2344,40 @@ def dashboard_page(active_user):
         stock_real = {k:v for k,v in stock_real.items() if abs(v) >= 0.005}
         leap_real  = {k:v for k,v in leap_real.items() if abs(v) >= 0.005}
         short_real = {k:v for k,v in short_real.items() if abs(v) >= 0.005}
+        # --------------------------------------------------------------------
+        # Reconciliation catch-all (USD)
+        # Some transaction rows impact portfolio equity but aren't classified
+        # into Stock/LEAP/Short/Dividend/Fees/Interest buckets (e.g., misc cash
+        # events). These are included in the Dashboard Lifetime profit, so we
+        # attribute them to USD to keep the totals in sync without inventing
+        # per-ticker allocation.
+        # --------------------------------------------------------------------
+        for rr in tx_rows:
+            try:
+                rr_date = date.fromisoformat(str(rr.get("transaction_date") or "")[:10])
+            except Exception:
+                rr_date = None
+            rr_type = str(rr.get("type", "") or "").upper().strip()
+            if rr_type in ("DEPOSIT", "WITHDRAWAL"):
+                continue
+            if rr_type in ("OPTION_PREMIUM", "OPTION_FEES"):
+                continue
+            if "INTEREST" in rr_type:
+                continue
+            if rr_type in ("FEES", "FEE", "COMMISSION", "COMMISSIONS"):
+                continue
+            if rr_type == "DIVIDEND":
+                continue
+
+            # Trades are handled via description parsing; skip common trade labels
+            if rr_type in ("BUY", "SELL", "TRADE", "STOCK_TRADE", "LEAP_TRADE"):
+                continue
+
+            rr_amt = float(clean_number(rr.get("amount", 0) or 0))
+            if pl_start_date is None or (rr_date is not None and rr_date >= pl_start_date):
+                stock_real["USD"] = stock_real.get("USD", 0.0) + rr_amt
+
+
 
         # Only show tickers that have activity/holdings relevant to this view
         tickers = sorted(set(
@@ -2378,19 +2411,6 @@ def dashboard_page(active_user):
                     "Unrealized P/L": v_unrl,
                     "ITM $": v_itm,
                     "Total": total
-                })
-
-
-            # Add Interest line (separate, not tied to tickers)
-            if abs(interest_total) >= 0.005:
-                rows.append({
-                    "Ticker": "Interest",
-                    "Stock P/L": interest_total,
-                    "LEAP P/L": 0.0,
-                    "Short P/L": 0.0,
-                    "Unrealized P/L": 0.0,
-                    "ITM $": 0.0,
-                    "Total": interest_total
                 })
 
             if not rows:
