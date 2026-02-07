@@ -4677,7 +4677,7 @@ def trade_entry_page(active_user):
                 st.session_state["txn_success_msg"] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."
                 st.rerun()
 
-def _bulk_net_cash_change(asset_kind: str, action: str, qty: float, price: float: float) -> float:
+def _bulk_net_cash_change(asset_kind: str, action: str, qty: float, price: float) -> float:
     """
     Net cash impact (positive increases cash, negative decreases cash).
     Stocks: qty * price
