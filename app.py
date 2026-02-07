@@ -3022,7 +3022,7 @@ def option_details_page(active_user):
                                 roll_date,
                                 sel_row['type'],
                                 new_exp,
-                                float(new_strike)=float(new_fees),
+                                fees=float(new_fees),
                                 linked_asset_id_override=inherited_link_id,
                                 txg=txg
                             )
