@@ -1089,7 +1089,7 @@ def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, 
 # --------------------------------------------------------------------------------
 # 5. CORE LOGIC
 # --------------------------------------------------------------------------------
-def update_asset_position(user_id, symbol, quantity, price, action, date_obj, asset_type="STOCK", expiration=None, strike=None, fees=0.0, txg: str | None = None):
+def update_asset_position(user_id, symbol, quantity, price, action, date_obj, asset_type="STOCK", expiration=None, strike=None=0.0, txg: str | None = None):
     if st.session_state.get("read_only"):
         st.error("Read-only access: you don't have permission to modify this account.")
         st.stop()
@@ -1139,7 +1139,7 @@ def update_asset_position(user_id, symbol, quantity, price, action, date_obj, as
         if expiration: data["expiration"] = str(expiration)
         supabase.table("assets").insert(data).execute()
 
-def update_short_option_position(user_id, symbol, quantity, price, action, date_obj, opt_type, expiration, strike, fees=0.0, linked_asset_id_override=None, txg: str | None = None):
+def update_short_option_position(user_id, symbol, quantity, price, action, date_obj, opt_type, expiration, strike=0.0, linked_asset_id_override=None, txg: str | None = None):
     if st.session_state.get("read_only"):
         st.error("Read-only access: you don't have permission to modify this account.")
         st.stop()
@@ -2960,8 +2960,7 @@ def option_details_page(active_user):
                                 btc_close_date,
                                 sel_row['type'],
                                 sel_row['expiration'],
-                                float(sel_row['strike']),
-                                fees=float(btc_close_fees),
+                                float(sel_row['strike'])=float(btc_close_fees),
                                 txg=txg
                             )
 
@@ -2995,8 +2994,7 @@ def option_details_page(active_user):
                                 roll_date,
                                 sel_row['type'],
                                 sel_row['expiration'],
-                                float(sel_row['strike']),
-                                fees=float(roll_btc_fees),
+                                float(sel_row['strike'])=float(roll_btc_fees),
                                 txg=txg
                             )
 
@@ -3010,8 +3008,7 @@ def option_details_page(active_user):
                                 roll_date,
                                 sel_row['type'],
                                 new_exp,
-                                float(new_strike),
-                                fees=float(new_fees),
+                                float(new_strike)=float(new_fees),
                                 linked_asset_id_override=inherited_link_id,
                                 txg=txg
                             )
@@ -3317,7 +3314,7 @@ def import_page(user):
                     fees = get_fees(row)
                     final_action = clean_action_input(row.get('action', 'Buy'))
                     
-                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), "STOCK", fees=fees)
+                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), "STOCK"=fees)
                     count += 1
                 st.success(f"Processed {count} stock transactions.")
             except Exception as e: st.error(f"Error: {e}")
@@ -3344,7 +3341,7 @@ def import_page(user):
                     final_action = clean_action_input(row.get('action', 'Buy'))
                     l_type = str(row.get('type', 'CALL')).strip().upper()
                     
-                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), f"LEAP_{l_type}", row.get('expiration'), strike, fees=fees)
+                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), f"LEAP_{l_type}", row.get('expiration'), strike=fees)
                     count += 1
                 st.success(f"Processed {count} LEAP transactions.")
             except Exception as e: st.error(f"Error: {e}")
@@ -3370,7 +3367,7 @@ def import_page(user):
                     fees = get_fees(row)
                     final_action = clean_action_input(row.get('action', 'Sell'))
                     
-                    update_short_option_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), str(row.get('type', 'PUT')).strip().upper(), row.get('expiration'), strike, fees=fees)
+                    update_short_option_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), str(row.get('type', 'PUT')).strip().upper(), row.get('expiration'), strike=fees)
                     count += 1
                 st.success(f"Processed {count} short option transactions.")
             except Exception as e: st.error(f"Error: {e}")
@@ -3518,18 +3515,18 @@ def import_page(user):
                         
                         # --- ROUTING LOGIC ---
                         if cat_mode == 'STOCK':
-                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), "STOCK", fees=fees)
+                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), "STOCK"=fees)
                             
                         elif cat_mode == 'LEAP':
                             # Asset Logic
                             a_type = f"LEAP_{opt_type}" # LEAP_CALL or LEAP_PUT
-                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), a_type, exp, strike, fees=fees)
+                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), a_type, exp, strike=fees)
                             
                         elif cat_mode == 'SHORT':
                             # Liability Logic
                             # Default short options to PUT if undefined, but user should specify
                             if opt_type not in ['CALL', 'PUT']: opt_type = 'PUT'
-                            update_short_option_position(user.id, sym, qty, price, act, r['date_parsed'].date(), opt_type, exp, strike, fees=fees)
+                            update_short_option_position(user.id, sym, qty, price, act, r['date_parsed'].date(), opt_type, exp, strike=fees)
                             
                         elif cat_mode == 'CASH':
                             # Direct Transaction Insert
@@ -4093,7 +4090,7 @@ def register_page(active_user):
                "Use this to reconcile the P/L by Ticker view.")
 
     # --- Load all USD transactions for the active account ---
-    cols = "id, created_at, transaction_date, type, amount, fees, currency, description, related_symbol, option_id"
+    cols = "id, created_at, transaction_date, type, amount, currency, description, related_symbol, option_id"
     try:
         qb = supabase.table("transactions").select(cols).eq("user_id", uid).eq("currency", "USD").order("transaction_date", desc=False)
         rows = _fetch_all(qb)
@@ -4413,7 +4410,7 @@ def trade_entry_page(active_user):
             fees = c3.number_input("Total Fees", min_value=0.0, step=0.01, value=0.0)
             
             if st.button("Submit Stock Trade", type="primary"):
-                update_asset_position(uid, symbol, qty, price, action, trade_date, "STOCK", fees=fees)
+                update_asset_position(uid, symbol, qty, price, action, trade_date, "STOCK"=fees)
                 st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} (Fees: ${fees})."; st.session_state['te_reset_pending'] = True; st.session_state['te_reset_pending'] = True; st.rerun()
         else:
             c1, c2, c3 = st.columns(3)
@@ -4653,21 +4650,20 @@ def trade_entry_page(active_user):
                 if pos_mode.startswith("Long"):
                     # Long option (LEAP) is an ASSET position tracked in the assets table
                     asset_t = (str(selected_long.get("type")) if (action=="Sell" and sell_mode=="Sell Long (Close)" and selected_long) else f"LEAP_{opt_type}")
-                    update_asset_position(uid, symbol, qty, prem, action, trade_date, asset_t, exp_date, strike, fees=fees)
+                    update_asset_position(uid, symbol, qty, prem, action, trade_date, asset_t, exp_date, strike=fees)
                     # If this long option was being used as collateral for open shorts, detach links (shorts become uncovered)
                     if action == "Sell" and globals().get("sell_mode", None) == "Sell Long (Close)" and selected_long and selected_long.get("id"):
                         detach_collateral_links_for_asset(uid, selected_long.get("id"))
                 else:
                     # Short option liability tracked in options table (buy = close / sell = open)
                     update_short_option_position(
-                        uid, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike,
-                        fees=fees, linked_asset_id_override=linked_id
+                        uid, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike= linked_asset_id_override=linked_id
                     )
                 mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
                 st.session_state["txn_success_msg"] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."
                 st.rerun()
 
-def _bulk_net_cash_change(asset_kind: str, action: str, qty: float, price: float, fees: float) -> float:
+def _bulk_net_cash_change(asset_kind: str, action: str, qty: float, price: float: float) -> float:
     """
     Net cash impact (positive increases cash, negative decreases cash).
     Stocks: qty * price
@@ -5061,8 +5057,7 @@ def bulk_entries_page(active_user):
                     "Stock" if asset == "Stock" else asset,
                     ("Sell" if ("Sell" in action) else "Buy"),
                     qty,
-                    price,
-                    fees
+                    price
                 )
             st.write(f"**Net Cash Change:** {'+' if net>=0 else ''}${net:,.2f}")
 
@@ -5073,7 +5068,7 @@ def bulk_entries_page(active_user):
                 "Ticker": ticker,
                 "Qty": qty,
                 "Price/Premium": price,
-                "Fees": fees,
+                "Fees": 
                 "Type": opt_type,
                 "Exp": exp_dt.isoformat() if exp_dt else "",
                 "Strike": strike if exp_dt else "",
@@ -5114,16 +5109,16 @@ def bulk_entries_page(active_user):
                     exp_dt = date.fromisoformat(exp[:10]) if exp else (_third_friday_next_december(d) if asset == "LEAP" else _next_friday(d))
 
                     if asset == "Stock":
-                        update_asset_position(uid, sym, float(qty), price, "Sell" if action == "Sell" else "Buy", d, "STOCK", fees=fees)
+                        update_asset_position(uid, sym, float(qty), price, "Sell" if action == "Sell" else "Buy", d, "STOCK"=fees)
                         ok += 1
                         continue
 
                     if asset in ["LEAP", "Shorts"]:
                         if action == "Sell to Open":
-                            update_short_option_position(uid, sym, qty, price, "Sell", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None)
+                            update_short_option_position(uid, sym, qty, price, "Sell", d, opt_type, exp_dt, strike= linked_asset_id_override=None)
                             ok += 1
                         elif action == "Buy to Close":
-                            update_short_option_position(uid, sym, qty, price, "Buy", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None)
+                            update_short_option_position(uid, sym, qty, price, "Buy", d, opt_type, exp_dt, strike= linked_asset_id_override=None)
                             ok += 1
                         elif action == "Roll":
                             txg = str(uuid.uuid4())
@@ -5133,8 +5128,8 @@ def bulk_entries_page(active_user):
                             new_exp_s = str(r.get("New Exp") or "")
                             new_exp_dt = date.fromisoformat(new_exp_s[:10]) if new_exp_s else _next_friday(d)
                             # Apply fees to BTC leg only (avoid double charging)
-                            update_short_option_position(uid, sym, qty, btc_price, "Buy", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None, txg=txg)
-                            update_short_option_position(uid, sym, qty, new_prem, "Sell", d, opt_type, new_exp_dt, new_strike, fees=0.0, linked_asset_id_override=None, txg=txg)
+                            update_short_option_position(uid, sym, qty, btc_price, "Buy", d, opt_type, exp_dt, strike= linked_asset_id_override=None, txg=txg)
+                            update_short_option_position(uid, sym, qty, new_prem, "Sell", d, opt_type, new_exp_dt, new_strike=0.0, linked_asset_id_override=None, txg=txg)
                             ok += 1
                         elif action == "Expire":
                             if fees:
