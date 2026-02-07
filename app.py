@@ -1089,21 +1089,7 @@ def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, 
 # --------------------------------------------------------------------------------
 # 5. CORE LOGIC
 # --------------------------------------------------------------------------------
-from typing import Optional
-
-def update_asset_position(
-    user_id,
-    symbol,
-    quantity,
-    price,
-    action,
-    date_obj,
-    asset_type="STOCK",
-    expiration=None,
-    strike: float = 0.0,
-    fees: float = 0.0,
-    txg: Optional[str] = None,):
-
+def update_asset_position(user_id, symbol, quantity, price, action, date_obj, asset_type="STOCK", expiration=None, strike=None, fees=0.0, txg: str | None = None):
     if st.session_state.get("read_only"):
         st.error("Read-only access: you don't have permission to modify this account.")
         st.stop()
@@ -1153,7 +1139,7 @@ def update_asset_position(
         if expiration: data["expiration"] = str(expiration)
         supabase.table("assets").insert(data).execute()
 
-def update_short_option_position(user_id, symbol, quantity, price, action, date_obj, opt_type, expiration, strike=0.0, linked_asset_id_override=None, txg: str | None = None):
+def update_short_option_position(user_id, symbol, quantity, price, action, date_obj, opt_type, expiration, strike, fees=0.0, linked_asset_id_override=None, txg: str | None = None):
     if st.session_state.get("read_only"):
         st.error("Read-only access: you don't have permission to modify this account.")
         st.stop()
@@ -2084,283 +2070,167 @@ def dashboard_page(active_user):
     else:
         st.info("No Active Short Options.")
 # --- P/L by Ticker (USD) ---
-    pl_period_options = ["WTD", "MTD", "YTD", "52W", "Lifetime"]
-    pl_title_col, pl_filter_col = st.columns([4, 1])
-    with pl_title_col:
-        st.subheader("P/L by Ticker (USD)")
-    with pl_filter_col:
-        pl_period = st.selectbox(
-            "Period",
-            pl_period_options,
-            index=4,  # default Lifetime
-            key=f"pl_period_{uid}",
-            label_visibility="collapsed"
-        )
-
-    # Period start date (used ONLY to filter REALIZED P/L components)
-    _today = date.today()
-    pl_start_date = None
-    if pl_period == "WTD":
-        pl_start_date = _today - timedelta(days=_today.weekday())  # Monday
-    elif pl_period == "MTD":
-        pl_start_date = _today.replace(day=1)
-    elif pl_period == "YTD":
-        pl_start_date = _today.replace(month=1, day=1)
-    elif pl_period == "52W":
-        pl_start_date = _today - timedelta(days=364)
-
+    st.subheader("P/L by Ticker (USD)")
     try:
-        # --------------------------
-        # CURRENT UNREALIZED (Lifetime) – Stocks & LEAPs
-        # --------------------------
-        unreal_stock = {}
+        # Ensure holdings dataframes exist (fallback to assets if needed)
         try:
             _stocks_df = stocks_df
         except Exception:
             _stocks_df = pd.DataFrame()
+            if 'assets' in locals() and not assets.empty:
+                tmp_a = assets.copy()
+                if 'type_norm' not in tmp_a.columns:
+                    tmp_a['type_norm'] = tmp_a.get('type', 'STOCK').astype(str).str.upper().str.strip()
+                _stocks_df = tmp_a[tmp_a['type_norm'] == 'STOCK'].copy()
 
-        if _stocks_df is not None and not _stocks_df.empty:
-            tmp = _stocks_df.copy()
-            tmp["sym"] = tmp.get("symbol", tmp.get("ticker", "UNK")).astype(str).str.upper().str.strip()
-            tmp["qty"] = pd.to_numeric(tmp.get("quantity", 0), errors="coerce").fillna(0.0)
-            tmp["avg"] = pd.to_numeric(tmp.get("cost_basis", 0), errors="coerce").fillna(0.0)
-            tmp["px"]  = pd.to_numeric(tmp.get("current_price", 0), errors="coerce").fillna(0.0)
-            tmp["pl"] = (tmp["px"] - tmp["avg"]) * tmp["qty"]
-            unreal_stock = tmp.groupby("sym")["pl"].sum().to_dict()
-
-        unreal_leap = {}
         try:
             _leaps_df = leaps_df
         except Exception:
             _leaps_df = pd.DataFrame()
-
-        if _leaps_df is not None and not _leaps_df.empty:
-            tmp = _leaps_df.copy()
-            tmp["sym"] = tmp.get("symbol", tmp.get("ticker", "UNK")).astype(str).str.upper().str.strip()
-            tmp["qty"] = pd.to_numeric(tmp.get("quantity", 0), errors="coerce").fillna(0.0)
-            tmp["avg"] = pd.to_numeric(tmp.get("cost_basis", 0), errors="coerce").fillna(0.0)
-            tmp["px"]  = pd.to_numeric(tmp.get("current_price", tmp.get("last_price", 0)), errors="coerce").fillna(0.0)
-            # LEAP contract multiplier = 100
-            tmp["pl"] = (tmp["px"] - tmp["avg"]) * tmp["qty"] * 100.0
-            unreal_leap = tmp.groupby("sym")["pl"].sum().to_dict()
+            if 'assets' in locals() and not assets.empty:
+                tmp_a = assets.copy()
+                if 'type_norm' not in tmp_a.columns:
+                    tmp_a['type_norm'] = tmp_a.get('type', 'STOCK').astype(str).str.upper().str.strip()
+                _leaps_df = tmp_a[tmp_a['type_norm'] != 'STOCK'].copy()
 
         # --------------------------
-        # ITM $ by ticker (Short option liability) – CURRENT only
-        # Display as NEGATIVE (deduction)
+        # Unrealized P/L (open holdings)
+        # --------------------------
+        unreal_stock = {}
+        if _stocks_df is not None and not _stocks_df.empty:
+            tmp = _stocks_df.copy()
+            tmp['sym'] = tmp.get('symbol', tmp.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
+            tmp['qty'] = pd.to_numeric(tmp.get('quantity', 0), errors='coerce').fillna(0.0)
+            tmp['avg'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0.0)
+            tmp['px']  = pd.to_numeric(tmp.get('current_price', 0), errors='coerce').fillna(0.0)
+            tmp['pl'] = (tmp['px'] - tmp['avg']) * tmp['qty']
+            unreal_stock = tmp.groupby('sym')['pl'].sum().to_dict()
+
+        unreal_leap = {}
+        if _leaps_df is not None and not _leaps_df.empty:
+            tmp = _leaps_df.copy()
+            tmp['sym'] = tmp.get('symbol', tmp.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
+            tmp['qty'] = pd.to_numeric(tmp.get('quantity', 0), errors='coerce').fillna(0.0)
+            tmp['avg'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0.0)
+            tmp['px']  = pd.to_numeric(tmp.get('current_price', tmp.get('last_price', 0)), errors='coerce').fillna(0.0)
+            tmp['pl'] = (tmp['px'] - tmp['avg']) * tmp['qty'] * 100.0
+            unreal_leap = tmp.groupby('sym')['pl'].sum().to_dict()
+
+        # --------------------------
+        # ITM $ by ticker (short calls liability)
+        # Show as a NEGATIVE deduction in P/L
         # --------------------------
         itm_by_sym = {}
         try:
-            if "grouped_options" in locals() and grouped_options:
+            if 'grouped_options' in locals() and grouped_options:
                 for r in grouped_options.values():
-                    sym = str(r.get("symbol", "UNK")).upper().strip()
-                    itm_by_sym[sym] = itm_by_sym.get(sym, 0.0) + float(r.get("liability", 0.0) or 0.0)
+                    sym = str(r.get('symbol', 'UNK')).upper().strip()
+                    itm_by_sym[sym] = itm_by_sym.get(sym, 0.0) + float(r.get('liability', 0.0) or 0.0)
         except Exception:
             itm_by_sym = {}
 
         # --------------------------
-        # REALIZED P/L (filtered by period start)
-        # Stocks/LEAPs: running average cost (sequential)
-        # Shorts: OPTION_PREMIUM cashflows
+        # Realized P/L (from transactions)
+        # - Stocks and LEAP trades: reconstruct via running average cost
+        # - Shorts: net option premium cashflows (OPTION_PREMIUM)
         # --------------------------
         def _parse_trade_desc(desc: str):
-            """Parse trade descriptions into (Buy/Sell, qty, symbol, price).
-
-            Supports variants like:
-              - Buy 100 AAPL @ $100.00
-              - SELL 50 TSLA @ 210.15
-              - Buy 100 AAPL at 100
-              - Sell 10 MSFT price 402.12
-            """
             d = (desc or "").strip()
-
-            # Normalize spacing
-            dn = re.sub(r"\s+", " ", d).strip()
-
-            # Common patterns: action qty sym @|at|price $price
-            m = re.search(
-                r"^(Buy|Sell)\s+([0-9]*\.?[0-9]+)\s+([A-Za-z0-9\.\-]+)\b.*?(?:@|\bat\b|\bprice\b|\bpx\b)\s*\$?\s*([0-9,]*\.?[0-9]+)",
-                dn,
-                flags=re.IGNORECASE,
-            )
+            m = re.search(r'^(Buy|Sell)\s+([0-9]*\.?[0-9]+)\s+([A-Za-z0-9\.\-]+).*?@\s*\$?([0-9,]*\.?[0-9]+)', d)
             if not m:
                 return None
-
-            action = m.group(1).capitalize()
+            action = m.group(1)
             qty = float(m.group(2))
             sym = m.group(3).upper().strip()
-            price = float(m.group(4).replace(",", ""))
-
-            if qty <= 0 or price <= 0:
-                return None
+            price = float(m.group(4).replace(',', ''))
             return action, qty, sym, price
 
         tx_rows = []
         try:
-            qb = supabase.table("transactions").select(
-                "transaction_date,type,amount,description,related_symbol"
-            ).eq("user_id", uid)
+            qb = supabase.table("transactions").select("transaction_date,type,amount,description,related_symbol").eq("user_id", uid)
             tx_rows = _fetch_all(qb) or []
         except Exception:
             tx_rows = []
 
-        # Sort by date
         try:
-            tx_rows = sorted(tx_rows, key=lambda r: str(r.get("transaction_date") or ""))
+            tx_rows = sorted(tx_rows, key=lambda r: str(r.get('transaction_date') or ''))
         except Exception:
             pass
-
-        # Running state (lifetime)
-        stock_qty = {}
-        stock_cost = {}
-        leap_qty = {}
-        leap_cost = {}
 
         stock_real = {}
         leap_real = {}
         short_real = {}
-        interest_total = 0.0  # separate Interest line
+
+        stock_state = {}  # sym -> (qty, cost_total)
+        leap_state = {}   # sym -> (contracts, cost_total)
 
         for r in tx_rows:
-            # Parse date
-            try:
-                tdate = date.fromisoformat(str(r.get("transaction_date") or "")[:10])
-            except Exception:
-                tdate = None
+            ttype = str(r.get('type', '') or '').upper().strip()
+            sym = str(r.get('related_symbol', '') or '').upper().strip()
+            amt = float(clean_number(r.get('amount', 0) or 0))
+            desc = str(r.get('description', '') or '')
 
-            ttype = str(r.get("type", "") or "").upper().strip()
-            sym = str(r.get("related_symbol", "") or "").upper().strip()
-            amt = float(clean_number(r.get("amount", 0) or 0))
-            desc = str(r.get("description", "") or "")
-
-            def _infer_symbol_from_text(text: str) -> str:
-                # Attempt to find a ticker-like token in the description when related_symbol is missing
-                if not text:
-                    return ""
-                m = re.search(r"\b([A-Z]{1,6}(?:\.[A-Z]{1,3})?)\b", text.upper())
-                if not m:
-                    return ""
-                cand = m.group(1)
-                # Filter obvious non-tickers
-                if cand in {"BUY", "SELL", "CALL", "PUT", "OPTION", "PREMIUM", "FEE", "FEES", "INTEREST", "DIVIDEND"}:
-                    return ""
-                return cand
-
-            # --------------------------
-            # Cash-like transactions that may have missing symbols
-            # --------------------------
-
-            # Shorts: premium + fees cashflows (sells collected minus buys/fees paid)
-            if ttype in ("OPTION_PREMIUM", "OPTION_FEES"):
-                sym2 = sym or _infer_symbol_from_text(desc)
-                if not sym2:
-                    sym2 = "USD"
-                if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    short_real[sym2] = short_real.get(sym2, 0.0) + amt
-                continue
-
-            # Interest is shown on a separate line ("Interest") under Stock P/L.
-            if "INTEREST" in ttype:
-                adj_amt = amt
-                ttype_u = ttype.upper()
-                desc_u = desc.upper()
-                # treat paid/expense as negative
-                if ("PAID" in ttype_u) or ("EXPENSE" in ttype_u) or ("PAID" in desc_u) or ("EXPENSE" in desc_u):
-                    adj_amt = -abs(adj_amt)
-                else:
-                    # received/earned
-                    adj_amt = abs(adj_amt)
-                if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    interest_total += adj_amt
-                continue
-
-            # General fees (non-option fees) reduce P/L. Attribute to ticker if available, else USD.
-            if ttype in ("FEES", "FEE", "COMMISSION", "COMMISSIONS"):
-                sym2 = sym or "USD"
-                fee_amt = amt
-                # fees should reduce profit
-                if fee_amt > 0:
-                    fee_amt = -abs(fee_amt)
-                if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    stock_real[sym2] = stock_real.get(sym2, 0.0) + fee_amt
-                continue
-
-# Dividends must be tied to a ticker; otherwise ignore
-            if ttype == "DIVIDEND":
-                if sym:
-                    if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                        stock_real[sym] = stock_real.get(sym, 0.0) + amt
-                continue
-
-            # If still no symbol, we can't attribute trade rows safely
             if not sym or sym == "CASH":
-                # Try to infer from description for trade rows
-                sym = _infer_symbol_from_text(desc)
-            if not sym:
                 continue
 
-            parsed = _parse_trade_desc(desc)
-            if not parsed:
+            if ttype == "OPTION_PREMIUM":
+                short_real[sym] = short_real.get(sym, 0.0) + amt
                 continue
-            action, qty, psym, price = parsed
 
-            # Determine whether this is a LEAP leg
-            is_leap = ("LEAP" in ttype) or ("LEAP" in desc.upper())
+            if ttype == "TRADE_STOCK":
+                parsed = _parse_trade_desc(desc)
+                if not parsed:
+                    continue
+                action, qty, psym, price = parsed
+                if psym:
+                    sym = psym
 
-            # Estimate per-transaction fees from cash amount vs gross (when amount includes fees)
-            # This is critical so that the ticker table ties out to the portfolio P/L.
-            mult = 100.0 if is_leap else 1.0
-            gross = qty * price * mult
-            fee_est = 0.0
-            if action == "Buy":
-                # cash outflow is typically negative; total spent includes fees
-                total_spent = -amt if amt < 0 else gross
-                fee_est = max(0.0, total_spent - gross)
-            else:  # Sell
-                # cash inflow is typically positive; fee reduces cash received vs gross
-                cash_in = amt if amt > 0 else gross
-                fee_est = max(0.0, gross - cash_in)
-
-            if not is_leap:
-                q = float(stock_qty.get(psym, 0.0) or 0.0)
-                c = float(stock_cost.get(psym, 0.0) or 0.0)
-
+                gross = qty * price
                 if action == "Buy":
-                    stock_qty[psym] = q + qty
-                    stock_cost[psym] = c + (qty * price) + fee_est
-                else:  # Sell
-                    if q <= 0:
-                        continue
-                    avg = c / q if q != 0 else 0.0
-                    pl = (price - avg) * qty - fee_est
-                    # Only count realized P/L if within selected period
-                    if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                        stock_real[psym] = stock_real.get(psym, 0.0) + pl
-                    q_new = q - qty
-                    stock_qty[psym] = q_new
-                    stock_cost[psym] = avg * q_new
-            else:
-                q = float(leap_qty.get(psym, 0.0) or 0.0)
-                c = float(leap_cost.get(psym, 0.0) or 0.0)
-
-                if action == "Buy":
-                    leap_qty[psym] = q + qty
-                    leap_cost[psym] = c + (qty * price) + (fee_est / 100.0)
+                    total_paid = -amt
+                    fees = max(0.0, total_paid - gross)
+                    st_qty, st_cost = stock_state.get(sym, (0.0, 0.0))
+                    stock_state[sym] = (st_qty + qty, st_cost + gross + fees)
                 else:
-                    if q <= 0:
+                    proceeds = amt
+                    st_qty, st_cost = stock_state.get(sym, (0.0, 0.0))
+                    if st_qty <= 0:
                         continue
-                    avg = c / q if q != 0 else 0.0
-                    pl = (price - avg) * qty * 100.0 - fee_est
-                    if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                        leap_real[psym] = leap_real.get(psym, 0.0) + pl
-                    q_new = q - qty
-                    leap_qty[psym] = q_new
-                    leap_cost[psym] = avg * q_new
-# Remove near-zero noise
-        stock_real = {k:v for k,v in stock_real.items() if abs(v) >= 0.005}
-        leap_real  = {k:v for k,v in leap_real.items() if abs(v) >= 0.005}
-        short_real = {k:v for k,v in short_real.items() if abs(v) >= 0.005}
+                    sell_qty = min(qty, st_qty)
+                    avg_cost = (st_cost / st_qty) if st_qty else 0.0
+                    cost_sold = avg_cost * sell_qty
+                    pnl = proceeds - cost_sold
+                    stock_real[sym] = stock_real.get(sym, 0.0) + pnl
+                    stock_state[sym] = (st_qty - sell_qty, st_cost - cost_sold)
+                continue
 
-        # Only show tickers that have activity/holdings relevant to this view
+            if ttype.startswith("TRADE_LEAP"):
+                parsed = _parse_trade_desc(desc)
+                if not parsed:
+                    continue
+                action, qty, psym, price = parsed
+                if psym:
+                    sym = psym
+
+                gross = qty * price * 100.0
+                if action == "Buy":
+                    total_paid = -amt
+                    fees = max(0.0, total_paid - gross)
+                    l_qty, l_cost = leap_state.get(sym, (0.0, 0.0))
+                    leap_state[sym] = (l_qty + qty, l_cost + gross + fees)
+                else:
+                    proceeds = amt
+                    l_qty, l_cost = leap_state.get(sym, (0.0, 0.0))
+                    if l_qty <= 0:
+                        continue
+                    sell_qty = min(qty, l_qty)
+                    avg_cost = (l_cost / l_qty) if l_qty else 0.0
+                    cost_sold = avg_cost * sell_qty
+                    pnl = proceeds - cost_sold
+                    leap_real[sym] = leap_real.get(sym, 0.0) + pnl
+                    leap_state[sym] = (l_qty - sell_qty, l_cost - cost_sold)
+                continue
+
         tickers = sorted(set(
             list(unreal_stock.keys()) + list(unreal_leap.keys()) + list(itm_by_sym.keys()) +
             list(stock_real.keys()) + list(leap_real.keys()) + list(short_real.keys())
@@ -2369,93 +2239,49 @@ def dashboard_page(active_user):
         if not tickers:
             st.info("No P/L data available yet.")
         else:
-            # Build table rows
-            rows = []
+            pl_html = (
+                "<table class='finance-table'><thead><tr>"
+                "<th>Ticker</th><th>Stock P/L</th><th>LEAP P/L</th><th>Short P/L</th>"
+                "<th>Unrealized P/L</th><th>ITM $</th><th>Total P/L</th>"
+                "</tr></thead><tbody>"
+            )
+
+            tot_stock = tot_leap = tot_short = tot_unreal = tot_itm = tot_total = 0.0
+
+            def _pl_td(v: float) -> str:
+                cls = "pl-pos" if v >= 0 else "pl-neg"
+                return f"<td class='{cls}'>${v:,.2f}</td>"
+
             for sym in tickers:
-                v_stock = float(stock_real.get(sym, 0.0) or 0.0)
-                v_leap  = float(leap_real.get(sym, 0.0) or 0.0)
-                v_short = float(short_real.get(sym, 0.0) or 0.0)
-                v_unrl  = float(unreal_stock.get(sym, 0.0) or 0.0) + float(unreal_leap.get(sym, 0.0) or 0.0)
-                v_itm   = -float(itm_by_sym.get(sym, 0.0) or 0.0)  # negative
+                v_stock = float(stock_real.get(sym, 0.0))
+                v_leap = float(leap_real.get(sym, 0.0))
+                v_short = float(short_real.get(sym, 0.0))
+                v_unreal = float(unreal_stock.get(sym, 0.0)) + float(unreal_leap.get(sym, 0.0))
+                liab = float(itm_by_sym.get(sym, 0.0))
+                v_itm = -liab
+                v_total = v_stock + v_leap + v_short + v_unreal + v_itm
 
-                total = v_stock + v_leap + v_short + v_unrl + v_itm
+                pl_html += f"<tr><td>{sym}</td>{_pl_td(v_stock)}{_pl_td(v_leap)}{_pl_td(v_short)}{_pl_td(v_unreal)}{_pl_td(v_itm)}{_pl_td(v_total)}</tr>"
 
-                # Hide pure-zero rows
-                if abs(total) < 0.005:
-                    continue
+                tot_stock += v_stock
+                tot_leap += v_leap
+                tot_short += v_short
+                tot_unreal += v_unreal
+                tot_itm += v_itm
+                tot_total += v_total
 
-                rows.append({
-                    "Ticker": sym,
-                    "Stock P/L": v_stock,
-                    "LEAP P/L": v_leap,
-                    "Short P/L": v_short,
-                    "Unrealized P/L": v_unrl,
-                    "ITM $": v_itm,
-                    "Total": total
-                })
+            pl_html += (
+                f"<tr class='total-row'><td>Total</td>"
+                f"<td class='{'pl-pos' if tot_stock >= 0 else 'pl-neg'}'>${tot_stock:,.2f}</td>"
+                f"<td class='{'pl-pos' if tot_leap >= 0 else 'pl-neg'}'>${tot_leap:,.2f}</td>"
+                f"<td class='{'pl-pos' if tot_short >= 0 else 'pl-neg'}'>${tot_short:,.2f}</td>"
+                f"<td class='{'pl-pos' if tot_unreal >= 0 else 'pl-neg'}'>${tot_unreal:,.2f}</td>"
+                f"<td class='{'pl-pos' if tot_itm >= 0 else 'pl-neg'}'>${tot_itm:,.2f}</td>"
+                f"<td class='{'pl-pos' if tot_total >= 0 else 'pl-neg'}'>${tot_total:,.2f}</td></tr>"
+            )
 
-
-            # Add Interest line (separate, not tied to tickers)
-            if abs(interest_total) >= 0.005:
-                rows.append({
-                    "Ticker": "Interest",
-                    "Stock P/L": interest_total,
-                    "LEAP P/L": 0.0,
-                    "Short P/L": 0.0,
-                    "Unrealized P/L": 0.0,
-                    "ITM $": 0.0,
-                    "Total": interest_total
-                })
-
-            if not rows:
-                st.info("No P/L data available yet.")
-            else:
-                df_pl = pd.DataFrame(rows)
-                df_pl = df_pl.sort_values(by="Ticker", ascending=True).reset_index(drop=True)
-
-                # Totals row
-                tot_stock = float(df_pl["Stock P/L"].sum())
-                tot_leap  = float(df_pl["LEAP P/L"].sum())
-                tot_short = float(df_pl["Short P/L"].sum())
-                tot_unrl  = float(df_pl["Unrealized P/L"].sum())
-                tot_itm   = float(df_pl["ITM $"].sum())
-                tot_total = float(df_pl["Total"].sum())
-
-                def _fmt_money(v: float) -> str:
-                    return f"${v:,.2f}"
-
-                # Render in the same HTML table style used elsewhere
-                pl_html = (
-                    "<table class='finance-table'><thead><tr>"
-                    "<th>Ticker</th><th>Stock P/L</th><th>LEAP P/L</th><th>Short P/L</th>"
-                    "<th>Unrealized P/L</th><th>ITM $</th><th>Total</th>"
-                    "</tr></thead><tbody>"
-                )
-
-                for _, rr in df_pl.iterrows():
-                    pl_html += (
-                        f"<tr><td>{rr['Ticker']}</td>"
-                        f"<td>{_fmt_money(rr['Stock P/L'])}</td>"
-                        f"<td>{_fmt_money(rr['LEAP P/L'])}</td>"
-                        f"<td>{_fmt_money(rr['Short P/L'])}</td>"
-                        f"<td>{_fmt_money(rr['Unrealized P/L'])}</td>"
-                        f"<td>{_fmt_money(rr['ITM $'])}</td>"
-                        f"<td>{_fmt_money(rr['Total'])}</td></tr>"
-                    )
-
-                pl_html += (
-                    "<tr class='total-row'>"
-                    "<td>Total</td>"
-                    f"<td>{_fmt_money(tot_stock)}</td>"
-                    f"<td>{_fmt_money(tot_leap)}</td>"
-                    f"<td>{_fmt_money(tot_short)}</td>"
-                    f"<td>{_fmt_money(tot_unrl)}</td>"
-                    f"<td>{_fmt_money(tot_itm)}</td>"
-                    f"<td>{_fmt_money(tot_total)}</td>"
-                    "</tr></tbody></table>"
-                )
-
-                st.markdown(pl_html, unsafe_allow_html=True)
+            pl_html += "</tbody></table>"
+            st.markdown(pl_html, unsafe_allow_html=True)
 
     except Exception as e:
         st.warning(f"P/L by Ticker unavailable: {e}")
@@ -2974,6 +2800,7 @@ def option_details_page(active_user):
                                 btc_close_date,
                                 sel_row['type'],
                                 sel_row['expiration'],
+                                float(sel_row['strike']),
                                 fees=float(btc_close_fees),
                                 txg=txg
                             )
@@ -3008,7 +2835,8 @@ def option_details_page(active_user):
                                 roll_date,
                                 sel_row['type'],
                                 sel_row['expiration'],
-                                fees=float(btc_close_fees),
+                                float(sel_row['strike']),
+                                fees=float(roll_btc_fees),
                                 txg=txg
                             )
 
@@ -3022,6 +2850,7 @@ def option_details_page(active_user):
                                 roll_date,
                                 sel_row['type'],
                                 new_exp,
+                                float(new_strike),
                                 fees=float(new_fees),
                                 linked_asset_id_override=inherited_link_id,
                                 txg=txg
@@ -3328,7 +3157,7 @@ def import_page(user):
                     fees = get_fees(row)
                     final_action = clean_action_input(row.get('action', 'Buy'))
                     
-                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), asset_type="STOCK", fees=fees)
+                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), "STOCK", fees=fees)
                     count += 1
                 st.success(f"Processed {count} stock transactions.")
             except Exception as e: st.error(f"Error: {e}")
@@ -3355,7 +3184,7 @@ def import_page(user):
                     final_action = clean_action_input(row.get('action', 'Buy'))
                     l_type = str(row.get('type', 'CALL')).strip().upper()
                     
-                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), f"LEAP_{l_type}", row.get('expiration'), strike=fees)
+                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), f"LEAP_{l_type}", row.get('expiration'), strike, fees=fees)
                     count += 1
                 st.success(f"Processed {count} LEAP transactions.")
             except Exception as e: st.error(f"Error: {e}")
@@ -3381,7 +3210,7 @@ def import_page(user):
                     fees = get_fees(row)
                     final_action = clean_action_input(row.get('action', 'Sell'))
                     
-                    update_short_option_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), str(row.get('type', 'PUT')).strip().upper(), row.get('expiration'), strike=fees)
+                    update_short_option_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), str(row.get('type', 'PUT')).strip().upper(), row.get('expiration'), strike, fees=fees)
                     count += 1
                 st.success(f"Processed {count} short option transactions.")
             except Exception as e: st.error(f"Error: {e}")
@@ -3529,18 +3358,18 @@ def import_page(user):
                         
                         # --- ROUTING LOGIC ---
                         if cat_mode == 'STOCK':
-                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), asset_type="STOCK", fees=fees)
+                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), "STOCK", fees=fees)
                             
                         elif cat_mode == 'LEAP':
                             # Asset Logic
                             a_type = f"LEAP_{opt_type}" # LEAP_CALL or LEAP_PUT
-                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), a_type, exp, strike=fees)
+                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), a_type, exp, strike, fees=fees)
                             
                         elif cat_mode == 'SHORT':
                             # Liability Logic
                             # Default short options to PUT if undefined, but user should specify
                             if opt_type not in ['CALL', 'PUT']: opt_type = 'PUT'
-                            update_short_option_position(user.id, sym, qty, price, act, r['date_parsed'].date(), opt_type, exp, strike=fees)
+                            update_short_option_position(user.id, sym, qty, price, act, r['date_parsed'].date(), opt_type, exp, strike, fees=fees)
                             
                         elif cat_mode == 'CASH':
                             # Direct Transaction Insert
@@ -4091,290 +3920,6 @@ def ledger_page(active_user):
                 })
             st.dataframe(pd.DataFrame(sub), use_container_width=True)
 
-
-# --------------------------------------------------------------------------------
-# 7. REGISTER (Transaction-by-transaction position & avg cost by ticker)
-# --------------------------------------------------------------------------------
-
-def register_page(active_user):
-    uid = _active_user_id(active_user)
-    st.header("🧾 Register")
-
-    st.caption("Transaction-by-transaction register by ticker with running units and average price. "
-               "Use this to reconcile the P/L by Ticker view.")
-
-    # --- Load all USD transactions for the active account ---
-    cols = "id, created_at, transaction_date, type, amount, currency, description, related_symbol, option_id"
-    try:
-        qb = supabase.table("transactions").select(cols).eq("user_id", uid).eq("currency", "USD").order("transaction_date", desc=False)
-        rows = _fetch_all(qb)
-    except Exception as e:
-        st.error(f"Failed to load transactions: {e}")
-        return
-
-    if not rows:
-        st.info("No transactions found.")
-        return
-
-    df = pd.DataFrame(rows)
-    # Normalize fields
-    for c in ["description", "type", "related_symbol", "currency"]:
-        if c in df.columns:
-            df[c] = df[c].fillna("").astype(str)
-    if "transaction_date" in df.columns:
-        df["transaction_date"] = pd.to_datetime(df["transaction_date"], errors="coerce").dt.date
-    if "amount" in df.columns:
-        df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
-
-    if "fees" in df.columns:
-        df["fees"] = pd.to_numeric(df["fees"], errors="coerce").fillna(0.0)
-    else:
-        df["fees"] = 0.0
-
-    # --- Parse trade descriptions for stocks / leaps if needed ---
-    trade_re = re.compile(
-        r"^\s*(BUY|SELL)\s+(\d+(?:\.\d+)?)\s+([A-Z\.\-]+)\s*(?:@|AT|PRICE|PX)?\s*\$?\s*(\d+(?:\.\d+)?)\s*$",
-        re.IGNORECASE
-    )
-
-    def parse_trade(desc: str):
-        """Return (side, qty, symbol, price) if parseable, else None."""
-        if not desc:
-            return None
-        m = trade_re.match(desc.strip())
-        if not m:
-            return None
-        side = m.group(1).upper()
-        qty = float(m.group(2))
-        sym = m.group(3).upper()
-        px = float(m.group(4))
-        return side, qty, sym, px
-
-    # Infer symbol for rows where related_symbol is empty but description contains one
-    parsed = df["description"].apply(parse_trade)
-    df["parsed_side"] = parsed.apply(lambda x: x[0] if x else "")
-    df["parsed_qty"] = parsed.apply(lambda x: x[1] if x else 0.0)
-    df["parsed_symbol"] = parsed.apply(lambda x: x[2] if x else "")
-    df["parsed_price"] = parsed.apply(lambda x: x[3] if x else 0.0)
-
-    df["symbol"] = df["related_symbol"].str.upper()
-    df.loc[df["symbol"].eq("") & df["parsed_symbol"].ne(""), "symbol"] = df["parsed_symbol"]
-
-    # --- UI controls ---
-    all_syms = sorted([s for s in df["symbol"].unique().tolist() if s])
-    if not all_syms:
-        st.info("No tickers found in transactions.")
-        return
-
-    c1, c2, c3 = st.columns([2, 2, 2])
-    with c1:
-        ticker = st.selectbox("Ticker", all_syms, index=0)
-    with c2:
-        asset_type = st.selectbox("Asset Type", ["Stocks", "LEAPs", "Shorts"], index=0)
-    with c3:
-        show_all = st.checkbox("Show all transaction types for ticker", value=False)
-
-    tdf = df[df["symbol"] == ticker].copy()
-    tdf = tdf.sort_values(["date", "created_at"], ascending=[True, True], na_position="last")
-
-    if tdf.empty:
-        st.info("No transactions for selected ticker.")
-        return
-
-    # Filter by asset type unless show_all
-    if not show_all:
-        if asset_type == "Shorts":
-            tdf = tdf[tdf["type"].isin(["OPTION_PREMIUM", "OPTION_FEES"])].copy()
-        elif asset_type == "LEAPs":
-            # LEAP trades are stored as stock-style BUY/SELL in your ledger (trade entry),
-            # but we distinguish later by multiplier (100) and/or keywords.
-            # Heuristic: treat rows that have 'LEAP' in type/description or option_id populated as LEAP-related.
-            tdf = tdf[(tdf["type"].isin(["TRADE", "TRADE_STOCK", "STOCK_TRADE", "BUY", "SELL", "DIVIDEND", "FEE", "FEES"]) ) |
-                      (tdf["description"].str.contains("LEAP", case=False, na=False)) |
-                      (tdf["option_id"].notna())].copy()
-        else:  # Stocks
-            tdf = tdf[(tdf["type"].isin(["TRADE", "TRADE_STOCK", "STOCK_TRADE", "BUY", "SELL", "DIVIDEND", "FEE", "FEES"])) &
-                      (~tdf["description"].str.contains("LEAP", case=False, na=False))].copy()
-
-    # Running position / avg cost
-    units = 0.0
-    avg_cost = 0.0  # per share/contract (for LEAPs, per contract price, not *100)
-    realized_pl = 0.0
-
-    rows_out = []
-    multiplier = 100.0 if asset_type == "LEAPs" else 1.0
-
-    for _, r in tdf.iterrows():
-        dt_ = r.get("transaction_date")
-        ttype = (r.get("type") or "").upper()
-        desc = r.get("description") or ""
-        amt = float(r.get("amount") or 0.0)
-        fee = float(r.get("fees") or 0.0)
-
-        side = r.get("parsed_side") or ""
-        qty = float(r.get("parsed_qty") or 0.0)
-        px = float(r.get("parsed_price") or 0.0)
-
-        action = ""
-        trade_fee = 0.0
-
-        if asset_type in ("Stocks", "LEAPs"):
-            # Prefer parsed trade rows for BUY/SELL
-            if side in ("BUY", "SELL") and qty > 0 and px > 0:
-                action = side
-                gross = qty * px * multiplier
-                # Derive embedded fee if "fees" column is empty but amount includes it
-                # Buy: amt typically negative; Sell: amt typically positive
-                if fee == 0.0:
-                    if side == "BUY":
-                        trade_fee = max(0.0, (-amt) - gross)
-                    else:
-                        trade_fee = max(0.0, gross - amt)
-                else:
-                    trade_fee = fee
-
-                if side == "BUY":
-                    new_units = units + qty
-                    # total cost basis in $ (including fees)
-                    total_cost = (units * avg_cost * multiplier) + gross + trade_fee
-                    units = new_units
-                    avg_cost = (total_cost / (units * multiplier)) if units > 0 else 0.0
-                    pl = 0.0
-                else:  # SELL
-                    # realized PL uses current avg cost
-                    cost = qty * avg_cost * multiplier
-                    proceeds = gross - trade_fee
-                    pl = proceeds - cost
-                    realized_pl += pl
-                    units = units - qty
-                    if units <= 1e-9:
-                        units = 0.0
-                        avg_cost = 0.0
-
-                rows_out.append({
-                    "Date": dt_,
-                    "Txn Type": ttype,
-                    "Action": action,
-                    "Qty": qty,
-                    "Price": px,
-                    "Fees": trade_fee,
-                    "Amount": amt,
-                    "Cumulative Units": units,
-                    "Avg Price (Remaining)": avg_cost,
-                    "Realized P/L (Cum)": realized_pl,
-                    "Description": desc
-                })
-                continue
-
-            # Dividends / fees tied to ticker show as realized cash impact
-            if "DIVIDEND" in ttype:
-                realized_pl += amt
-                rows_out.append({
-                    "Date": dt_,
-                    "Txn Type": ttype,
-                    "Action": "DIVIDEND",
-                    "Qty": 0.0,
-                    "Price": 0.0,
-                    "Fees": 0.0,
-                    "Amount": amt,
-                    "Cumulative Units": units,
-                    "Avg Price (Remaining)": avg_cost,
-                    "Realized P/L (Cum)": realized_pl,
-                    "Description": desc
-                })
-                continue
-
-            if ttype in ("FEE", "FEES"):
-                realized_pl -= abs(amt) if amt > 0 else -amt  # ensure fee reduces P/L
-                rows_out.append({
-                    "Date": dt_,
-                    "Txn Type": ttype,
-                    "Action": "FEE",
-                    "Qty": 0.0,
-                    "Price": 0.0,
-                    "Fees": 0.0,
-                    "Amount": amt,
-                    "Cumulative Units": units,
-                    "Avg Price (Remaining)": avg_cost,
-                    "Realized P/L (Cum)": realized_pl,
-                    "Description": desc
-                })
-                continue
-
-            # Other transaction types for this ticker
-            rows_out.append({
-                "Date": dt_,
-                "Txn Type": ttype,
-                "Action": "",
-                "Qty": qty,
-                "Price": px,
-                "Fees": fee,
-                "Amount": amt,
-                "Cumulative Units": units,
-                "Avg Price (Remaining)": avg_cost,
-                "Realized P/L (Cum)": realized_pl,
-                "Description": desc
-            })
-        else:
-            # Shorts: treat OPTION_PREMIUM as cashflow, OPTION_FEES as fee outflow.
-            if ttype == "OPTION_PREMIUM":
-                # Positive = collected (STO), Negative = paid (BTC)
-                realized_pl += amt
-                action = "STO" if amt > 0 else "BTC"
-                # Can't reliably derive contract qty without option table, so we keep units as running contract count if parsed from description.
-                rows_out.append({
-                    "Date": dt_,
-                    "Txn Type": ttype,
-                    "Action": action,
-                    "Qty": 0.0,
-                    "Price": 0.0,
-                    "Fees": 0.0,
-                    "Amount": amt,
-                    "Cumulative Units": "",
-                    "Avg Price (Remaining)": "",
-                    "Realized P/L (Cum)": realized_pl,
-                    "Description": desc
-                })
-            elif ttype == "OPTION_FEES":
-                realized_pl -= abs(amt) if amt > 0 else -amt
-                rows_out.append({
-                    "Date": dt_,
-                    "Txn Type": ttype,
-                    "Action": "FEE",
-                    "Qty": 0.0,
-                    "Price": 0.0,
-                    "Fees": 0.0,
-                    "Amount": amt,
-                    "Cumulative Units": "",
-                    "Avg Price (Remaining)": "",
-                    "Realized P/L (Cum)": realized_pl,
-                    "Description": desc
-                })
-            else:
-                rows_out.append({
-                    "Date": dt_,
-                    "Txn Type": ttype,
-                    "Action": "",
-                    "Qty": 0.0,
-                    "Price": 0.0,
-                    "Fees": fee,
-                    "Amount": amt,
-                    "Cumulative Units": "",
-                    "Avg Price (Remaining)": "",
-                    "Realized P/L (Cum)": realized_pl,
-                    "Description": desc
-                })
-
-    out = pd.DataFrame(rows_out)
-    st.dataframe(out, use_container_width=True, hide_index=True)
-
-    # Helpful reconciliation footer
-    if asset_type in ("Stocks", "LEAPs"):
-        st.caption(f"Current units: {units:.4g} | Avg price remaining: {avg_cost:.4f} | "
-                   f"Cumulative realized P/L (incl dividends/fees in register): {realized_pl:.2f}")
-    else:
-        st.caption(f"Cumulative premium P/L (incl option fees in register): {realized_pl:.2f}")
-
 def trade_entry_page(active_user):
     uid = _active_user_id(active_user)
     st.header("⚡ Smart Trade Entry")
@@ -4424,7 +3969,7 @@ def trade_entry_page(active_user):
             fees = c3.number_input("Total Fees", min_value=0.0, step=0.01, value=0.0)
             
             if st.button("Submit Stock Trade", type="primary"):
-                update_asset_position(uid, symbol, qty, price, action, trade_date, asset_type="STOCK", fees=fees)
+                update_asset_position(uid, symbol, qty, price, action, trade_date, "STOCK", fees=fees)
                 st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} (Fees: ${fees})."; st.session_state['te_reset_pending'] = True; st.session_state['te_reset_pending'] = True; st.rerun()
         else:
             c1, c2, c3 = st.columns(3)
@@ -4664,20 +4209,21 @@ def trade_entry_page(active_user):
                 if pos_mode.startswith("Long"):
                     # Long option (LEAP) is an ASSET position tracked in the assets table
                     asset_t = (str(selected_long.get("type")) if (action=="Sell" and sell_mode=="Sell Long (Close)" and selected_long) else f"LEAP_{opt_type}")
-                    update_asset_position(uid, symbol, qty, prem, action, trade_date, asset_t, exp_date, strike=fees)
+                    update_asset_position(uid, symbol, qty, prem, action, trade_date, asset_t, exp_date, strike, fees=fees)
                     # If this long option was being used as collateral for open shorts, detach links (shorts become uncovered)
                     if action == "Sell" and globals().get("sell_mode", None) == "Sell Long (Close)" and selected_long and selected_long.get("id"):
                         detach_collateral_links_for_asset(uid, selected_long.get("id"))
                 else:
                     # Short option liability tracked in options table (buy = close / sell = open)
                     update_short_option_position(
-                        uid, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike=strike, linked_asset_id_override=linked_id
+                        uid, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike,
+                        fees=fees, linked_asset_id_override=linked_id
                     )
                 mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
                 st.session_state["txn_success_msg"] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."
                 st.rerun()
 
-def _bulk_net_cash_change(asset_kind: str, action: str, qty: float, price: float) -> float:
+def _bulk_net_cash_change(asset_kind: str, action: str, qty: float, price: float, fees: float) -> float:
     """
     Net cash impact (positive increases cash, negative decreases cash).
     Stocks: qty * price
@@ -5071,7 +4617,8 @@ def bulk_entries_page(active_user):
                     "Stock" if asset == "Stock" else asset,
                     ("Sell" if ("Sell" in action) else "Buy"),
                     qty,
-                    price
+                    price,
+                    fees
                 )
             st.write(f"**Net Cash Change:** {'+' if net>=0 else ''}${net:,.2f}")
 
@@ -5082,7 +4629,7 @@ def bulk_entries_page(active_user):
                 "Ticker": ticker,
                 "Qty": qty,
                 "Price/Premium": price,
-                "Fees": 
+                "Fees": fees,
                 "Type": opt_type,
                 "Exp": exp_dt.isoformat() if exp_dt else "",
                 "Strike": strike if exp_dt else "",
@@ -5123,16 +4670,16 @@ def bulk_entries_page(active_user):
                     exp_dt = date.fromisoformat(exp[:10]) if exp else (_third_friday_next_december(d) if asset == "LEAP" else _next_friday(d))
 
                     if asset == "Stock":
-                        update_asset_position(uid, sym, float(qty), price, "Sell" if action == "Sell" else "Buy", d, asset_type="STOCK", fees=fees)
+                        update_asset_position(uid, sym, float(qty), price, "Sell" if action == "Sell" else "Buy", d, "STOCK", fees=fees)
                         ok += 1
                         continue
 
                     if asset in ["LEAP", "Shorts"]:
                         if action == "Sell to Open":
-                            update_short_option_position(uid, sym, qty, price, "Sell", d, opt_type, exp_dt, strike= linked_asset_id_override=None)
+                            update_short_option_position(uid, sym, qty, price, "Sell", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None)
                             ok += 1
                         elif action == "Buy to Close":
-                            update_short_option_position(uid, sym, qty, price, "Buy", d, opt_type, exp_dt, strike= linked_asset_id_override=None)
+                            update_short_option_position(uid, sym, qty, price, "Buy", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None)
                             ok += 1
                         elif action == "Roll":
                             txg = str(uuid.uuid4())
@@ -5142,8 +4689,8 @@ def bulk_entries_page(active_user):
                             new_exp_s = str(r.get("New Exp") or "")
                             new_exp_dt = date.fromisoformat(new_exp_s[:10]) if new_exp_s else _next_friday(d)
                             # Apply fees to BTC leg only (avoid double charging)
-                            update_short_option_position(uid, sym, qty, btc_price, "Buy", d, opt_type, exp_dt, strike= linked_asset_id_override=None, txg=txg)
-                            update_short_option_position(uid, sym, qty, new_prem, "Sell", d, opt_type, new_exp_dt, new_strike=0.0, linked_asset_id_override=None, txg=txg)
+                            update_short_option_position(uid, sym, qty, btc_price, "Buy", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None, txg=txg)
+                            update_short_option_position(uid, sym, qty, new_prem, "Sell", d, opt_type, new_exp_dt, new_strike, fees=0.0, linked_asset_id_override=None, txg=txg)
                             ok += 1
                         elif action == "Expire":
                             if fees:
@@ -5229,6 +4776,227 @@ def main():
     
     force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
     
+
+def register_page(user):
+    """Transaction-by-transaction register to reconcile P/L by ticker.
+
+    Shows cumulative units (shares/contracts) and average cost/credit after each transaction.
+    """
+    uid = _active_user_id(user)
+    _price_refresh_controls(user, "Register", force_leap_mid=False)
+
+    st.header("📒 Register")
+    st.caption("Filter by ticker to review transactions sequentially with running units and average cost/credit.")
+
+    asset_kind = st.radio("Asset Type", ["Stocks", "LEAPs", "Shorts"], horizontal=True)
+
+    # Load transactions (no 'date' or 'fees' column in your schema)
+    try:
+        rows = (
+            supabase.table("transactions")
+            .select("transaction_date,type,amount,description,related_symbol")
+            .eq("user_id", uid)
+            .order("transaction_date")
+            .execute()
+            .data
+            or []
+        )
+    except Exception as e:
+        st.error(f"Failed to load transactions: {e}")
+        return
+
+    if not rows:
+        st.info("No transactions found.")
+        return
+
+    df = pd.DataFrame(rows)
+    # Normalize date
+    df["transaction_date"] = pd.to_datetime(df["transaction_date"], errors="coerce")
+    df = df.dropna(subset=["transaction_date"]).sort_values("transaction_date")
+
+    # Normalize symbol
+    df["symbol"] = df["related_symbol"].fillna("").astype(str).str.upper().str.strip()
+    # Fallback: attempt to infer symbol from description if related_symbol blank
+    def _infer_symbol(desc: str) -> str:
+        try:
+            s = (desc or "").upper()
+        except Exception:
+            return ""
+        m = re.search(r"\b([A-Z]{1,6})\b", s)
+        return m.group(1) if m else ""
+    df.loc[df["symbol"] == "", "symbol"] = df.loc[df["symbol"] == "", "description"].apply(_infer_symbol)
+
+    # Ticker filter
+    tickers = sorted([t for t in df["symbol"].unique().tolist() if t])
+    if not tickers:
+        st.info("No tickers found in transactions (missing related_symbol and no parseable symbol in description).")
+        return
+
+    sel = st.selectbox("Ticker", tickers, index=0)
+
+    tdf = df[df["symbol"] == sel].copy()
+    if tdf.empty:
+        st.info("No transactions for selected ticker.")
+        return
+
+    # Helpers to parse trade lines
+    # Supports patterns like:
+    # BUY 100 AAPL @ 100.00
+    # Sell 10 MSFT at 402.12
+    trade_pat = re.compile(
+        r"\b(?P<side>BUY|SELL)\b\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<sym>[A-Z]{1,6})\b.*?(?:@|AT|PRICE|PX)\s*\$?(?P<price>\d+(?:\.\d+)?)",
+        re.IGNORECASE,
+    )
+
+    # Shorts: detect STO/BTC from description keywords
+    short_side_pat = re.compile(r"\b(SELL\s*TO\s*OPEN|STO|SELL)\b|\b(BUY\s*TO\s*CLOSE|BTC|BUY)\b", re.IGNORECASE)
+
+    # Running state
+    units = 0.0
+    avg_cost = 0.0  # stocks/leaps avg cost per share/contract
+    avg_credit = 0.0  # shorts avg credit per contract
+    realized = 0.0
+
+    out_rows = []
+    multiplier = 1.0
+    if asset_kind in ("LEAPs", "Shorts"):
+        multiplier = 100.0
+
+    for _, r in tdf.iterrows():
+        tdate = r["transaction_date"].date()
+        ttype = str(r.get("type") or "").upper()
+        desc = str(r.get("description") or "")
+        amt = float(r.get("amount") or 0.0)
+
+        action = ""
+        qty = 0.0
+        px = 0.0
+        fee_est = 0.0
+        realized_delta = 0.0
+
+        if asset_kind in ("Stocks", "LEAPs"):
+            m = trade_pat.search(desc.upper())
+            if m:
+                side = m.group("side").upper()
+                qty = float(m.group("qty"))
+                px = float(m.group("price"))
+                gross = qty * px * multiplier
+
+                if side == "BUY":
+                    action = "BUY"
+                    # fee estimate if amount includes fees (amount negative)
+                    # amount is cash change; buys are negative. Fee = (-amt) - gross
+                    fee_est = max(0.0, (-amt) - gross)
+                    total_cost = gross + fee_est
+                    new_units = units + qty
+                    if new_units > 0:
+                        avg_cost = ((units * avg_cost) + total_cost / multiplier) / new_units
+                    units = new_units
+
+                elif side == "SELL":
+                    action = "SELL"
+                    # sells are positive; fee = gross - amt
+                    fee_est = max(0.0, gross - amt)
+                    proceeds = gross - fee_est
+                    cost = qty * avg_cost * multiplier
+                    realized_delta = proceeds - cost
+                    realized += realized_delta
+                    units = units - qty
+                    # avg_cost unchanged for remaining units
+
+            else:
+                # Non-trade items that still affect ticker P/L
+                if "DIVIDEND" in ttype:
+                    action = "DIVIDEND"
+                    realized_delta = amt
+                    realized += realized_delta
+                elif "FEE" in ttype:
+                    action = "FEE"
+                    realized_delta = -abs(amt) if amt > 0 else amt
+                    realized += realized_delta
+                else:
+                    action = ttype or "OTHER"
+
+        else:
+            # Shorts: treat amount as signed premium cashflow per your rules
+            # Identify buy vs sell from description
+            s = desc.upper()
+            side = None
+            if "BUY TO CLOSE" in s or "\nBTC" in s or " BTC" in s:
+                side = "BTC"
+            elif "SELL TO OPEN" in s or " STO" in s or s.strip().startswith("SELL"):
+                side = "STO"
+
+            # Try extract contracts + premium from description like: "Contracts: 2" or "x2"
+            m_qty = re.search(r"\bCONTRACTS?\s*[:=]\s*(\d+(?:\.\d+)?)\b", s)
+            if not m_qty:
+                m_qty = re.search(r"\bX\s*(\d+(?:\.\d+)?)\b", s)
+            if m_qty:
+                qty = float(m_qty.group(1))
+            else:
+                # fallback: infer from cashflow if possible; if not, leave 0
+                qty = 0.0
+
+            # Fee rows
+            if "OPTION_FEE" in ttype or "OPTION_FEES" in ttype:
+                action = "FEE"
+                realized_delta = amt
+                realized += realized_delta
+            elif "OPTION_PREMIUM" in ttype or "PREMIUM" in ttype:
+                if side is None:
+                    # guess by sign
+                    side = "STO" if amt > 0 else "BTC"
+                action = side
+                if qty > 0:
+                    px = abs(amt) / (qty * multiplier)
+                else:
+                    px = 0.0
+                # Premium cashflow itself is realized immediately
+                realized_delta = amt
+                realized += realized_delta
+                # Track open contracts for reference
+                if side == "STO":
+                    new_units = units + qty
+                    if new_units > 0 and qty > 0:
+                        avg_credit = ((units * avg_credit) + (px * qty)) / new_units if units > 0 else px
+                    units = new_units
+                elif side == "BTC":
+                    units = units - qty if qty > 0 else units
+            else:
+                action = ttype or "OTHER"
+
+        out_rows.append(
+            {
+                "Date": tdate,
+                "Type": ttype,
+                "Action": action,
+                "Qty": qty,
+                "Price": px,
+                "Amount": amt,
+                "Fees (est)": fee_est,
+                "Units (cum)": units,
+                "Avg Cost/Credit": (avg_cost if asset_kind in ("Stocks", "LEAPs") else avg_credit),
+                "Realized Δ": realized_delta,
+                "Realized (cum)": realized,
+                "Description": desc,
+            }
+        )
+
+    out_df = pd.DataFrame(out_rows)
+
+    # Display
+    st.dataframe(out_df, use_container_width=True)
+
+    # Quick totals at bottom for manual reconciliation
+    st.divider()
+    colA, colB, colC = st.columns(3)
+    with colA:
+        st.metric("Units Remaining", f"{out_df['Units (cum)'].iloc[-1]:,.2f}")
+    with colB:
+        st.metric("Avg Cost/Credit", f"{out_df['Avg Cost/Credit'].iloc[-1]:,.4f}")
+    with colC:
+        st.metric("Realized P/L (cum)", f"{out_df['Realized (cum)'].iloc[-1]:,.2f}")
+
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
     page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Register", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
