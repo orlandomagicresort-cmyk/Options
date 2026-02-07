@@ -1089,7 +1089,21 @@ def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, 
 # --------------------------------------------------------------------------------
 # 5. CORE LOGIC
 # --------------------------------------------------------------------------------
-def update_asset_position(user_id, symbol, quantity, price, action, date_obj, asset_type="STOCK", expiration=None, strike=None=0.0, txg: str | None = None):
+from typing import Optional
+
+def update_asset_position(
+    user_id,
+    symbol,
+    quantity,
+    price,
+    action,
+    date_obj,
+    asset_type="STOCK",
+    expiration=None,
+    strike: float = 0.0,
+    txg: Optional[str] = None,
+):
+
     if st.session_state.get("read_only"):
         st.error("Read-only access: you don't have permission to modify this account.")
         st.stop()
