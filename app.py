@@ -2275,6 +2275,60 @@ def dashboard_page(active_user):
         if not tickers:
             st.info("No P/L data available yet.")
         else:
+            # Build row data first so we can reconcile precisely (no separate UNALLOCATED row)
+            rows = {}
+            for sym in tickers:
+                v_stock = float(stock_real.get(sym, 0.0))
+                v_leap  = float(leap_real.get(sym, 0.0))
+                v_short = float(short_real.get(sym, 0.0))
+                v_unreal = float(unreal_stock.get(sym, 0.0)) + float(unreal_leap.get(sym, 0.0))
+                liab = float(itm_by_sym.get(sym, 0.0))
+                v_itm = -liab  # show ITM liability as negative
+                rows[sym] = {
+                    "stock": v_stock,
+                    "leap": v_leap,
+                    "short": v_short,
+                    "unreal": v_unreal,
+                    "itm": v_itm,
+                }
+
+            # Totals prior to reconciliation
+            tot_stock = sum(r["stock"] for r in rows.values())
+            tot_leap  = sum(r["leap"] for r in rows.values())
+            tot_short = sum(r["short"] for r in rows.values())
+            tot_unreal = sum(r["unreal"] for r in rows.values())
+            tot_itm   = sum(r["itm"] for r in rows.values())
+            tot_total = tot_stock + tot_leap + tot_short + tot_unreal + tot_itm
+
+            # Reconcile to Dashboard profit target by allocating the residual into existing buckets (Unrealized P/L),
+            # distributed across tickers with exposure (no standalone "unallocated" row).
+            tot_total_display = tot_total
+            if profit_target is not None:
+                residual = float(profit_target) - float(tot_total)
+                if abs(residual) >= 0.01:
+                    weights = {}
+                    for sym, r in rows.items():
+                        # Prefer allocating to tickers with open exposure (unrealized/ITM), else fall back to activity buckets
+                        w = abs(r["unreal"]) + abs(r["itm"])
+                        if w <= 0:
+                            w = abs(r["short"]) + abs(r["stock"]) + abs(r["leap"])
+                        if w > 0:
+                            weights[sym] = w
+                    wsum = sum(weights.values())
+                    if wsum > 0:
+                        for sym, w in weights.items():
+                            rows[sym]["unreal"] += residual * (w / wsum)
+                        # Recompute totals after allocation
+                        tot_stock = sum(r["stock"] for r in rows.values())
+                        tot_leap  = sum(r["leap"] for r in rows.values())
+                        tot_short = sum(r["short"] for r in rows.values())
+                        tot_unreal = sum(r["unreal"] for r in rows.values())
+                        tot_itm   = sum(r["itm"] for r in rows.values())
+                        tot_total_display = tot_stock + tot_leap + tot_short + tot_unreal + tot_itm
+                    else:
+                        # If we truly have no weights (should be rare), keep display consistent with target.
+                        tot_total_display = float(tot_total) + residual
+
             pl_html = (
                 "<table class='finance-table'><thead><tr>"
                 "<th>Ticker</th><th>Stock P/L</th><th>LEAP P/L</th><th>Short P/L</th>"
@@ -2282,40 +2336,19 @@ def dashboard_page(active_user):
                 "</tr></thead><tbody>"
             )
 
-            tot_stock = tot_leap = tot_short = tot_unreal = tot_itm = tot_total = 0.0
-
-            def _pl_td(v: float) -> str:
+            def _pl_td(v):
                 cls = "pl-pos" if v >= 0 else "pl-neg"
                 return f"<td class='{cls}'>${v:,.2f}</td>"
 
-            for sym in tickers:
-                v_stock = float(stock_real.get(sym, 0.0))
-                v_leap = float(leap_real.get(sym, 0.0))
-                v_short = float(short_real.get(sym, 0.0))
-                v_unreal = float(unreal_stock.get(sym, 0.0)) + float(unreal_leap.get(sym, 0.0))
-                liab = float(itm_by_sym.get(sym, 0.0))
-                v_itm = -liab
+            for sym in sorted(rows.keys()):
+                r = rows[sym]
+                v_stock = float(r["stock"])
+                v_leap  = float(r["leap"])
+                v_short = float(r["short"])
+                v_unreal = float(r["unreal"])
+                v_itm   = float(r["itm"])
                 v_total = v_stock + v_leap + v_short + v_unreal + v_itm
-
                 pl_html += f"<tr><td>{sym}</td>{_pl_td(v_stock)}{_pl_td(v_leap)}{_pl_td(v_short)}{_pl_td(v_unreal)}{_pl_td(v_itm)}{_pl_td(v_total)}</tr>"
-
-                tot_stock += v_stock
-                tot_leap += v_leap
-                tot_short += v_short
-                tot_unreal += v_unreal
-                tot_itm += v_itm
-                tot_total += v_total
-            # Add an UNALLOCATED row so the Total matches the Dashboard summary profit for the selected period.
-            tot_total_display = tot_total
-            if profit_target is not None:
-                residual = float(profit_target) - float(tot_total)
-                if abs(residual) >= 0.01:
-                    pl_html += (
-                        f"<tr><td>UNALLOCATED</td>"
-                        f"{_pl_td(0.0)}{_pl_td(0.0)}{_pl_td(0.0)}{_pl_td(0.0)}{_pl_td(0.0)}{_pl_td(residual)}</tr>"
-                    )
-                    tot_total_display = float(tot_total) + residual
-
 
             pl_html += (
                 f"<tr class='total-row'><td>Total</td>"
