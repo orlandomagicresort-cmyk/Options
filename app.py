@@ -2179,11 +2179,13 @@ def dashboard_page(active_user):
             price = float(m.group(4).replace(',', ''))
             return action, qty, sym, price
 
+        
         tx_rows = []
         try:
-            qb = supabase.table("transactions").select("transaction_date,type,amount,description,related_symbol").eq("user_id", uid)
-            if pl_start_date is not None:
-                qb = qb.gte("transaction_date", pl_start_date.isoformat())
+            # Pull full transaction history so we can compute opening state for the selected period
+            qb = supabase.table("transactions").select(
+                "transaction_date,type,amount,description,related_symbol"
+            ).eq("user_id", uid)
             tx_rows = _fetch_all(qb) or []
         except Exception:
             tx_rows = []
@@ -2193,14 +2195,58 @@ def dashboard_page(active_user):
         except Exception:
             pass
 
-        stock_real = {}
-        leap_real = {}
-        short_real = {}
+        # Price helper (stocks): last close on or before a date (handles weekends/holidays)
+        @st.cache_data(show_spinner=False, ttl=60 * 60)
+        def _stock_close_on_or_before(symbol: str, d: date) -> float:
+            try:
+                start = (d - timedelta(days=10)).isoformat()
+                end = (d + timedelta(days=1)).isoformat()
+                hist = yf.download(symbol, start=start, end=end, progress=False, auto_adjust=False)
+                if hist is None or hist.empty:
+                    return 0.0
+                closes = hist.get("Close")
+                if closes is None or len(closes) == 0:
+                    return 0.0
+                return float(closes.dropna().iloc[-1])
+            except Exception:
+                return 0.0
 
-        stock_state = {}  # sym -> (qty, cost_total)
-        leap_state = {}   # sym -> (contracts, cost_total)
+        # --- Build holdings snapshots (qty/cost + cumulative realized) before start and as-of now ---
+        stock_qty = {}
+        stock_cost = {}
+        leap_qty = {}
+        leap_cost = {}
+        stock_real_cum = {}
+        leap_real_cum = {}
+        short_prem_cum = {}
+
+        stock_qty_start = {}
+        stock_cost_start = {}
+        leap_qty_start = {}
+        leap_cost_start = {}
+        stock_real_start = {}
+        leap_real_start = {}
+        short_prem_start = {}
+
+        start_snapped = False
 
         for r in tx_rows:
+            # Snapshot right before first tx on/after start date
+            if (not start_snapped) and (pl_start_date is not None):
+                try:
+                    tdate = date.fromisoformat(str(r.get("transaction_date") or "")[:10])
+                except Exception:
+                    tdate = None
+                if tdate is not None and tdate >= pl_start_date:
+                    stock_qty_start = dict(stock_qty)
+                    stock_cost_start = dict(stock_cost)
+                    leap_qty_start = dict(leap_qty)
+                    leap_cost_start = dict(leap_cost)
+                    stock_real_start = dict(stock_real_cum)
+                    leap_real_start = dict(leap_real_cum)
+                    short_prem_start = dict(short_prem_cum)
+                    start_snapped = True
+
             ttype = str(r.get('type', '') or '').upper().strip()
             sym = str(r.get('related_symbol', '') or '').upper().strip()
             amt = float(clean_number(r.get('amount', 0) or 0))
@@ -2210,63 +2256,131 @@ def dashboard_page(active_user):
                 continue
 
             if ttype == "OPTION_PREMIUM":
-                short_real[sym] = short_real.get(sym, 0.0) + amt
+                short_prem_cum[sym] = short_prem_cum.get(sym, 0.0) + amt
                 continue
 
-            if ttype == "TRADE_STOCK":
-                parsed = _parse_trade_desc(desc)
-                if not parsed:
-                    continue
-                action, qty, psym, price = parsed
-                if psym:
-                    sym = psym
+            parsed = _parse_trade_desc(desc)
+            if not parsed:
+                continue
+            action, qty, psym, price = parsed
 
-                gross = qty * price
+            is_leap = ("LEAP" in ttype) or ("LEAP" in desc.upper())
+
+            if not is_leap:
+                q = float(stock_qty.get(psym, 0.0) or 0.0)
+                c = float(stock_cost.get(psym, 0.0) or 0.0)
                 if action == "Buy":
-                    total_paid = -amt
-                    fees = max(0.0, total_paid - gross)
-                    st_qty, st_cost = stock_state.get(sym, (0.0, 0.0))
-                    stock_state[sym] = (st_qty + qty, st_cost + gross + fees)
-                else:
-                    proceeds = amt
-                    st_qty, st_cost = stock_state.get(sym, (0.0, 0.0))
-                    if st_qty <= 0:
+                    stock_qty[psym] = q + qty
+                    stock_cost[psym] = c + (qty * price)
+                else:  # Sell
+                    if q <= 0:
                         continue
-                    sell_qty = min(qty, st_qty)
-                    avg_cost = (st_cost / st_qty) if st_qty else 0.0
-                    cost_sold = avg_cost * sell_qty
-                    pnl = proceeds - cost_sold
-                    stock_real[sym] = stock_real.get(sym, 0.0) + pnl
-                    stock_state[sym] = (st_qty - sell_qty, st_cost - cost_sold)
-                continue
-
-            if ttype.startswith("TRADE_LEAP"):
-                parsed = _parse_trade_desc(desc)
-                if not parsed:
-                    continue
-                action, qty, psym, price = parsed
-                if psym:
-                    sym = psym
-
-                gross = qty * price * 100.0
+                    avg = c / q if q != 0 else 0.0
+                    stock_real_cum[psym] = stock_real_cum.get(psym, 0.0) + (price - avg) * qty
+                    q_new = q - qty
+                    stock_qty[psym] = q_new
+                    stock_cost[psym] = avg * q_new
+            else:
+                q = float(leap_qty.get(psym, 0.0) or 0.0)
+                c = float(leap_cost.get(psym, 0.0) or 0.0)
                 if action == "Buy":
-                    total_paid = -amt
-                    fees = max(0.0, total_paid - gross)
-                    l_qty, l_cost = leap_state.get(sym, (0.0, 0.0))
-                    leap_state[sym] = (l_qty + qty, l_cost + gross + fees)
+                    leap_qty[psym] = q + qty
+                    leap_cost[psym] = c + (qty * price)
                 else:
-                    proceeds = amt
-                    l_qty, l_cost = leap_state.get(sym, (0.0, 0.0))
-                    if l_qty <= 0:
+                    if q <= 0:
                         continue
-                    sell_qty = min(qty, l_qty)
-                    avg_cost = (l_cost / l_qty) if l_qty else 0.0
-                    cost_sold = avg_cost * sell_qty
-                    pnl = proceeds - cost_sold
-                    leap_real[sym] = leap_real.get(sym, 0.0) + pnl
-                    leap_state[sym] = (l_qty - sell_qty, l_cost - cost_sold)
-                continue
+                    avg = c / q if q != 0 else 0.0
+                    leap_real_cum[psym] = leap_real_cum.get(psym, 0.0) + (price - avg) * qty * 100.0
+                    q_new = q - qty
+                    leap_qty[psym] = q_new
+                    leap_cost[psym] = avg * q_new
 
+        # If no tx after start date, snapshot at end (meaning: positions/realized unchanged within period)
+        if pl_start_date is not None and not start_snapped:
+            stock_qty_start = dict(stock_qty)
+            stock_cost_start = dict(stock_cost)
+            leap_qty_start = dict(leap_qty)
+            leap_cost_start = dict(leap_cost)
+            stock_real_start = dict(stock_real_cum)
+            leap_real_start = dict(leap_real_cum)
+            short_prem_start = dict(short_prem_cum)
+
+        # --- Realized deltas for selected period ---
+        stock_real = {k: float(stock_real_cum.get(k, 0.0)) - float(stock_real_start.get(k, 0.0)) for k in set(stock_real_cum) | set(stock_real_start)}
+        leap_real  = {k: float(leap_real_cum.get(k, 0.0))  - float(leap_real_start.get(k, 0.0))  for k in set(leap_real_cum)  | set(leap_real_start)}
+        short_real = {k: float(short_prem_cum.get(k, 0.0)) - float(short_prem_start.get(k, 0.0)) for k in set(short_prem_cum) | set(short_prem_start)}
+
+        # Remove near-zero noise
+        stock_real = {k:v for k,v in stock_real.items() if abs(v) >= 0.005}
+        leap_real  = {k:v for k,v in leap_real.items() if abs(v) >= 0.005}
+        short_real = {k:v for k,v in short_real.items() if abs(v) >= 0.005}
+
+        # --- Unrealized deltas for selected period ---
+        unreal_stock = {}
+        # Current prices + quantities/avg from holdings dataframe
+        if _stocks_df is not None and not _stocks_df.empty:
+            tmp = _stocks_df.copy()
+            tmp['sym'] = tmp.get('symbol', tmp.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
+            tmp['qty'] = pd.to_numeric(tmp.get('quantity', 0), errors='coerce').fillna(0.0)
+            tmp['avg'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0.0)
+            tmp['px']  = pd.to_numeric(tmp.get('current_price', 0), errors='coerce').fillna(0.0)
+            cur_map = tmp.groupby('sym').agg({'qty':'sum','avg':'mean','px':'mean'}).reset_index()
+            for _, rr in cur_map.iterrows():
+                sym = str(rr['sym'])
+                q1 = float(rr['qty'] or 0.0)
+                avg1 = float(rr['avg'] or 0.0)
+                px1 = float(rr['px'] or 0.0)
+
+                # Start snapshot from reconstructed positions
+                q0 = float(stock_qty_start.get(sym, 0.0) or 0.0)
+                c0 = float(stock_cost_start.get(sym, 0.0) or 0.0)
+                avg0 = (c0 / q0) if q0 != 0 else 0.0
+
+                # If not tracking a period (Lifetime), keep original lifetime unrealized
+                if pl_start_date is None:
+                    unreal_stock[sym] = (px1 - avg1) * q1
+                else:
+                    px0 = _stock_close_on_or_before(sym, pl_start_date)
+                    unreal0 = (px0 - avg0) * q0
+                    unreal1 = (px1 - avg1) * q1
+                    delta = unreal1 - unreal0
+                    if abs(delta) >= 0.005:
+                        unreal_stock[sym] = delta
+
+        unreal_leap = {}
+        if _leaps_df is not None and not _leaps_df.empty:
+            tmp = _leaps_df.copy()
+            tmp['sym'] = tmp.get('symbol', tmp.get('ticker', 'UNK')).astype(str).str.upper().str.strip()
+            tmp['qty'] = pd.to_numeric(tmp.get('quantity', 0), errors='coerce').fillna(0.0)
+            tmp['avg'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0.0)
+            tmp['px']  = pd.to_numeric(tmp.get('current_price', tmp.get('last_price', 0)), errors='coerce').fillna(0.0)
+            tmp['un1'] = (tmp['px'] - tmp['avg']) * tmp['qty'] * 100.0
+            cur_un = tmp.groupby('sym')['un1'].sum().to_dict()
+
+            if pl_start_date is None:
+                unreal_leap = cur_un
+            else:
+                # Best-effort: no historical option pricing available, so we only show unrealized changes for positions opened during the period.
+                # If a LEAP existed before period start, we treat its opening unrealized as 0 to avoid fabricating prices.
+                # This still prevents tickers you didn't own in the period from appearing.
+                for sym, un1 in cur_un.items():
+                    q0 = float(leap_qty_start.get(sym, 0.0) or 0.0)
+                    q1 = float(leap_qty.get(sym, 0.0) or 0.0)
+                    # If you had none at start but have now, count full unreal; otherwise ignore unreal delta to avoid bad attribution.
+                    if q0 == 0 and q1 != 0 and abs(un1) >= 0.005:
+                        unreal_leap[sym] = float(un1)
+
+        # --------------------------
+        # ITM $ by ticker (current liability; same as before)
+        # --------------------------
+        itm_by_sym = {}
+        try:
+            if 'grouped_options' in locals() and grouped_options:
+                for r in grouped_options.values():
+                    sym = str(r.get('symbol', 'UNK')).upper().strip()
+                    itm_by_sym[sym] = itm_by_sym.get(sym, 0.0) + float(r.get('liability', 0.0) or 0.0)
+        except Exception:
+            itm_by_sym = {}
         tickers = sorted(set(
             list(unreal_stock.keys()) + list(unreal_leap.keys()) + list(itm_by_sym.keys()) +
             list(stock_real.keys()) + list(leap_real.keys()) + list(short_real.keys())
@@ -2303,32 +2417,6 @@ def dashboard_page(active_user):
             # Reconcile to Dashboard profit target by allocating the residual into existing buckets (Unrealized P/L),
             # distributed across tickers with exposure (no standalone "unallocated" row).
             tot_total_display = tot_total
-            if profit_target is not None:
-                residual = float(profit_target) - float(tot_total)
-                if abs(residual) >= 0.01:
-                    weights = {}
-                    for sym, r in rows.items():
-                        # Prefer allocating to tickers with open exposure (unrealized/ITM), else fall back to activity buckets
-                        w = abs(r["unreal"]) + abs(r["itm"])
-                        if w <= 0:
-                            w = abs(r["short"]) + abs(r["stock"]) + abs(r["leap"])
-                        if w > 0:
-                            weights[sym] = w
-                    wsum = sum(weights.values())
-                    if wsum > 0:
-                        for sym, w in weights.items():
-                            rows[sym]["unreal"] += residual * (w / wsum)
-                        # Recompute totals after allocation
-                        tot_stock = sum(r["stock"] for r in rows.values())
-                        tot_leap  = sum(r["leap"] for r in rows.values())
-                        tot_short = sum(r["short"] for r in rows.values())
-                        tot_unreal = sum(r["unreal"] for r in rows.values())
-                        tot_itm   = sum(r["itm"] for r in rows.values())
-                        tot_total_display = tot_stock + tot_leap + tot_short + tot_unreal + tot_itm
-                    else:
-                        # If we truly have no weights (should be rare), keep display consistent with target.
-                        tot_total_display = float(tot_total) + residual
-
             pl_html = (
                 "<table class='finance-table'><thead><tr>"
                 "<th>Ticker</th><th>Stock P/L</th><th>LEAP P/L</th><th>Short P/L</th>"
