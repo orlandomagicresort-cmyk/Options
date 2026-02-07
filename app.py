@@ -4771,62 +4771,6 @@ def settings_page(user):
                 st.session_state.confirm_reset = False; st.success("Account reset."); st.rerun()
             if c2.button("Cancel"): st.session_state.confirm_reset = False; st.rerun()
 
-
-def register_page(user):
-    """Simple transaction register by ticker for reconciliation."""
-    uid = _active_user_id(user)
-
-    st.header("📒 Register")
-    st.caption("Transaction-by-transaction view by ticker for manual reconciliation.")
-
-    # Load transactions (schema uses transaction_date; no fees/date columns)
-    try:
-        rows = (
-            supabase.table("transactions")
-            .select("transaction_date,type,amount,description,related_symbol")
-            .eq("user_id", uid)
-            .order("transaction_date")
-            .execute()
-            .data
-            or []
-        )
-    except Exception as e:
-        st.error(f"Failed to load transactions: {e}")
-        return
-
-    if not rows:
-        st.info("No transactions found.")
-        return
-
-    df = pd.DataFrame(rows)
-    df["transaction_date"] = pd.to_datetime(df["transaction_date"], errors="coerce")
-    df = df.dropna(subset=["transaction_date"]).sort_values(["transaction_date", "description"])
-
-    df["Ticker"] = df["related_symbol"].fillna("").astype(str).str.upper().str.strip()
-    tickers = sorted([t for t in df["Ticker"].unique().tolist() if t])
-
-    if not tickers:
-        st.info("No tickers found (related_symbol is blank on all transactions).")
-        return
-
-    sel = st.selectbox("Ticker", tickers, index=0)
-
-    tdf = df[df["Ticker"] == sel].copy()
-    if tdf.empty:
-        st.info("No transactions for selected ticker.")
-        return
-
-    out = tdf.rename(columns={
-        "transaction_date": "Transaction Date",
-        "type": "Type",
-        "amount": "Amount",
-        "description": "Description",
-        "related_symbol": "Related Symbol",
-    })[["Transaction Date", "Type", "Amount", "Related Symbol", "Description"]]
-
-    st.dataframe(out, use_container_width=True)
-
-
 def main():
     # page config already set at top
     
@@ -4834,7 +4778,7 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Register", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
+    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
     user = st.session_state.user
     active_user = _set_active_account(user)
     if page == "Dashboard": dashboard_page(active_user)
@@ -4844,7 +4788,6 @@ def main():
     elif page == "Cash Management": cash_management_page(active_user)
     elif page == "Enter Trade": trade_entry_page(active_user)
     elif page == "Ledger": ledger_page(active_user)
-    elif page == "Register": register_page(active_user)
     elif page == "Import Data": import_page(active_user)
     elif page == "Bulk Entries": bulk_entries_page(active_user)
     elif page == "Account & Sharing": account_sharing_page(active_user)
