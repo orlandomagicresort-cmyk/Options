@@ -4846,7 +4846,7 @@ def register_page(user):
         if "DIVIDEND" in t or "INTEREST" in t or "FEE" in t:
             return True
         return False
-def _is_leap_like_row(ttype: str, desc: str) -> bool:
+    def _is_leap_like_row(ttype: str, desc: str) -> bool:
     t = (ttype or "").upper()
     s = (desc or "").upper()
     if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
@@ -4862,7 +4862,7 @@ def _is_leap_like_row(ttype: str, desc: str) -> bool:
         return True
     return False
 
-def _is_short_like_row(ttype: str, desc: str) -> bool:
+    def _is_short_like_row(ttype: str, desc: str) -> bool:
     t = (ttype or "").upper()
     s = (desc or "").upper()
     if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
@@ -4871,14 +4871,14 @@ def _is_short_like_row(ttype: str, desc: str) -> bool:
         return True
     return False
 
-if asset_kind == "Stocks":
+    if asset_kind == "Stocks":
     tdf = tdf[tdf.apply(lambda r: _is_stock_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
-elif asset_kind == "LEAPs":
+    elif asset_kind == "LEAPs":
     tdf = tdf[tdf.apply(lambda r: _is_leap_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
-else:
+    else:
     tdf = tdf[tdf.apply(lambda r: _is_short_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
 
-if tdf.empty:
+    if tdf.empty:
     st.info("No transactions found for the selected ticker and asset type.")
     return
 
@@ -5047,7 +5047,6 @@ if tdf.empty:
         st.metric("Avg Cost/Credit", f"{out_df['Avg Cost/Credit'].iloc[-1]:,.4f}")
     with c3:
         st.metric("Realized P/L (cum)", f"{out_df['Realized (cum)'].iloc[-1]:,.2f}")
-
 
 def main():
     # page config already set at top
