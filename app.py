@@ -2204,6 +2204,7 @@ def dashboard_page(active_user):
         stock_real = {}
         leap_real = {}
         short_real = {}
+        interest_total = 0.0  # separate Interest line
 
         for r in tx_rows:
             # Parse date
@@ -2216,8 +2217,6 @@ def dashboard_page(active_user):
             sym = str(r.get("related_symbol", "") or "").upper().strip()
             amt = float(clean_number(r.get("amount", 0) or 0))
             desc = str(r.get("description", "") or "")
-
-            classified = False
 
             def _infer_symbol_from_text(text: str) -> str:
                 # Attempt to find a ticker-like token in the description when related_symbol is missing
@@ -2243,33 +2242,35 @@ def dashboard_page(active_user):
                     sym2 = "USD"
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
                     short_real[sym2] = short_real.get(sym2, 0.0) + amt
-                classified = True
                 continue
 
-            # Interest: capture on a dedicated pseudo-ticker row "Interest" (requested).
-            # We keep it under the Stock P/L column by adding it to stock_real["Interest"].
+            # Interest is shown on a separate line ("Interest") under Stock P/L.
             if "INTEREST" in ttype:
                 adj_amt = amt
                 ttype_u = ttype.upper()
                 desc_u = desc.upper()
+                # treat paid/expense as negative
                 if ("PAID" in ttype_u) or ("EXPENSE" in ttype_u) or ("PAID" in desc_u) or ("EXPENSE" in desc_u):
                     adj_amt = -abs(adj_amt)
                 else:
+                    # received/earned
                     adj_amt = abs(adj_amt)
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    stock_real["Interest"] = stock_real.get("Interest", 0.0) + adj_amt
-                classified = True
+                    interest_total += adj_amt
                 continue
 
-            # General fees (non-option). Attribute to ticker if present; otherwise to USD.
+            # General fees (non-option fees) reduce P/L. Attribute to ticker if available, else USD.
             if ttype in ("FEES", "FEE", "COMMISSION", "COMMISSIONS"):
                 sym2 = sym or "USD"
+                fee_amt = amt
+                # fees should reduce profit
+                if fee_amt > 0:
+                    fee_amt = -abs(fee_amt)
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    stock_real[sym2] = stock_real.get(sym2, 0.0) - abs(amt)
-                classified = True
+                    stock_real[sym2] = stock_real.get(sym2, 0.0) + fee_amt
                 continue
 
-            # Dividends must be tied to a ticker; otherwise ignore
+# Dividends must be tied to a ticker; otherwise ignore
             if ttype == "DIVIDEND":
                 if sym:
                     if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
@@ -2344,40 +2345,6 @@ def dashboard_page(active_user):
         stock_real = {k:v for k,v in stock_real.items() if abs(v) >= 0.005}
         leap_real  = {k:v for k,v in leap_real.items() if abs(v) >= 0.005}
         short_real = {k:v for k,v in short_real.items() if abs(v) >= 0.005}
-        # --------------------------------------------------------------------
-        # Reconciliation catch-all (USD)
-        # Some transaction rows impact portfolio equity but aren't classified
-        # into Stock/LEAP/Short/Dividend/Fees/Interest buckets (e.g., misc cash
-        # events). These are included in the Dashboard Lifetime profit, so we
-        # attribute them to USD to keep the totals in sync without inventing
-        # per-ticker allocation.
-        # --------------------------------------------------------------------
-        for rr in tx_rows:
-            try:
-                rr_date = date.fromisoformat(str(rr.get("transaction_date") or "")[:10])
-            except Exception:
-                rr_date = None
-            rr_type = str(rr.get("type", "") or "").upper().strip()
-            if rr_type in ("DEPOSIT", "WITHDRAWAL"):
-                continue
-            if rr_type in ("OPTION_PREMIUM", "OPTION_FEES"):
-                continue
-            if "INTEREST" in rr_type:
-                continue
-            if rr_type in ("FEES", "FEE", "COMMISSION", "COMMISSIONS"):
-                continue
-            if rr_type == "DIVIDEND":
-                continue
-
-            # Trades are handled via description parsing; skip common trade labels
-            if rr_type in ("BUY", "SELL", "TRADE", "STOCK_TRADE", "LEAP_TRADE"):
-                continue
-
-            rr_amt = float(clean_number(rr.get("amount", 0) or 0))
-            if pl_start_date is None or (rr_date is not None and rr_date >= pl_start_date):
-                stock_real["USD"] = stock_real.get("USD", 0.0) + rr_amt
-
-
 
         # Only show tickers that have activity/holdings relevant to this view
         tickers = sorted(set(
@@ -2411,6 +2378,19 @@ def dashboard_page(active_user):
                     "Unrealized P/L": v_unrl,
                     "ITM $": v_itm,
                     "Total": total
+                })
+
+
+            # Add Interest line (separate, not tied to tickers)
+            if abs(interest_total) >= 0.005:
+                rows.append({
+                    "Ticker": "Interest",
+                    "Stock P/L": interest_total,
+                    "LEAP P/L": 0.0,
+                    "Short P/L": 0.0,
+                    "Unrealized P/L": 0.0,
+                    "ITM $": 0.0,
+                    "Total": interest_total
                 })
 
             if not rows:
@@ -4100,6 +4080,290 @@ def ledger_page(active_user):
                 })
             st.dataframe(pd.DataFrame(sub), use_container_width=True)
 
+
+# --------------------------------------------------------------------------------
+# 7. REGISTER (Transaction-by-transaction position & avg cost by ticker)
+# --------------------------------------------------------------------------------
+
+def register_page(active_user):
+    uid = _active_user_id(active_user)
+    st.header("🧾 Register")
+
+    st.caption("Transaction-by-transaction register by ticker with running units and average price. "
+               "Use this to reconcile the P/L by Ticker view.")
+
+    # --- Load all USD transactions for the active account ---
+    cols = "id, created_at, date, type, amount, fees, currency, description, related_symbol, option_id"
+    try:
+        qb = supabase.table("transactions").select(cols).eq("user_id", uid).eq("currency", "USD").order("date", desc=False)
+        rows = _fetch_all(qb)
+    except Exception as e:
+        st.error(f"Failed to load transactions: {e}")
+        return
+
+    if not rows:
+        st.info("No transactions found.")
+        return
+
+    df = pd.DataFrame(rows)
+    # Normalize fields
+    for c in ["description", "type", "related_symbol", "currency"]:
+        if c in df.columns:
+            df[c] = df[c].fillna("").astype(str)
+    if "date" in df.columns:
+        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    if "amount" in df.columns:
+        df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
+
+    if "fees" in df.columns:
+        df["fees"] = pd.to_numeric(df["fees"], errors="coerce").fillna(0.0)
+    else:
+        df["fees"] = 0.0
+
+    # --- Parse trade descriptions for stocks / leaps if needed ---
+    trade_re = re.compile(
+        r"^\s*(BUY|SELL)\s+(\d+(?:\.\d+)?)\s+([A-Z\.\-]+)\s*(?:@|AT|PRICE|PX)?\s*\$?\s*(\d+(?:\.\d+)?)\s*$",
+        re.IGNORECASE
+    )
+
+    def parse_trade(desc: str):
+        """Return (side, qty, symbol, price) if parseable, else None."""
+        if not desc:
+            return None
+        m = trade_re.match(desc.strip())
+        if not m:
+            return None
+        side = m.group(1).upper()
+        qty = float(m.group(2))
+        sym = m.group(3).upper()
+        px = float(m.group(4))
+        return side, qty, sym, px
+
+    # Infer symbol for rows where related_symbol is empty but description contains one
+    parsed = df["description"].apply(parse_trade)
+    df["parsed_side"] = parsed.apply(lambda x: x[0] if x else "")
+    df["parsed_qty"] = parsed.apply(lambda x: x[1] if x else 0.0)
+    df["parsed_symbol"] = parsed.apply(lambda x: x[2] if x else "")
+    df["parsed_price"] = parsed.apply(lambda x: x[3] if x else 0.0)
+
+    df["symbol"] = df["related_symbol"].str.upper()
+    df.loc[df["symbol"].eq("") & df["parsed_symbol"].ne(""), "symbol"] = df["parsed_symbol"]
+
+    # --- UI controls ---
+    all_syms = sorted([s for s in df["symbol"].unique().tolist() if s])
+    if not all_syms:
+        st.info("No tickers found in transactions.")
+        return
+
+    c1, c2, c3 = st.columns([2, 2, 2])
+    with c1:
+        ticker = st.selectbox("Ticker", all_syms, index=0)
+    with c2:
+        asset_type = st.selectbox("Asset Type", ["Stocks", "LEAPs", "Shorts"], index=0)
+    with c3:
+        show_all = st.checkbox("Show all transaction types for ticker", value=False)
+
+    tdf = df[df["symbol"] == ticker].copy()
+    tdf = tdf.sort_values(["date", "created_at"], ascending=[True, True], na_position="last")
+
+    if tdf.empty:
+        st.info("No transactions for selected ticker.")
+        return
+
+    # Filter by asset type unless show_all
+    if not show_all:
+        if asset_type == "Shorts":
+            tdf = tdf[tdf["type"].isin(["OPTION_PREMIUM", "OPTION_FEES"])].copy()
+        elif asset_type == "LEAPs":
+            # LEAP trades are stored as stock-style BUY/SELL in your ledger (trade entry),
+            # but we distinguish later by multiplier (100) and/or keywords.
+            # Heuristic: treat rows that have 'LEAP' in type/description or option_id populated as LEAP-related.
+            tdf = tdf[(tdf["type"].isin(["TRADE", "TRADE_STOCK", "STOCK_TRADE", "BUY", "SELL", "DIVIDEND", "FEE", "FEES"]) ) |
+                      (tdf["description"].str.contains("LEAP", case=False, na=False)) |
+                      (tdf["option_id"].notna())].copy()
+        else:  # Stocks
+            tdf = tdf[(tdf["type"].isin(["TRADE", "TRADE_STOCK", "STOCK_TRADE", "BUY", "SELL", "DIVIDEND", "FEE", "FEES"])) &
+                      (~tdf["description"].str.contains("LEAP", case=False, na=False))].copy()
+
+    # Running position / avg cost
+    units = 0.0
+    avg_cost = 0.0  # per share/contract (for LEAPs, per contract price, not *100)
+    realized_pl = 0.0
+
+    rows_out = []
+    multiplier = 100.0 if asset_type == "LEAPs" else 1.0
+
+    for _, r in tdf.iterrows():
+        dt_ = r.get("date")
+        ttype = (r.get("type") or "").upper()
+        desc = r.get("description") or ""
+        amt = float(r.get("amount") or 0.0)
+        fee = float(r.get("fees") or 0.0)
+
+        side = r.get("parsed_side") or ""
+        qty = float(r.get("parsed_qty") or 0.0)
+        px = float(r.get("parsed_price") or 0.0)
+
+        action = ""
+        trade_fee = 0.0
+
+        if asset_type in ("Stocks", "LEAPs"):
+            # Prefer parsed trade rows for BUY/SELL
+            if side in ("BUY", "SELL") and qty > 0 and px > 0:
+                action = side
+                gross = qty * px * multiplier
+                # Derive embedded fee if "fees" column is empty but amount includes it
+                # Buy: amt typically negative; Sell: amt typically positive
+                if fee == 0.0:
+                    if side == "BUY":
+                        trade_fee = max(0.0, (-amt) - gross)
+                    else:
+                        trade_fee = max(0.0, gross - amt)
+                else:
+                    trade_fee = fee
+
+                if side == "BUY":
+                    new_units = units + qty
+                    # total cost basis in $ (including fees)
+                    total_cost = (units * avg_cost * multiplier) + gross + trade_fee
+                    units = new_units
+                    avg_cost = (total_cost / (units * multiplier)) if units > 0 else 0.0
+                    pl = 0.0
+                else:  # SELL
+                    # realized PL uses current avg cost
+                    cost = qty * avg_cost * multiplier
+                    proceeds = gross - trade_fee
+                    pl = proceeds - cost
+                    realized_pl += pl
+                    units = units - qty
+                    if units <= 1e-9:
+                        units = 0.0
+                        avg_cost = 0.0
+
+                rows_out.append({
+                    "Date": dt_,
+                    "Txn Type": ttype,
+                    "Action": action,
+                    "Qty": qty,
+                    "Price": px,
+                    "Fees": trade_fee,
+                    "Amount": amt,
+                    "Cumulative Units": units,
+                    "Avg Price (Remaining)": avg_cost,
+                    "Realized P/L (Cum)": realized_pl,
+                    "Description": desc
+                })
+                continue
+
+            # Dividends / fees tied to ticker show as realized cash impact
+            if "DIVIDEND" in ttype:
+                realized_pl += amt
+                rows_out.append({
+                    "Date": dt_,
+                    "Txn Type": ttype,
+                    "Action": "DIVIDEND",
+                    "Qty": 0.0,
+                    "Price": 0.0,
+                    "Fees": 0.0,
+                    "Amount": amt,
+                    "Cumulative Units": units,
+                    "Avg Price (Remaining)": avg_cost,
+                    "Realized P/L (Cum)": realized_pl,
+                    "Description": desc
+                })
+                continue
+
+            if ttype in ("FEE", "FEES"):
+                realized_pl -= abs(amt) if amt > 0 else -amt  # ensure fee reduces P/L
+                rows_out.append({
+                    "Date": dt_,
+                    "Txn Type": ttype,
+                    "Action": "FEE",
+                    "Qty": 0.0,
+                    "Price": 0.0,
+                    "Fees": 0.0,
+                    "Amount": amt,
+                    "Cumulative Units": units,
+                    "Avg Price (Remaining)": avg_cost,
+                    "Realized P/L (Cum)": realized_pl,
+                    "Description": desc
+                })
+                continue
+
+            # Other transaction types for this ticker
+            rows_out.append({
+                "Date": dt_,
+                "Txn Type": ttype,
+                "Action": "",
+                "Qty": qty,
+                "Price": px,
+                "Fees": fee,
+                "Amount": amt,
+                "Cumulative Units": units,
+                "Avg Price (Remaining)": avg_cost,
+                "Realized P/L (Cum)": realized_pl,
+                "Description": desc
+            })
+        else:
+            # Shorts: treat OPTION_PREMIUM as cashflow, OPTION_FEES as fee outflow.
+            if ttype == "OPTION_PREMIUM":
+                # Positive = collected (STO), Negative = paid (BTC)
+                realized_pl += amt
+                action = "STO" if amt > 0 else "BTC"
+                # Can't reliably derive contract qty without option table, so we keep units as running contract count if parsed from description.
+                rows_out.append({
+                    "Date": dt_,
+                    "Txn Type": ttype,
+                    "Action": action,
+                    "Qty": 0.0,
+                    "Price": 0.0,
+                    "Fees": 0.0,
+                    "Amount": amt,
+                    "Cumulative Units": "",
+                    "Avg Price (Remaining)": "",
+                    "Realized P/L (Cum)": realized_pl,
+                    "Description": desc
+                })
+            elif ttype == "OPTION_FEES":
+                realized_pl -= abs(amt) if amt > 0 else -amt
+                rows_out.append({
+                    "Date": dt_,
+                    "Txn Type": ttype,
+                    "Action": "FEE",
+                    "Qty": 0.0,
+                    "Price": 0.0,
+                    "Fees": 0.0,
+                    "Amount": amt,
+                    "Cumulative Units": "",
+                    "Avg Price (Remaining)": "",
+                    "Realized P/L (Cum)": realized_pl,
+                    "Description": desc
+                })
+            else:
+                rows_out.append({
+                    "Date": dt_,
+                    "Txn Type": ttype,
+                    "Action": "",
+                    "Qty": 0.0,
+                    "Price": 0.0,
+                    "Fees": fee,
+                    "Amount": amt,
+                    "Cumulative Units": "",
+                    "Avg Price (Remaining)": "",
+                    "Realized P/L (Cum)": realized_pl,
+                    "Description": desc
+                })
+
+    out = pd.DataFrame(rows_out)
+    st.dataframe(out, use_container_width=True, hide_index=True)
+
+    # Helpful reconciliation footer
+    if asset_type in ("Stocks", "LEAPs"):
+        st.caption(f"Current units: {units:.4g} | Avg price remaining: {avg_cost:.4f} | "
+                   f"Cumulative realized P/L (incl dividends/fees in register): {realized_pl:.2f}")
+    else:
+        st.caption(f"Cumulative premium P/L (incl option fees in register): {realized_pl:.2f}")
+
 def trade_entry_page(active_user):
     uid = _active_user_id(active_user)
     st.header("⚡ Smart Trade Entry")
@@ -4958,7 +5222,7 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
+    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Register", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
     user = st.session_state.user
     active_user = _set_active_account(user)
     if page == "Dashboard": dashboard_page(active_user)
@@ -4968,6 +5232,7 @@ def main():
     elif page == "Cash Management": cash_management_page(active_user)
     elif page == "Enter Trade": trade_entry_page(active_user)
     elif page == "Ledger": ledger_page(active_user)
+    elif page == "Register": register_page(active_user)
     elif page == "Import Data": import_page(active_user)
     elif page == "Bulk Entries": bulk_entries_page(active_user)
     elif page == "Account & Sharing": account_sharing_page(active_user)
