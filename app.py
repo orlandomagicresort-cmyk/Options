@@ -2070,7 +2070,25 @@ def dashboard_page(active_user):
     else:
         st.info("No Active Short Options.")
 # --- P/L by Ticker (USD) ---
-    st.subheader("P/L by Ticker (USD)")
+    pl_period_options = ["WTD", "MTD", "YTD", "52W", "Lifetime"]
+    pl_title_col, pl_filter_col = st.columns([4, 1])
+    with pl_title_col:
+        st.subheader("P/L by Ticker (USD)")
+    with pl_filter_col:
+        pl_period = st.selectbox("Period", pl_period_options, index=4, key=f"pl_period_{uid}", label_visibility="collapsed")
+
+    # Determine start date for realized P/L filters (unrealized remains current holdings)
+    _today = date.today()
+    pl_start_date = None
+    if pl_period == "WTD":
+        pl_start_date = _today - timedelta(days=_today.weekday())  # Monday
+    elif pl_period == "MTD":
+        pl_start_date = _today.replace(day=1)
+    elif pl_period == "YTD":
+        pl_start_date = _today.replace(month=1, day=1)
+    elif pl_period == "52W":
+        pl_start_date = _today - timedelta(days=364)
+
     try:
         # Ensure holdings dataframes exist (fallback to assets if needed)
         try:
@@ -2148,6 +2166,8 @@ def dashboard_page(active_user):
         tx_rows = []
         try:
             qb = supabase.table("transactions").select("transaction_date,type,amount,description,related_symbol").eq("user_id", uid)
+            if pl_start_date is not None:
+                qb = qb.gte("transaction_date", pl_start_date.isoformat())
             tx_rows = _fetch_all(qb) or []
         except Exception:
             tx_rows = []
