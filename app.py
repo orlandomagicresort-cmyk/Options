@@ -4773,19 +4773,13 @@ def settings_page(user):
 
 
 def register_page(user):
-    """Transaction-by-transaction register to reconcile P/L by ticker.
-
-    Shows cumulative units (shares/contracts) and average cost/credit after each transaction.
-    """
+    """Simple transaction register by ticker for reconciliation."""
     uid = _active_user_id(user)
-    _price_refresh_controls(user, "Register", force_leap_mid=False)
 
     st.header("📒 Register")
-    st.caption("Filter by ticker to review transactions sequentially with running units and average cost/credit.")
+    st.caption("Transaction-by-transaction view by ticker for manual reconciliation.")
 
-    asset_kind = st.radio("Asset Type", ["Stocks", "LEAPs", "Shorts"], horizontal=True)
-
-    # Load transactions (schema uses transaction_date; no fees column)
+    # Load transactions (schema uses transaction_date; no fees/date columns)
     try:
         rows = (
             supabase.table("transactions")
@@ -4806,247 +4800,32 @@ def register_page(user):
 
     df = pd.DataFrame(rows)
     df["transaction_date"] = pd.to_datetime(df["transaction_date"], errors="coerce")
-    df = df.dropna(subset=["transaction_date"]).sort_values("transaction_date")
+    df = df.dropna(subset=["transaction_date"]).sort_values(["transaction_date", "description"])
 
-    # Normalize symbol
-    df["symbol"] = df["related_symbol"].fillna("").astype(str).str.upper().str.strip()
+    df["Ticker"] = df["related_symbol"].fillna("").astype(str).str.upper().str.strip()
+    tickers = sorted([t for t in df["Ticker"].unique().tolist() if t])
 
-    # Attempt to infer symbol from description if related_symbol blank
-    def _infer_symbol(desc: str) -> str:
-        s = (desc or "").upper()
-        # Try to find a likely ticker near BUY/SELL or option pattern
-        m1 = re.search(r"\b(BUY|SELL)\b\s*\d+(?:\.\d+)?\s*([A-Z]{1,6})\b", s)
-        if m1:
-            return m1.group(2)
-        m2 = re.search(r"\b([A-Z]{1,6})\b\s*\|\s*\d{2}-[A-Z]{3}-\d{4}\b", s)
-        if m2:
-            return m2.group(1)
-        return ""
-
-    mask = df["symbol"] == ""
-    df.loc[mask, "symbol"] = df.loc[mask, "description"].apply(_infer_symbol)
-
-    tickers = sorted([t for t in df["symbol"].unique().tolist() if t])
     if not tickers:
-        st.info("No tickers found in transactions (missing related_symbol and no parseable symbol in description).")
+        st.info("No tickers found (related_symbol is blank on all transactions).")
         return
 
     sel = st.selectbox("Ticker", tickers, index=0)
-    tdf = df[df["symbol"] == sel].copy()
 
-    # --- Filter rows by asset type to avoid mixing stock/leap trades with option premium rows ---
-    def _is_stock_like_row(ttype: str, desc: str) -> bool:
-        t = (ttype or "").upper()
-        s = (desc or "").upper()
-        if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
-            return False
-        # stock trades or cash events tied to the ticker
-        if re.search(r"\b(BUY|SELL)\b", s):
-            return True
-        if "DIVIDEND" in t or "INTEREST" in t or "FEE" in t:
-            return True
-        return False
-    def _is_leap_like_row(ttype: str, desc: str) -> bool:
-    t = (ttype or "").upper()
-    s = (desc or "").upper()
-    if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
-        return False
-    # explicit LEAP markers if present
-    if "LEAP" in t or "LEAP" in s:
-        return True
-    # long option entries often include Strike / PUT/CALL / expiry formatting
-    if ("STRIKE" in s and (" PUT" in s or " CALL" in s) and "|" in s and ("BUY" in s or "SELL" in s)):
-        return True
-    # fallback: BUY/SELL lines that contain CALL/PUT are likely long options
-    if re.search(r"\b(BUY|SELL)\b", s) and ("CALL" in s or "PUT" in s):
-        return True
-    return False
-
-    def _is_short_like_row(ttype: str, desc: str) -> bool:
-    t = (ttype or "").upper()
-    s = (desc or "").upper()
-    if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
-        return True
-    if "SELL TO OPEN" in s or "BUY TO CLOSE" in s or " STO" in s or " BTC" in s:
-        return True
-    return False
-
-    if asset_kind == "Stocks":
-    tdf = tdf[tdf.apply(lambda r: _is_stock_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
-    elif asset_kind == "LEAPs":
-    tdf = tdf[tdf.apply(lambda r: _is_leap_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
-    else:
-    tdf = tdf[tdf.apply(lambda r: _is_short_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
-
-    if tdf.empty:
-    st.info("No transactions found for the selected ticker and asset type.")
-    return
-
-
-    # Custom sorting:
-    # 1) transaction_date
-    # 2) Stocks/LEAPs: BUY before SELL
-    # 3) Shorts: SELL before BUY
-    def _action_rank(desc: str, ttype: str) -> int:
-        s = (desc or "").upper()
-        t = (ttype or "").upper()
-        # default lowest priority
-        if asset_kind in ("Stocks", "LEAPs"):
-            if "BUY" in s:
-                return 0
-            if "SELL" in s:
-                return 1
-            return 2
-        else:
-            # Shorts: STO/SELL first, then BTC/BUY
-            if "SELL" in s or "STO" in s:
-                return 0
-            if "BUY" in s or "BTC" in s:
-                return 1
-            return 2
-
-    tdf["_action_rank"] = tdf.apply(lambda r: _action_rank(r.get("description",""), r.get("type","")), axis=1)
-    tdf = tdf.sort_values(["transaction_date", "_action_rank"]).drop(columns=["_action_rank"])
+    tdf = df[df["Ticker"] == sel].copy()
     if tdf.empty:
         st.info("No transactions for selected ticker.")
         return
 
-    # Parse trade lines for stocks/leaps
-    trade_pat = re.compile(
-        r"\b(?P<side>BUY|SELL)\b\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<sym>[A-Z]{1,6})\b.*?(?:@|AT|PRICE|PX)\s*\$?(?P<price>\d+(?:\.\d+)?)",
-        re.IGNORECASE,
-    )
+    out = tdf.rename(columns={
+        "transaction_date": "Transaction Date",
+        "type": "Type",
+        "amount": "Amount",
+        "description": "Description",
+        "related_symbol": "Related Symbol",
+    })[["Transaction Date", "Type", "Amount", "Related Symbol", "Description"]]
 
-    units = 0.0
-    avg_cost = 0.0      # per share for Stocks; per contract for LEAPs
-    avg_credit = 0.0    # per contract for Shorts
-    realized = 0.0
+    st.dataframe(out, use_container_width=True)
 
-    multiplier = 1.0
-    if asset_kind in ("LEAPs", "Shorts"):
-        multiplier = 100.0
-
-    out_rows = []
-
-    for _, r in tdf.iterrows():
-        tdate = r["transaction_date"].date()
-        ttype = str(r.get("type") or "").upper()
-        desc = str(r.get("description") or "")
-        amt = float(r.get("amount") or 0.0)
-
-        action = ""
-        qty = 0.0
-        px = 0.0
-        fee_est = 0.0
-        realized_delta = 0.0
-
-        if asset_kind in ("Stocks", "LEAPs"):
-            m = trade_pat.search(desc.upper())
-            if m:
-                side = m.group("side").upper()
-                qty = float(m.group("qty"))
-                px = float(m.group("price"))
-                gross = qty * px * multiplier
-
-                if side == "BUY":
-                    action = "BUY"
-                    # buys are negative cashflow; fee = (-amt) - gross
-                    fee_est = max(0.0, (-amt) - gross)
-                    total_cost = gross + fee_est
-                    new_units = units + qty
-                    if new_units > 0:
-                        avg_cost = ((units * avg_cost) + (total_cost / multiplier)) / new_units
-                    units = new_units
-
-                else:
-                    action = "SELL"
-                    # sells are positive cashflow; fee = gross - amt
-                    fee_est = max(0.0, gross - amt)
-                    proceeds = gross - fee_est
-                    cost = qty * avg_cost * multiplier
-                    realized_delta = proceeds - cost
-                    realized += realized_delta
-                    units = units - qty
-
-            else:
-                # Non-trade items
-                if "DIVIDEND" in ttype:
-                    action = "DIVIDEND"
-                    realized_delta = amt
-                    realized += realized_delta
-                elif "FEE" in ttype:
-                    action = "FEE"
-                    # fees should reduce P/L
-                    realized_delta = -abs(amt) if amt > 0 else amt
-                    realized += realized_delta
-                elif "INTEREST" in ttype:
-                    action = "INTEREST"
-                    realized_delta = amt
-                    realized += realized_delta
-                else:
-                    action = ttype or "OTHER"
-
-        else:
-            # Shorts: show premium cashflows + option fees; no unrealized
-            s = desc.upper()
-            if "BUY TO CLOSE" in s or " BTC" in s:
-                action = "BTC"
-            elif "SELL TO OPEN" in s or " STO" in s or s.strip().startswith("SELL"):
-                action = "STO"
-            elif "FEE" in ttype:
-                action = "FEE"
-            else:
-                action = ttype or "OTHER"
-
-            # Contracts (best effort)
-            m_qty = re.search(r"\bCONTRACTS?\s*[:=]\s*(\d+(?:\.\d+)?)\b", s)
-            if m_qty:
-                qty = float(m_qty.group(1))
-
-            if "OPTION_FEES" in ttype or "OPTION_FEE" in ttype:
-                realized_delta = amt
-                realized += realized_delta
-            elif "OPTION_PREMIUM" in ttype or "PREMIUM" in ttype:
-                realized_delta = amt
-                realized += realized_delta
-                if qty > 0:
-                    px = abs(amt) / (qty * multiplier)
-                if action == "STO":
-                    new_units = units + qty
-                    if qty > 0 and new_units > 0:
-                        avg_credit = ((units * avg_credit) + (px * qty)) / new_units if units > 0 else px
-                    units = new_units
-                elif action == "BTC":
-                    units = units - qty if qty > 0 else units
-
-        out_rows.append(
-            {
-                "Date": tdate,
-                "Type": ttype,
-                "Action": action,
-                "Qty": qty,
-                "Price": px,
-                "Amount": amt,
-                "Fees (est)": fee_est,
-                "Units (cum)": units,
-                "Avg Cost/Credit": (avg_cost if asset_kind in ("Stocks", "LEAPs") else avg_credit),
-                "Realized Δ": realized_delta,
-                "Realized (cum)": realized,
-                "Description": desc,
-            }
-        )
-
-    out_df = pd.DataFrame(out_rows)
-    st.dataframe(out_df, use_container_width=True)
-
-    st.divider()
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.metric("Units Remaining", f"{out_df['Units (cum)'].iloc[-1]:,.2f}")
-    with c2:
-        st.metric("Avg Cost/Credit", f"{out_df['Avg Cost/Credit'].iloc[-1]:,.4f}")
-    with c3:
-        st.metric("Realized P/L (cum)", f"{out_df['Realized (cum)'].iloc[-1]:,.2f}")
 
 def main():
     # page config already set at top
