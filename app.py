@@ -2243,12 +2243,24 @@ def dashboard_page(active_user):
                     short_real[sym2] = short_real.get(sym2, 0.0) + amt
                 continue
 
-            # Interest/fees should be included in USD line when not tied to a specific ticker
-            if ttype in ("INTEREST", "FEES"):
-                sym2 = sym or "USD"
-                if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    stock_real[sym2] = stock_real.get(sym2, 0.0) + amt
-                continue
+# Interest/fees should be included in USD line when not tied to a specific ticker.
+# Some brokers encode paid interest as types like "INTEREST PAID" / "INTEREST_EXPENSE".
+if ("INTEREST" in ttype) or (ttype in ("FEES", "FEE", "INTEREST")):
+    sym2 = sym or "USD"
+
+    adj_amt = amt
+    # If the type indicates interest paid/expense but amount is positive, flip it negative.
+    if "INTEREST" in ttype and any(x in ttype for x in ["PAID", "EXPENSE"]):
+        if adj_amt > 0:
+            adj_amt = -abs(adj_amt)
+    # If the type indicates interest received/earned but amount is negative, flip it positive.
+    if "INTEREST" in ttype and any(x in ttype for x in ["RECEIVED", "EARNED"]):
+        if adj_amt < 0:
+            adj_amt = abs(adj_amt)
+
+    if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
+        stock_real[sym2] = stock_real.get(sym2, 0.0) + adj_amt
+    continue
 
             # Dividends must be tied to a ticker; otherwise ignore
             if ttype == "DIVIDEND":
