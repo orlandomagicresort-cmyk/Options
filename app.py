@@ -2593,11 +2593,47 @@ def option_details_page(active_user):
                 total_avail = int(sel_row['qty'])
                 
                 with c_act:
-                    action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)"], label_visibility="collapsed")
+                    action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Buy-To-Close (Close Short)"], label_visibility="collapsed")
                 
-                # --- ROLL INPUTS ---
+                # --- ACTION INPUTS ---
                 qty_to_process = total_avail
-                
+
+                # --- BUY-TO-CLOSE INPUTS ---
+                btc_close_date = date.today()
+                btc_close_price = 0.0
+                btc_close_fees = 0.0
+
+                if "Buy-To-Close" in action_choice:
+                    st.markdown("---")
+                    st.caption("🧾 **Buy-To-Close Details**: Buy back the selected short option to close it.")
+                    b_c0, b_c1, b_c2 = st.columns([1, 1, 1])
+                    with b_c0:
+                        btc_close_date = st.date_input(
+                            "Transaction Date",
+                            value=date.today(),
+                            key=f"btc_date_{selected_option_id}"
+                        )
+                    with b_c1:
+                        btc_close_price = st.number_input(
+                            "Premium to Buy Back ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"btc_prem_{selected_option_id}"
+                        )
+                    with b_c2:
+                        btc_close_fees = st.number_input(
+                            "Fees ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"btc_fees_{selected_option_id}"
+                        )
+
+                    calc_btc = float(btc_close_price) * int(qty_to_process) * 100
+                    net_cash = -calc_btc - float(btc_close_fees)
+                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+
                 if "Roll" in action_choice:
                     st.markdown("---")
                     st.caption("🔄 **Roll Details**: Buy back current position and sell a new one.")
@@ -2694,7 +2730,29 @@ def option_details_page(active_user):
                             st.cache_data.clear()
                             st.rerun()
 
-                        # 3. ROLL (BTC then STO; both write to ledger via update_short_option_position)
+                                                # 3. BUY-TO-CLOSE (BTC only; writes to ledger via update_short_option_position)
+                        elif "Buy-To-Close" in action_choice:
+                            qty_safe = int(qty_to_process)
+                            txg = uuid.uuid4().hex[:12]
+
+                            update_short_option_position(
+                                uid,
+                                sel_row['symbol'],
+                                qty_safe,
+                                float(btc_close_price),
+                                "Buy",
+                                btc_close_date,
+                                sel_row['type'],
+                                sel_row['expiration'],
+                                float(sel_row['strike']),
+                                fees=float(btc_close_fees),
+                                txg=txg
+                            )
+
+                            st.success("Buy-To-Close recorded.")
+                            st.rerun()
+
+# 3. ROLL (BTC then STO; both write to ledger via update_short_option_position)
                         elif "Roll" in action_choice:
                             qty_safe = int(qty_to_process)
 
