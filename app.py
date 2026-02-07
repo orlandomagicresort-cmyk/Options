@@ -4834,19 +4834,18 @@ def register_page(user):
     sel = st.selectbox("Ticker", tickers, index=0)
     tdf = df[df["symbol"] == sel].copy()
 
-# --- Filter rows by asset type to avoid mixing stock/leap trades with option premium rows ---
-def _is_stock_like_row(ttype: str, desc: str) -> bool:
-    t = (ttype or "").upper()
-    s = (desc or "").upper()
-    if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
+    # --- Filter rows by asset type to avoid mixing stock/leap trades with option premium rows ---
+    def _is_stock_like_row(ttype: str, desc: str) -> bool:
+        t = (ttype or "").upper()
+        s = (desc or "").upper()
+        if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
+            return False
+        # stock trades or cash events tied to the ticker
+        if re.search(r"\b(BUY|SELL)\b", s):
+            return True
+        if "DIVIDEND" in t or "INTEREST" in t or "FEE" in t:
+            return True
         return False
-    # stock trades or cash events tied to the ticker
-    if re.search(r"\b(BUY|SELL)\b", s):
-        return True
-    if "DIVIDEND" in t or "INTEREST" in t or "FEE" in t:
-        return True
-    return False
-
 def _is_leap_like_row(ttype: str, desc: str) -> bool:
     t = (ttype or "").upper()
     s = (desc or "").upper()
