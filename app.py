@@ -1101,8 +1101,8 @@ def update_asset_position(
     asset_type="STOCK",
     expiration=None,
     strike: float = 0.0,
-    txg: Optional[str] = None,
-):
+    fees: float = 0.0,
+    txg: Optional[str] = None,):
 
     if st.session_state.get("read_only"):
         st.error("Read-only access: you don't have permission to modify this account.")
@@ -3328,7 +3328,7 @@ def import_page(user):
                     fees = get_fees(row)
                     final_action = clean_action_input(row.get('action', 'Buy'))
                     
-                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), "STOCK"=fees)
+                    update_asset_position(user.id, str(row.get('ticker','')).upper(), qty, price, final_action, row['date_parsed'].date(), asset_type="STOCK", fees=fees)
                     count += 1
                 st.success(f"Processed {count} stock transactions.")
             except Exception as e: st.error(f"Error: {e}")
@@ -3529,7 +3529,7 @@ def import_page(user):
                         
                         # --- ROUTING LOGIC ---
                         if cat_mode == 'STOCK':
-                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), "STOCK"=fees)
+                            update_asset_position(user.id, sym, qty, price, act, r['date_parsed'].date(), asset_type="STOCK", fees=fees)
                             
                         elif cat_mode == 'LEAP':
                             # Asset Logic
@@ -4424,7 +4424,7 @@ def trade_entry_page(active_user):
             fees = c3.number_input("Total Fees", min_value=0.0, step=0.01, value=0.0)
             
             if st.button("Submit Stock Trade", type="primary"):
-                update_asset_position(uid, symbol, qty, price, action, trade_date, "STOCK"=fees)
+                update_asset_position(uid, symbol, qty, price, action, trade_date, asset_type="STOCK", fees=fees)
                 st.session_state['txn_success_msg'] = f"Recorded {action} {qty} {symbol} (Fees: ${fees})."; st.session_state['te_reset_pending'] = True; st.session_state['te_reset_pending'] = True; st.rerun()
         else:
             c1, c2, c3 = st.columns(3)
@@ -5123,7 +5123,7 @@ def bulk_entries_page(active_user):
                     exp_dt = date.fromisoformat(exp[:10]) if exp else (_third_friday_next_december(d) if asset == "LEAP" else _next_friday(d))
 
                     if asset == "Stock":
-                        update_asset_position(uid, sym, float(qty), price, "Sell" if action == "Sell" else "Buy", d, "STOCK"=fees)
+                        update_asset_position(uid, sym, float(qty), price, "Sell" if action == "Sell" else "Buy", d, asset_type="STOCK", fees=fees)
                         ok += 1
                         continue
 
