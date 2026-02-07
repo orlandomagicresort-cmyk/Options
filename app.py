@@ -4771,11 +4771,6 @@ def settings_page(user):
                 st.session_state.confirm_reset = False; st.success("Account reset."); st.rerun()
             if c2.button("Cancel"): st.session_state.confirm_reset = False; st.rerun()
 
-def main():
-    # page config already set at top
-    
-    force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
-    
 
 def register_page(user):
     """Transaction-by-transaction register to reconcile P/L by ticker.
@@ -4790,7 +4785,7 @@ def register_page(user):
 
     asset_kind = st.radio("Asset Type", ["Stocks", "LEAPs", "Shorts"], horizontal=True)
 
-    # Load transactions (no 'date' or 'fees' column in your schema)
+    # Load transactions (schema uses transaction_date; no fees column)
     try:
         rows = (
             supabase.table("transactions")
@@ -4810,57 +4805,54 @@ def register_page(user):
         return
 
     df = pd.DataFrame(rows)
-    # Normalize date
     df["transaction_date"] = pd.to_datetime(df["transaction_date"], errors="coerce")
     df = df.dropna(subset=["transaction_date"]).sort_values("transaction_date")
 
     # Normalize symbol
     df["symbol"] = df["related_symbol"].fillna("").astype(str).str.upper().str.strip()
-    # Fallback: attempt to infer symbol from description if related_symbol blank
-    def _infer_symbol(desc: str) -> str:
-        try:
-            s = (desc or "").upper()
-        except Exception:
-            return ""
-        m = re.search(r"\b([A-Z]{1,6})\b", s)
-        return m.group(1) if m else ""
-    df.loc[df["symbol"] == "", "symbol"] = df.loc[df["symbol"] == "", "description"].apply(_infer_symbol)
 
-    # Ticker filter
+    # Attempt to infer symbol from description if related_symbol blank
+    def _infer_symbol(desc: str) -> str:
+        s = (desc or "").upper()
+        # Try to find a likely ticker near BUY/SELL or option pattern
+        m1 = re.search(r"\b(BUY|SELL)\b\s*\d+(?:\.\d+)?\s*([A-Z]{1,6})\b", s)
+        if m1:
+            return m1.group(2)
+        m2 = re.search(r"\b([A-Z]{1,6})\b\s*\|\s*\d{2}-[A-Z]{3}-\d{4}\b", s)
+        if m2:
+            return m2.group(1)
+        return ""
+
+    mask = df["symbol"] == ""
+    df.loc[mask, "symbol"] = df.loc[mask, "description"].apply(_infer_symbol)
+
     tickers = sorted([t for t in df["symbol"].unique().tolist() if t])
     if not tickers:
         st.info("No tickers found in transactions (missing related_symbol and no parseable symbol in description).")
         return
 
     sel = st.selectbox("Ticker", tickers, index=0)
-
     tdf = df[df["symbol"] == sel].copy()
     if tdf.empty:
         st.info("No transactions for selected ticker.")
         return
 
-    # Helpers to parse trade lines
-    # Supports patterns like:
-    # BUY 100 AAPL @ 100.00
-    # Sell 10 MSFT at 402.12
+    # Parse trade lines for stocks/leaps
     trade_pat = re.compile(
         r"\b(?P<side>BUY|SELL)\b\s*(?P<qty>\d+(?:\.\d+)?)\s*(?P<sym>[A-Z]{1,6})\b.*?(?:@|AT|PRICE|PX)\s*\$?(?P<price>\d+(?:\.\d+)?)",
         re.IGNORECASE,
     )
 
-    # Shorts: detect STO/BTC from description keywords
-    short_side_pat = re.compile(r"\b(SELL\s*TO\s*OPEN|STO|SELL)\b|\b(BUY\s*TO\s*CLOSE|BTC|BUY)\b", re.IGNORECASE)
-
-    # Running state
     units = 0.0
-    avg_cost = 0.0  # stocks/leaps avg cost per share/contract
-    avg_credit = 0.0  # shorts avg credit per contract
+    avg_cost = 0.0      # per share for Stocks; per contract for LEAPs
+    avg_credit = 0.0    # per contract for Shorts
     realized = 0.0
 
-    out_rows = []
     multiplier = 1.0
     if asset_kind in ("LEAPs", "Shorts"):
         multiplier = 100.0
+
+    out_rows = []
 
     for _, r in tdf.iterrows():
         tdate = r["transaction_date"].date()
@@ -4884,86 +4876,74 @@ def register_page(user):
 
                 if side == "BUY":
                     action = "BUY"
-                    # fee estimate if amount includes fees (amount negative)
-                    # amount is cash change; buys are negative. Fee = (-amt) - gross
+                    # buys are negative cashflow; fee = (-amt) - gross
                     fee_est = max(0.0, (-amt) - gross)
                     total_cost = gross + fee_est
                     new_units = units + qty
                     if new_units > 0:
-                        avg_cost = ((units * avg_cost) + total_cost / multiplier) / new_units
+                        avg_cost = ((units * avg_cost) + (total_cost / multiplier)) / new_units
                     units = new_units
 
-                elif side == "SELL":
+                else:
                     action = "SELL"
-                    # sells are positive; fee = gross - amt
+                    # sells are positive cashflow; fee = gross - amt
                     fee_est = max(0.0, gross - amt)
                     proceeds = gross - fee_est
                     cost = qty * avg_cost * multiplier
                     realized_delta = proceeds - cost
                     realized += realized_delta
                     units = units - qty
-                    # avg_cost unchanged for remaining units
 
             else:
-                # Non-trade items that still affect ticker P/L
+                # Non-trade items
                 if "DIVIDEND" in ttype:
                     action = "DIVIDEND"
                     realized_delta = amt
                     realized += realized_delta
                 elif "FEE" in ttype:
                     action = "FEE"
+                    # fees should reduce P/L
                     realized_delta = -abs(amt) if amt > 0 else amt
+                    realized += realized_delta
+                elif "INTEREST" in ttype:
+                    action = "INTEREST"
+                    realized_delta = amt
                     realized += realized_delta
                 else:
                     action = ttype or "OTHER"
 
         else:
-            # Shorts: treat amount as signed premium cashflow per your rules
-            # Identify buy vs sell from description
+            # Shorts: show premium cashflows + option fees; no unrealized
             s = desc.upper()
-            side = None
-            if "BUY TO CLOSE" in s or "\nBTC" in s or " BTC" in s:
-                side = "BTC"
+            if "BUY TO CLOSE" in s or " BTC" in s:
+                action = "BTC"
             elif "SELL TO OPEN" in s or " STO" in s or s.strip().startswith("SELL"):
-                side = "STO"
+                action = "STO"
+            elif "FEE" in ttype:
+                action = "FEE"
+            else:
+                action = ttype or "OTHER"
 
-            # Try extract contracts + premium from description like: "Contracts: 2" or "x2"
+            # Contracts (best effort)
             m_qty = re.search(r"\bCONTRACTS?\s*[:=]\s*(\d+(?:\.\d+)?)\b", s)
-            if not m_qty:
-                m_qty = re.search(r"\bX\s*(\d+(?:\.\d+)?)\b", s)
             if m_qty:
                 qty = float(m_qty.group(1))
-            else:
-                # fallback: infer from cashflow if possible; if not, leave 0
-                qty = 0.0
 
-            # Fee rows
-            if "OPTION_FEE" in ttype or "OPTION_FEES" in ttype:
-                action = "FEE"
+            if "OPTION_FEES" in ttype or "OPTION_FEE" in ttype:
                 realized_delta = amt
                 realized += realized_delta
             elif "OPTION_PREMIUM" in ttype or "PREMIUM" in ttype:
-                if side is None:
-                    # guess by sign
-                    side = "STO" if amt > 0 else "BTC"
-                action = side
-                if qty > 0:
-                    px = abs(amt) / (qty * multiplier)
-                else:
-                    px = 0.0
-                # Premium cashflow itself is realized immediately
                 realized_delta = amt
                 realized += realized_delta
-                # Track open contracts for reference
-                if side == "STO":
+                if qty > 0:
+                    px = abs(amt) / (qty * multiplier)
+                if action == "STO":
                     new_units = units + qty
-                    if new_units > 0 and qty > 0:
+                    if qty > 0 and new_units > 0:
                         avg_credit = ((units * avg_credit) + (px * qty)) / new_units if units > 0 else px
                     units = new_units
-                elif side == "BTC":
+                elif action == "BTC":
                     units = units - qty if qty > 0 else units
-            else:
-                action = ttype or "OTHER"
 
         out_rows.append(
             {
@@ -4983,20 +4963,23 @@ def register_page(user):
         )
 
     out_df = pd.DataFrame(out_rows)
-
-    # Display
     st.dataframe(out_df, use_container_width=True)
 
-    # Quick totals at bottom for manual reconciliation
     st.divider()
-    colA, colB, colC = st.columns(3)
-    with colA:
+    c1, c2, c3 = st.columns(3)
+    with c1:
         st.metric("Units Remaining", f"{out_df['Units (cum)'].iloc[-1]:,.2f}")
-    with colB:
+    with c2:
         st.metric("Avg Cost/Credit", f"{out_df['Avg Cost/Credit'].iloc[-1]:,.4f}")
-    with colC:
+    with c3:
         st.metric("Realized P/L (cum)", f"{out_df['Realized (cum)'].iloc[-1]:,.2f}")
 
+
+def main():
+    # page config already set at top
+    
+    force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
+    
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
     page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Register", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
