@@ -4834,6 +4834,56 @@ def register_page(user):
     sel = st.selectbox("Ticker", tickers, index=0)
     tdf = df[df["symbol"] == sel].copy()
 
+# --- Filter rows by asset type to avoid mixing stock/leap trades with option premium rows ---
+def _is_stock_like_row(ttype: str, desc: str) -> bool:
+    t = (ttype or "").upper()
+    s = (desc or "").upper()
+    if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
+        return False
+    # stock trades or cash events tied to the ticker
+    if re.search(r"\b(BUY|SELL)\b", s):
+        return True
+    if "DIVIDEND" in t or "INTEREST" in t or "FEE" in t:
+        return True
+    return False
+
+def _is_leap_like_row(ttype: str, desc: str) -> bool:
+    t = (ttype or "").upper()
+    s = (desc or "").upper()
+    if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
+        return False
+    # explicit LEAP markers if present
+    if "LEAP" in t or "LEAP" in s:
+        return True
+    # long option entries often include Strike / PUT/CALL / expiry formatting
+    if ("STRIKE" in s and (" PUT" in s or " CALL" in s) and "|" in s and ("BUY" in s or "SELL" in s)):
+        return True
+    # fallback: BUY/SELL lines that contain CALL/PUT are likely long options
+    if re.search(r"\b(BUY|SELL)\b", s) and ("CALL" in s or "PUT" in s):
+        return True
+    return False
+
+def _is_short_like_row(ttype: str, desc: str) -> bool:
+    t = (ttype or "").upper()
+    s = (desc or "").upper()
+    if "OPTION_PREMIUM" in t or "OPTION_FEE" in t or "OPTION_FEES" in t:
+        return True
+    if "SELL TO OPEN" in s or "BUY TO CLOSE" in s or " STO" in s or " BTC" in s:
+        return True
+    return False
+
+if asset_kind == "Stocks":
+    tdf = tdf[tdf.apply(lambda r: _is_stock_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
+elif asset_kind == "LEAPs":
+    tdf = tdf[tdf.apply(lambda r: _is_leap_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
+else:
+    tdf = tdf[tdf.apply(lambda r: _is_short_like_row(r.get("type",""), r.get("description","")), axis=1)].copy()
+
+if tdf.empty:
+    st.info("No transactions found for the selected ticker and asset type.")
+    return
+
+
     # Custom sorting:
     # 1) transaction_date
     # 2) Stocks/LEAPs: BUY before SELL
