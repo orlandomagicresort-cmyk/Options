@@ -4671,7 +4671,7 @@ def trade_entry_page(active_user):
                 else:
                     # Short option liability tracked in options table (buy = close / sell = open)
                     update_short_option_position(
-                        uid, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike= linked_asset_id_override=linked_id
+                        uid, symbol, qty, prem, action, trade_date, opt_type, exp_date, strike=strike, linked_asset_id_override=linked_id
                     )
                 mode_lbl = "LEAP" if pos_mode.startswith("Long") else "Short Option"
                 st.session_state["txn_success_msg"] = f"Recorded {action} {qty} {symbol} {mode_lbl} (Fees: ${fees})."
