@@ -2603,14 +2603,23 @@ def option_details_page(active_user):
                 if "Buy-To-Close" in action_choice:
                     st.markdown("---")
                     st.caption("🧾 **Buy-To-Close Details**: Buy back the selected short option to close it.")
-                    b_c0, b_c1, b_c2 = st.columns([1, 1, 1])
+                    b_c0, b_c1, b_c2, b_c3 = st.columns([1, 1, 1, 1])
                     with b_c0:
+                        qty_to_process = st.number_input(
+                            "Contracts to Close",
+                            min_value=1,
+                            max_value=total_avail,
+                            value=total_avail,
+                            step=1,
+                            key=f"btc_qty_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+                    with b_c1:
                         btc_close_date = st.date_input(
                             "Transaction Date",
                             value=date.today(),
                             key=f"btc_date_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
                         )
-                    with b_c1:
+                    with b_c2:
                         btc_close_price = st.number_input(
                             "Premium to Buy Back ($)",
                             min_value=0.0,
@@ -2618,7 +2627,7 @@ def option_details_page(active_user):
                             step=0.01,
                             key=f"btc_prem_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
                         )
-                    with b_c2:
+                    with b_c3:
                         btc_close_fees = st.number_input(
                             "Fees ($)",
                             min_value=0.0,
