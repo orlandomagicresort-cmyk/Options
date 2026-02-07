@@ -2291,7 +2291,7 @@ def dashboard_page(active_user):
                 st.info("No P/L data available yet.")
             else:
                 df_pl = pd.DataFrame(rows)
-                df_pl = df_pl.sort_values(by="Total", ascending=False, key=lambda s: s.abs()).reset_index(drop=True)
+                df_pl = df_pl.sort_values(by="Ticker", ascending=True).reset_index(drop=True)
 
                 # Totals row
                 tot_stock = float(df_pl["Stock P/L"].sum())
