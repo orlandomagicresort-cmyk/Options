@@ -2089,6 +2089,22 @@ def dashboard_page(active_user):
     elif pl_period == "52W":
         pl_start_date = _today - timedelta(days=364)
 
+    # Match Dashboard summary profit for the selected period (flow-adjusted)
+    profit_target = None
+    try:
+        if pl_period == "WTD":
+            profit_target = float(wtd_profit)
+        elif pl_period == "MTD":
+            profit_target = float(mtd_profit)
+        elif pl_period == "YTD":
+            profit_target = float(ytd_profit)
+        elif pl_period == "52W":
+            profit_target = float(perf_52w_profit)
+        elif pl_period == "Lifetime":
+            profit_target = float(life_profit)
+    except Exception:
+        profit_target = None
+
     try:
         # Ensure holdings dataframes exist (fallback to assets if needed)
         try:
@@ -2289,6 +2305,17 @@ def dashboard_page(active_user):
                 tot_unreal += v_unreal
                 tot_itm += v_itm
                 tot_total += v_total
+            # Add an UNALLOCATED row so the Total matches the Dashboard summary profit for the selected period.
+            tot_total_display = tot_total
+            if profit_target is not None:
+                residual = float(profit_target) - float(tot_total)
+                if abs(residual) >= 0.01:
+                    pl_html += (
+                        f"<tr><td>UNALLOCATED</td>"
+                        f"{_pl_td(0.0)}{_pl_td(0.0)}{_pl_td(0.0)}{_pl_td(0.0)}{_pl_td(0.0)}{_pl_td(residual)}</tr>"
+                    )
+                    tot_total_display = float(tot_total) + residual
+
 
             pl_html += (
                 f"<tr class='total-row'><td>Total</td>"
@@ -2297,7 +2324,7 @@ def dashboard_page(active_user):
                 f"<td class='{'pl-pos' if tot_short >= 0 else 'pl-neg'}'>${tot_short:,.2f}</td>"
                 f"<td class='{'pl-pos' if tot_unreal >= 0 else 'pl-neg'}'>${tot_unreal:,.2f}</td>"
                 f"<td class='{'pl-pos' if tot_itm >= 0 else 'pl-neg'}'>${tot_itm:,.2f}</td>"
-                f"<td class='{'pl-pos' if tot_total >= 0 else 'pl-neg'}'>${tot_total:,.2f}</td></tr>"
+                f"<td class='{'pl-pos' if tot_total_display >= 0 else 'pl-neg'}'>${tot_total_display:,.2f}</td></tr>"
             )
 
             pl_html += "</tbody></table>"
