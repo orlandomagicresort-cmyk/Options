@@ -2746,6 +2746,73 @@ def option_details_page(active_user):
                             st.cache_data.clear()
                             st.rerun()
 
+
+        st.markdown("---")
+        st.subheader("🧾 Buy-To-Close a Short Option")
+
+        # Build a BTC dropdown using a cleaner combined label format
+        btc_map = {}
+        try:
+            for row in final_display_list:
+                try:
+                    sym = str(row.get("symbol") or "").upper().strip()
+                    exp_raw = str(row.get("expiration") or "")[:10]
+                    exp_disp = format_date_custom(exp_raw)
+                    strike_val = float(row.get("strike") or 0)
+                    typ = str(row.get("type") or "").upper().strip()
+                    qty_open = int(float(row.get("qty") or 0))
+                    if not sym or qty_open <= 0:
+                        continue
+                    lbl = f"{sym} | {exp_disp} | Strike: ${strike_val:,.2f} | Contracts: {qty_open} | {typ}"
+                    btc_map[lbl] = row
+                except Exception:
+                    continue
+        except Exception:
+            btc_map = {}
+
+        if not btc_map:
+            st.info("No open short options available to buy back.")
+        else:
+            btc_sel = st.selectbox("Select short option", options=list(btc_map.keys()), key="btc_sel_contract")
+            btc_row = btc_map.get(btc_sel)
+
+            b1, b2, b3, b4 = st.columns([1.2, 1.0, 1.0, 1.0])
+            with b1:
+                btc_date = st.date_input("Transaction date", value=date.today(), key="btc_txn_date")
+            with b2:
+                max_qty = int(float(btc_row.get("qty") or 0)) if btc_row else 1
+                btc_qty = st.number_input("Contracts to close", min_value=1, max_value=max_qty, value=max_qty, step=1, key="btc_qty")
+            with b3:
+                btc_premium = st.number_input("Premium to buy back", min_value=0.0, step=0.01, format="%.2f", key="btc_premium")
+            with b4:
+                btc_fees = st.number_input("Fees", min_value=0.0, step=0.01, format="%.2f", value=0.0, key="btc_fees")
+
+            btc_disabled = bool(st.session_state.get("read_only"))
+            if st.button("Submit Buy-To-Close", type="primary", disabled=btc_disabled, key="btc_submit"):
+                _require_editor()
+
+                if not btc_row:
+                    st.error("Please select a short option to buy back.")
+                    st.stop()
+
+                # Record BTC via the same ledger logic as roll (Buy closes short)
+                update_short_option_position(
+                    uid,
+                    str(btc_row.get("symbol") or "").upper().strip(),
+                    int(btc_qty),
+                    float(btc_premium),
+                    "Buy",
+                    btc_date,
+                    str(btc_row.get("type") or "PUT").upper().strip(),
+                    str(btc_row.get("expiration") or "")[:10],
+                    float(btc_row.get("strike") or 0),
+                    fees=float(btc_fees or 0.0),
+                )
+
+                st.success("Buy-To-Close recorded.")
+                st.cache_data.clear()
+                st.rerun()
+
     else: st.info("No Active Short Options.")
 
 def snapshot_page(user):
