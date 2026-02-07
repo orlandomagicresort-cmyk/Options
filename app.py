@@ -2217,20 +2217,51 @@ def dashboard_page(active_user):
             amt = float(clean_number(r.get("amount", 0) or 0))
             desc = str(r.get("description", "") or "")
 
-            if not sym or sym == "CASH":
-                continue
+            def _infer_symbol_from_text(text: str) -> str:
+                # Attempt to find a ticker-like token in the description when related_symbol is missing
+                if not text:
+                    return ""
+                m = re.search(r"\b([A-Z]{1,6}(?:\.[A-Z]{1,3})?)\b", text.upper())
+                if not m:
+                    return ""
+                cand = m.group(1)
+                # Filter obvious non-tickers
+                if cand in {"BUY", "SELL", "CALL", "PUT", "OPTION", "PREMIUM", "FEE", "FEES", "INTEREST", "DIVIDEND"}:
+                    return ""
+                return cand
 
-            # Shorts: premium cashflows
+            # --------------------------
+            # Cash-like transactions that may have missing symbols
+            # --------------------------
+
+            # Shorts: premium + fees cashflows (sells collected minus buys/fees paid)
             if ttype in ("OPTION_PREMIUM", "OPTION_FEES"):
+                sym2 = sym or _infer_symbol_from_text(desc)
+                if not sym2:
+                    sym2 = "USD"
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    short_real[sym] = short_real.get(sym, 0.0) + amt
+                    short_real[sym2] = short_real.get(sym2, 0.0) + amt
                 continue
 
-            # Allocate dividends/interest/fees to the underlying ticker P/L (these affect portfolio performance)
-            if ttype in ("DIVIDEND", "INTEREST", "FEES"):
-                if sym and sym != "UNK":
+            # Interest/fees should be included in USD line when not tied to a specific ticker
+            if ttype in ("INTEREST", "FEES"):
+                sym2 = sym or "USD"
+                if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
+                    stock_real[sym2] = stock_real.get(sym2, 0.0) + amt
+                continue
+
+            # Dividends must be tied to a ticker; otherwise ignore
+            if ttype == "DIVIDEND":
+                if sym:
                     if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
                         stock_real[sym] = stock_real.get(sym, 0.0) + amt
+                continue
+
+            # If still no symbol, we can't attribute trade rows safely
+            if not sym or sym == "CASH":
+                # Try to infer from description for trade rows
+                sym = _infer_symbol_from_text(desc)
+            if not sym:
                 continue
 
             parsed = _parse_trade_desc(desc)
@@ -2238,7 +2269,22 @@ def dashboard_page(active_user):
                 continue
             action, qty, psym, price = parsed
 
+            # Determine whether this is a LEAP leg
             is_leap = ("LEAP" in ttype) or ("LEAP" in desc.upper())
+
+            # Estimate per-transaction fees from cash amount vs gross (when amount includes fees)
+            # This is critical so that the ticker table ties out to the portfolio P/L.
+            mult = 100.0 if is_leap else 1.0
+            gross = qty * price * mult
+            fee_est = 0.0
+            if action == "Buy":
+                # cash outflow is typically negative; total spent includes fees
+                total_spent = -amt if amt < 0 else gross
+                fee_est = max(0.0, total_spent - gross)
+            else:  # Sell
+                # cash inflow is typically positive; fee reduces cash received vs gross
+                cash_in = amt if amt > 0 else gross
+                fee_est = max(0.0, gross - cash_in)
 
             if not is_leap:
                 q = float(stock_qty.get(psym, 0.0) or 0.0)
@@ -2246,12 +2292,12 @@ def dashboard_page(active_user):
 
                 if action == "Buy":
                     stock_qty[psym] = q + qty
-                    stock_cost[psym] = c + (qty * price)
+                    stock_cost[psym] = c + (qty * price) + fee_est
                 else:  # Sell
                     if q <= 0:
                         continue
                     avg = c / q if q != 0 else 0.0
-                    pl = (price - avg) * qty
+                    pl = (price - avg) * qty - fee_est
                     # Only count realized P/L if within selected period
                     if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
                         stock_real[psym] = stock_real.get(psym, 0.0) + pl
@@ -2264,19 +2310,18 @@ def dashboard_page(active_user):
 
                 if action == "Buy":
                     leap_qty[psym] = q + qty
-                    leap_cost[psym] = c + (qty * price)
+                    leap_cost[psym] = c + (qty * price) + (fee_est / 100.0)
                 else:
                     if q <= 0:
                         continue
                     avg = c / q if q != 0 else 0.0
-                    pl = (price - avg) * qty * 100.0
+                    pl = (price - avg) * qty * 100.0 - fee_est
                     if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
                         leap_real[psym] = leap_real.get(psym, 0.0) + pl
                     q_new = q - qty
                     leap_qty[psym] = q_new
                     leap_cost[psym] = avg * q_new
-
-        # Remove near-zero noise
+# Remove near-zero noise
         stock_real = {k:v for k,v in stock_real.items() if abs(v) >= 0.005}
         leap_real  = {k:v for k,v in leap_real.items() if abs(v) >= 0.005}
         short_real = {k:v for k,v in short_real.items() if abs(v) >= 0.005}
