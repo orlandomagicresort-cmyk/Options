@@ -4833,6 +4833,31 @@ def register_page(user):
 
     sel = st.selectbox("Ticker", tickers, index=0)
     tdf = df[df["symbol"] == sel].copy()
+
+    # Custom sorting:
+    # 1) transaction_date
+    # 2) Stocks/LEAPs: BUY before SELL
+    # 3) Shorts: SELL before BUY
+    def _action_rank(desc: str, ttype: str) -> int:
+        s = (desc or "").upper()
+        t = (ttype or "").upper()
+        # default lowest priority
+        if asset_kind in ("Stocks", "LEAPs"):
+            if "BUY" in s:
+                return 0
+            if "SELL" in s:
+                return 1
+            return 2
+        else:
+            # Shorts: STO/SELL first, then BTC/BUY
+            if "SELL" in s or "STO" in s:
+                return 0
+            if "BUY" in s or "BTC" in s:
+                return 1
+            return 2
+
+    tdf["_action_rank"] = tdf.apply(lambda r: _action_rank(r.get("description",""), r.get("type","")), axis=1)
+    tdf = tdf.sort_values(["transaction_date", "_action_rank"]).drop(columns=["_action_rank"])
     if tdf.empty:
         st.info("No transactions for selected ticker.")
         return
