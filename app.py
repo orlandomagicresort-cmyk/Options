@@ -4093,9 +4093,9 @@ def register_page(active_user):
                "Use this to reconcile the P/L by Ticker view.")
 
     # --- Load all USD transactions for the active account ---
-    cols = "id, created_at, date, type, amount, fees, currency, description, related_symbol, option_id"
+    cols = "id, created_at, transaction_date, type, amount, fees, currency, description, related_symbol, option_id"
     try:
-        qb = supabase.table("transactions").select(cols).eq("user_id", uid).eq("currency", "USD").order("date", desc=False)
+        qb = supabase.table("transactions").select(cols).eq("user_id", uid).eq("currency", "USD").order("transaction_date", desc=False)
         rows = _fetch_all(qb)
     except Exception as e:
         st.error(f"Failed to load transactions: {e}")
@@ -4110,8 +4110,8 @@ def register_page(active_user):
     for c in ["description", "type", "related_symbol", "currency"]:
         if c in df.columns:
             df[c] = df[c].fillna("").astype(str)
-    if "date" in df.columns:
-        df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
+    if "transaction_date" in df.columns:
+        df["transaction_date"] = pd.to_datetime(df["transaction_date"], errors="coerce").dt.date
     if "amount" in df.columns:
         df["amount"] = pd.to_numeric(df["amount"], errors="coerce").fillna(0.0)
 
@@ -4194,7 +4194,7 @@ def register_page(active_user):
     multiplier = 100.0 if asset_type == "LEAPs" else 1.0
 
     for _, r in tdf.iterrows():
-        dt_ = r.get("date")
+        dt_ = r.get("transaction_date")
         ttype = (r.get("type") or "").upper()
         desc = r.get("description") or ""
         amt = float(r.get("amount") or 0.0)
