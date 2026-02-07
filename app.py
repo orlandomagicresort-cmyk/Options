@@ -2974,7 +2974,7 @@ def option_details_page(active_user):
                                 btc_close_date,
                                 sel_row['type'],
                                 sel_row['expiration'],
-                                float(sel_row['strike'])=float(btc_close_fees),
+                                fees=float(btc_close_fees),
                                 txg=txg
                             )
 
@@ -3008,7 +3008,7 @@ def option_details_page(active_user):
                                 roll_date,
                                 sel_row['type'],
                                 sel_row['expiration'],
-                                float(sel_row['strike'])=float(roll_btc_fees),
+                                fees=float(btc_close_fees),
                                 txg=txg
                             )
 
