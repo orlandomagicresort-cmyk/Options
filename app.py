@@ -2204,6 +2204,7 @@ def dashboard_page(active_user):
         stock_real = {}
         leap_real = {}
         short_real = {}
+        interest_total = 0.0  # separate Interest line
 
         for r in tx_rows:
             # Parse date
@@ -2243,26 +2244,33 @@ def dashboard_page(active_user):
                     short_real[sym2] = short_real.get(sym2, 0.0) + amt
                 continue
 
-            # Interest/fees should be included in USD line when not tied to a specific ticker.
-            # Some brokers encode paid interest as types like "INTEREST PAID" / "INTEREST_EXPENSE".
-            if ("INTEREST" in ttype) or (ttype in ("FEES", "FEE", "INTEREST")):
-                sym2 = sym or "USD"
-            
+            # Interest is shown on a separate line ("Interest") under Stock P/L.
+            if "INTEREST" in ttype:
                 adj_amt = amt
-                # If the type indicates interest paid/expense but amount is positive, flip it negative.
-                if "INTEREST" in ttype and any(x in ttype for x in ["PAID", "EXPENSE"]):
-                    if adj_amt > 0:
-                        adj_amt = -abs(adj_amt)
-                # If the type indicates interest received/earned but amount is negative, flip it positive.
-                if "INTEREST" in ttype and any(x in ttype for x in ["RECEIVED", "EARNED"]):
-                    if adj_amt < 0:
-                        adj_amt = abs(adj_amt)
-            
+                ttype_u = ttype.upper()
+                desc_u = desc.upper()
+                # treat paid/expense as negative
+                if ("PAID" in ttype_u) or ("EXPENSE" in ttype_u) or ("PAID" in desc_u) or ("EXPENSE" in desc_u):
+                    adj_amt = -abs(adj_amt)
+                else:
+                    # received/earned
+                    adj_amt = abs(adj_amt)
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
-                    stock_real[sym2] = stock_real.get(sym2, 0.0) + adj_amt
+                    interest_total += adj_amt
                 continue
 
-            # Dividends must be tied to a ticker; otherwise ignore
+            # General fees (non-option fees) reduce P/L. Attribute to ticker if available, else USD.
+            if ttype in ("FEES", "FEE", "COMMISSION", "COMMISSIONS"):
+                sym2 = sym or "USD"
+                fee_amt = amt
+                # fees should reduce profit
+                if fee_amt > 0:
+                    fee_amt = -abs(fee_amt)
+                if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
+                    stock_real[sym2] = stock_real.get(sym2, 0.0) + fee_amt
+                continue
+
+# Dividends must be tied to a ticker; otherwise ignore
             if ttype == "DIVIDEND":
                 if sym:
                     if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
@@ -2370,6 +2378,19 @@ def dashboard_page(active_user):
                     "Unrealized P/L": v_unrl,
                     "ITM $": v_itm,
                     "Total": total
+                })
+
+
+            # Add Interest line (separate, not tied to tickers)
+            if abs(interest_total) >= 0.005:
+                rows.append({
+                    "Ticker": "Interest",
+                    "Stock P/L": interest_total,
+                    "LEAP P/L": 0.0,
+                    "Short P/L": 0.0,
+                    "Unrealized P/L": 0.0,
+                    "ITM $": 0.0,
+                    "Total": interest_total
                 })
 
             if not rows:
