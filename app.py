@@ -2205,6 +2205,13 @@ def dashboard_page(active_user):
                     short_real[sym] = short_real.get(sym, 0.0) + amt
                 continue
 
+            # Allocate dividends/interest/fees to the underlying ticker P/L (these affect portfolio performance)
+            if ttype in ("DIVIDEND", "INTEREST", "FEES"):
+                if sym and sym != "UNK":
+                    if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
+                        stock_real[sym] = stock_real.get(sym, 0.0) + amt
+                continue
+
             parsed = _parse_trade_desc(desc)
             if not parsed:
                 continue
