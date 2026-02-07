@@ -39,6 +39,8 @@ import pandas as pd
 import altair as alt
 import yfinance as yf
 
+from datetime import date, timedelta
+
 # --------------------------------------------------------------------------------
 # Historical pricing helpers (Yahoo Finance / yfinance)
 # --------------------------------------------------------------------------------
