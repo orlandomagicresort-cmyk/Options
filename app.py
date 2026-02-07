@@ -2149,14 +2149,35 @@ def dashboard_page(active_user):
         # Shorts: OPTION_PREMIUM cashflows
         # --------------------------
         def _parse_trade_desc(desc: str):
+            """Parse trade descriptions into (Buy/Sell, qty, symbol, price).
+
+            Supports variants like:
+              - Buy 100 AAPL @ $100.00
+              - SELL 50 TSLA @ 210.15
+              - Buy 100 AAPL at 100
+              - Sell 10 MSFT price 402.12
+            """
             d = (desc or "").strip()
-            m = re.search(r"^(Buy|Sell)\s+([0-9]*\.?[0-9]+)\s+([A-Za-z0-9\.\-]+).*?@\s*\$?([0-9,]*\.?[0-9]+)", d)
+
+            # Normalize spacing
+            dn = re.sub(r"\s+", " ", d).strip()
+
+            # Common patterns: action qty sym @|at|price $price
+            m = re.search(
+                r"^(Buy|Sell)\s+([0-9]*\.?[0-9]+)\s+([A-Za-z0-9\.\-]+)\b.*?(?:@|\bat\b|\bprice\b|\bpx\b)\s*\$?\s*([0-9,]*\.?[0-9]+)",
+                dn,
+                flags=re.IGNORECASE,
+            )
             if not m:
                 return None
-            action = m.group(1)
+
+            action = m.group(1).capitalize()
             qty = float(m.group(2))
             sym = m.group(3).upper().strip()
             price = float(m.group(4).replace(",", ""))
+
+            if qty <= 0 or price <= 0:
+                return None
             return action, qty, sym, price
 
         tx_rows = []
@@ -2200,7 +2221,7 @@ def dashboard_page(active_user):
                 continue
 
             # Shorts: premium cashflows
-            if ttype == "OPTION_PREMIUM":
+            if ttype in ("OPTION_PREMIUM", "OPTION_FEES"):
                 if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
                     short_real[sym] = short_real.get(sym, 0.0) + amt
                 continue
