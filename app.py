@@ -775,20 +775,51 @@ def normalize_columns(df):
         if 'quantity' in df.columns: df['quantity'] = df['quantity'].fillna(0)
     return df
 
-def _fetch_all(query_builder, batch_size: int = 250, max_retries: int = 4, retry_base_sleep: float = 0.6):
+def _fetch_all(query_builder, batch_size: int = 250, max_retries: int = 6, retry_base_sleep: float = 0.6):
     """Fetch all rows from a Supabase query using range() pagination.
 
-    Notes:
-    - Streamlit Cloud + Supabase can occasionally throw transient httpx.ReadError / timeouts.
-      We retry a few times per page to make exports reliable.
-    - Smaller batches reduce payload size and help prevent network read errors.
+    Reliability notes:
+    - Supabase/PostgREST may raise transient httpx.ReadError/timeouts on Streamlit Cloud.
+    - PostgREST can also raise an APIError for an out-of-range request (often when the
+      total rows are an exact multiple of batch_size). In that case, we stop paging.
     """
     out = []
     start = 0
+
+    # Local imports keep this function robust even if optional deps move around
+    try:
+        import httpx  # type: ignore
+    except Exception:  # pragma: no cover
+        httpx = None  # type: ignore
+
+    try:
+        from postgrest.exceptions import APIError  # type: ignore
+    except Exception:  # pragma: no cover
+        APIError = tuple()  # type: ignore
+
+    def _is_range_api_error(exc: Exception) -> bool:
+        # PostgREST range error code is commonly PGRST103 ("Requested range not satisfiable")
+        try:
+            payload = exc.args[0] if exc.args else None
+            if isinstance(payload, dict):
+                code = (payload.get("code") or "").strip()
+                msg = (payload.get("message") or "").strip().lower()
+                if code == "PGRST103":
+                    return True
+                if "range" in msg and ("satisfiable" in msg or "not" in msg):
+                    return True
+            # Fallback to string check
+            s = str(exc).lower()
+            return ("range" in s and "satisfiable" in s) or ("requested range" in s)
+        except Exception:
+            return False
+
     while True:
         end = start + batch_size - 1
 
+        data = None
         last_err = None
+
         for attempt in range(max_retries):
             try:
                 res = query_builder.range(start, end).execute()
@@ -796,27 +827,42 @@ def _fetch_all(query_builder, batch_size: int = 250, max_retries: int = 4, retry
                 last_err = None
                 break
             except Exception as e:
+                # If we paged past the end, stop cleanly (avoid failing the export)
+                if isinstance(e, APIError) and _is_range_api_error(e):
+                    data = []
+                    last_err = None
+                    break
+
                 last_err = e
-                # retry only for transient network errors
-                is_transient = isinstance(e, getattr(httpx, "ReadError", ())) or "ReadError" in str(type(e)) or "timed out" in str(e).lower()
-                if not is_transient or attempt == max_retries - 1:
+
+                # Retry transient network errors and occasional backend hiccups
+                s = str(e).lower()
+                is_httpx_read = (httpx is not None) and isinstance(e, getattr(httpx, "ReadError", ()))
+                is_timeout = "timed out" in s or "timeout" in s
+                is_conn = "connection" in s and ("reset" in s or "closed" in s or "aborted" in s)
+                is_rate = "429" in s or "too many requests" in s
+
+                is_transient = is_httpx_read or is_timeout or is_conn or is_rate
+
+                if (not is_transient) or (attempt == max_retries - 1):
                     raise
-                # exponential backoff
+
                 import time, random
-                time.sleep(retry_base_sleep * (2 ** attempt) + random.random() * 0.2)
+                time.sleep(retry_base_sleep * (2 ** attempt) + random.random() * 0.25)
 
         if last_err is not None:
             raise last_err
 
         if not data:
             break
+
         out.extend(data)
         if len(data) < batch_size:
             break
+
         start += batch_size
+
     return out
-
-
 def get_cash_balance(user_id):
     try:
         qb = supabase.table("transactions").select("amount")            .eq("user_id", user_id)            .eq("currency", "USD")
