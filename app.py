@@ -3773,11 +3773,15 @@ def ledger_page(active_user):
         return row.get("type") or "Step"
 
     def _reverse_transaction_row(row: dict):
-        """Best-effort rollback of portfolio state for a transaction row."""
-        tid = row.get("id")
+        """Best-effort rollback of portfolio state for a transaction row.
+
+        NOTE: This is intentionally conservative. We only touch portfolio tables when we can
+        confidently identify the impacted record(s).
+        """
         ttype = str(row.get("type", "")).upper()
-        desc = str(row.get("description", ""))
+        desc = str(row.get("description", "") or "")
         rel = str(row.get("related_symbol", "") or "").upper()
+        user_id = row.get("user_id")
 
         # 1) Assignment expire: restore option statuses via OID list (most reliable)
         if "OPTION_EXPIRE" in ttype:
@@ -3789,39 +3793,99 @@ def ledger_page(active_user):
                     pass
             return
 
-        # 2) Stock/LEAP trades: reverse asset quantity
+        # 2) Stock / LEAP trades: reverse asset quantity (+ cost basis for BUY when possible)
         if ttype.startswith("TRADE_"):
             try:
                 parts = desc.split()
-                action = parts[0]
+                if len(parts) < 3:
+                    return
+                action = str(parts[0] or "").upper()
                 qty = float(parts[1])
-                ticker = rel or str(parts[2]).upper()
+                ticker = (rel or str(parts[2] or "")).upper().strip()
+                if not ticker or qty <= 0:
+                    return
 
-                asset_type = ttype.replace("TRADE_", "")
-                q = supabase.table("assets").select("*").eq("user_id", row["user_id"]).eq("ticker", ticker)
-                if "LEAP" in asset_type:
-                    # try to parse expiration/strike from description
-                    exp = None
-                    strike = None
-                    mexp = re.search(r"(\d{4}-[A-Za-z]{3}-\d{2})", desc)
-                    if mexp:
-                        exp = mexp.group(1)
-                    mstr = re.search(r"\$(\d+(?:\.\d+)?)", desc)
-                    if mstr:
-                        strike = float(mstr.group(1))
-                    q = q.like("type", "LEAP%")
+                asset_type = ttype.replace("TRADE_", "").strip()
+                q = supabase.table("assets").select("*").eq("user_id", user_id).eq("ticker", ticker)
+
+                exp_iso = None
+                strike = None
+
+                if "LEAP" in asset_type or "LONG" in asset_type:
+                    # Parse expiry in either ISO (YYYY-MM-DD) or display (YYYY-Mon-DD)
+                    m_iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", desc)
+                    if m_iso:
+                        exp_iso = m_iso.group(1)
+                    else:
+                        m_mon = re.search(r"\b(\d{4}-[A-Za-z]{3}-\d{2})\b", desc)
+                        if m_mon:
+                            try:
+                                exp_iso = datetime.strptime(m_mon.group(1), "%Y-%b-%d").date().isoformat()
+                            except Exception:
+                                exp_iso = None
+
+                    # Strike = first $number in description (this is how trade_entry writes it)
+                    m_str = re.search(r"\$(\d+(?:\.\d+)?)", desc)
+                    if m_str:
+                        try:
+                            strike = float(m_str.group(1))
+                        except Exception:
+                            strike = None
+
+                    # Be strict on type (CALL vs PUT) so we delete the right LEAP row
+                    q = q.eq("type", asset_type)
                     if strike is not None:
                         q = q.eq("strike_price", strike)
-                    if exp:
-                        q = q.eq("expiration", exp)
+                    if exp_iso:
+                        q = q.eq("expiration", exp_iso)
                 else:
                     q = q.eq("type", "STOCK")
+
                 res = q.execute()
-                if res.data:
-                    aid = res.data[0]["id"]
-                    curr = float(res.data[0].get("quantity") or 0)
-                    new_q = curr - qty if action.upper() == "BUY" else curr + qty
-                    supabase.table("assets").update({"quantity": new_q}).eq("id", aid).execute()
+                if not res.data:
+                    return
+
+                a = res.data[0]
+                aid = a.get("id")
+                curr_qty = float(a.get("quantity") or 0.0)
+                curr_cost = float(a.get("cost_basis") or 0.0)
+
+                # Reverse quantity change
+                new_qty = (curr_qty - qty) if action == "BUY" else (curr_qty + qty)
+
+                # If position is fully removed, delete the row (safer than leaving qty=0)
+                if new_qty <= 0:
+                    try:
+                        supabase.table("assets").delete().eq("id", aid).execute()
+                    except Exception:
+                        # Fallback: set to 0 if delete is blocked by RLS
+                        try:
+                            supabase.table("assets").update({"quantity": 0}).eq("id", aid).execute()
+                        except Exception:
+                            pass
+                    return
+
+                upd = {"quantity": new_qty}
+
+                # If we are deleting a BUY, try to back out its contribution to avg cost basis.
+                if action == "BUY":
+                    try:
+                        # price from "@ $X.XX"
+                        m_price = re.search(r"@\s*\$(\d+(?:\.\d+)?)", desc)
+                        price = float(m_price.group(1)) if m_price else None
+                        m_fees = re.search(r"\(Fees:\s*\$(\d+(?:\.\d+)?)\)", desc, flags=re.I)
+                        fees = float(m_fees.group(1)) if m_fees else 0.0
+                        if price is not None:
+                            mult = 100.0 if ("LEAP" in asset_type or "LONG" in asset_type) else 1.0
+                            current_val = curr_qty * curr_cost
+                            remove_val = (qty * price * mult + fees) / mult
+                            new_cost = (current_val - remove_val) / new_qty if new_qty else 0.0
+                            if new_cost >= 0:
+                                upd["cost_basis"] = new_cost
+                    except Exception:
+                        pass
+
+                supabase.table("assets").update(upd).eq("id", aid).execute()
             except Exception:
                 pass
             return
@@ -3831,25 +3895,33 @@ def ledger_page(active_user):
             try:
                 # desc: "Sell 2 NVDA 2026-Jan-16 $450 CALL ..."
                 parts = desc.split()
+                if len(parts) < 3:
+                    return
                 side = parts[0].upper()
                 qty = int(float(parts[1]))
                 ticker = str(parts[2]).upper()
-                # parse exp
+
+                # parse exp (YYYY-Mon-DD)
                 exp = None
                 mexp = re.search(r"(\d{4}-[A-Za-z]{3}-\d{2})", desc)
                 if mexp:
                     exp = datetime.strptime(mexp.group(1), "%Y-%b-%d").date().isoformat()
+
                 # parse strike
                 mstr = re.search(r"\$(\d+(?:\.\d+)?)", desc)
                 strike = float(mstr.group(1)) if mstr else None
-                right = "CALL" if "CALL" in desc.upper() else ("PUT" if "PUT" in desc.upper() else None)
 
+                right = "CALL" if "CALL" in desc.upper() else ("PUT" if "PUT" in desc.upper() else None)
                 if not (ticker and exp and strike is not None and right):
                     return
 
                 if side == "SELL":
                     # Reverse an open: remove contracts from open options
-                    res = supabase.table("options").select("*").eq("user_id", row["user_id"]).eq("symbol", ticker).eq("strike_price", strike).eq("expiration_date", exp).eq("type", right).eq("status", "open").order("open_date", desc=True).execute()
+                    res = supabase.table("options").select("*")\
+                        .eq("user_id", user_id).eq("symbol", ticker)\
+                        .eq("strike_price", strike).eq("expiration_date", exp)\
+                        .eq("type", right).eq("status", "open")\
+                        .order("open_date", desc=True).execute()
                     remaining = qty
                     if res.data:
                         for opt in res.data:
@@ -3865,7 +3937,7 @@ def ledger_page(active_user):
                 else:
                     # Reverse a close: reopen contracts as a new open option (best effort)
                     payload = {
-                        "user_id": row["user_id"],
+                        "user_id": user_id,
                         "ticker": ticker,
                         "symbol": ticker,
                         "strike_price": strike,
@@ -3882,6 +3954,7 @@ def ledger_page(active_user):
             except Exception:
                 pass
             return
+
 
     def _delete_group(gdf: pd.DataFrame, group_label: str):
         # Roll back portfolio impact first (reverse chronological)
