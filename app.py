@@ -39,6 +39,7 @@ import pandas as pd
 import altair as alt
 import yfinance as yf
 import re
+import httpx
 from supabase import create_client, Client
 from datetime import datetime, date, timedelta
 
@@ -774,14 +775,39 @@ def normalize_columns(df):
         if 'quantity' in df.columns: df['quantity'] = df['quantity'].fillna(0)
     return df
 
-def _fetch_all(query_builder, batch_size: int = 1000):
-    """Fetch all rows from a Supabase query using range() pagination."""
+def _fetch_all(query_builder, batch_size: int = 250, max_retries: int = 4, retry_base_sleep: float = 0.6):
+    """Fetch all rows from a Supabase query using range() pagination.
+
+    Notes:
+    - Streamlit Cloud + Supabase can occasionally throw transient httpx.ReadError / timeouts.
+      We retry a few times per page to make exports reliable.
+    - Smaller batches reduce payload size and help prevent network read errors.
+    """
     out = []
     start = 0
     while True:
         end = start + batch_size - 1
-        res = query_builder.range(start, end).execute()
-        data = getattr(res, "data", None) or []
+
+        last_err = None
+        for attempt in range(max_retries):
+            try:
+                res = query_builder.range(start, end).execute()
+                data = getattr(res, "data", None) or []
+                last_err = None
+                break
+            except Exception as e:
+                last_err = e
+                # retry only for transient network errors
+                is_transient = isinstance(e, getattr(httpx, "ReadError", ())) or "ReadError" in str(type(e)) or "timed out" in str(e).lower()
+                if not is_transient or attempt == max_retries - 1:
+                    raise
+                # exponential backoff
+                import time, random
+                time.sleep(retry_base_sleep * (2 ** attempt) + random.random() * 0.2)
+
+        if last_err is not None:
+            raise last_err
+
         if not data:
             break
         out.extend(data)
@@ -789,6 +815,7 @@ def _fetch_all(query_builder, batch_size: int = 1000):
             break
         start += batch_size
     return out
+
 
 def get_cash_balance(user_id):
     try:
@@ -3656,7 +3683,7 @@ def pricing_page(active_user):
 
 
 def safe_reverse_ledger_transaction(transaction_id):
-    res = supabase.table("transactions").select("*").eq("id", transaction_id).execute()
+    res = supabase.table("transactions").select("id,transaction_date,type,amount,fees,description,related_symbol,group_id,user_id").eq("id", transaction_id).execute()
     if not res.data: return False, "Transaction not found."
     t = res.data[0]; user_id = t['user_id']
     if "TRADE" in t['type'] and "STOCK" in t['type']: 
@@ -4260,7 +4287,7 @@ def export_data_page(active_user):
         return [x.strip() for x in raw.split(",") if x.strip()]
 
     # Fetch transactions in range
-    qb = supabase.table("transactions").select("*").eq("user_id", uid)        .gte("transaction_date", start_date.isoformat()).lte("transaction_date", end_date.isoformat())        .order("transaction_date", desc=False).order("id", desc=False)
+    qb = supabase.table("transactions").select("id,transaction_date,type,amount,fees,description,related_symbol,group_id,user_id").eq("user_id", uid)        .gte("transaction_date", start_date.isoformat()).lte("transaction_date", end_date.isoformat())        .order("transaction_date", desc=False).order("id", desc=False)
 
     rows = _fetch_all(qb)
     if not rows:
