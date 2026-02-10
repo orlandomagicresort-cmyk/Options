@@ -3808,7 +3808,14 @@ def ledger_page(active_user):
                 asset_type = ttype.replace("TRADE_", "").strip()
 
                 # Base query for this ticker (we'll do strict matching first, then a tolerant fallback)
-                base_q = supabase.table("assets").select("*").eq("user_id", user_id).eq("ticker", ticker)
+                # NOTE: depending on how data was imported, some rows may have only `symbol` or only `ticker`.
+                # We match on either column.
+                base_q = (
+                    supabase.table("assets")
+                    .select("*")
+                    .eq("user_id", user_id)
+                    .or_(f"ticker.eq.{ticker},symbol.eq.{ticker}")
+                )
 
                 exp_iso = None
                 strike = None
