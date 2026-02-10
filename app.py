@@ -3806,7 +3806,9 @@ def ledger_page(active_user):
                     return
 
                 asset_type = ttype.replace("TRADE_", "").strip()
-                q = supabase.table("assets").select("*").eq("user_id", user_id).eq("ticker", ticker)
+
+                # Base query for this ticker (we'll do strict matching first, then a tolerant fallback)
+                base_q = supabase.table("assets").select("*").eq("user_id", user_id).eq("ticker", ticker)
 
                 exp_iso = None
                 strike = None
@@ -3832,20 +3834,53 @@ def ledger_page(active_user):
                         except Exception:
                             strike = None
 
-                    # Be strict on type (CALL vs PUT) so we delete the right LEAP row
-                    q = q.eq("type", asset_type)
+                    # ---- Strict match first ----
+                    strict_q = base_q.eq("type", asset_type)
                     if strike is not None:
-                        q = q.eq("strike_price", strike)
+                        strict_q = strict_q.eq("strike_price", strike)
                     if exp_iso:
-                        q = q.eq("expiration", exp_iso)
-                else:
-                    q = q.eq("type", "STOCK")
+                        strict_q = strict_q.eq("expiration", exp_iso)
 
-                res = q.execute()
-                if not res.data:
+                    strict_res = strict_q.execute()
+                    candidates = list(strict_res.data or [])
+
+                    # ---- Fallback (tolerant) ----
+                    # Sometimes the description parsing or DB typing (numeric scale) causes eq() to miss.
+                    # We pull all LEAP rows for this ticker and filter in Python with a small tolerance.
+                    if not candidates:
+                        all_res = base_q.like("type", "LEAP%").execute()
+                        all_rows = list(all_res.data or [])
+
+                        def _row_match(r):
+                            if str(r.get("type", "")).upper() != asset_type:
+                                return False
+                            if exp_iso:
+                                exp_db = str(r.get("expiration") or "")
+                                if exp_db[:10] != exp_iso:
+                                    return False
+                            if strike is not None:
+                                try:
+                                    return abs(float(r.get("strike_price") or 0.0) - strike) < 1e-4
+                                except Exception:
+                                    return False
+                            return True
+
+                        filtered = [r for r in all_rows if _row_match(r)]
+                        candidates = filtered or []
+
+                else:
+                    res = base_q.eq("type", "STOCK").execute()
+                    candidates = list(res.data or [])
+
+                if not candidates:
                     return
 
-                a = res.data[0]
+                # If multiple candidates, pick the one with the largest quantity
+                a = sorted(
+                    candidates,
+                    key=lambda r: float(r.get("quantity") or 0.0),
+                    reverse=True
+                )[0]
                 aid = a.get("id")
                 curr_qty = float(a.get("quantity") or 0.0)
                 curr_cost = float(a.get("cost_basis") or 0.0)
