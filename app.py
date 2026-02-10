@@ -3756,7 +3756,7 @@ def pricing_page(active_user):
 
 
 def safe_reverse_ledger_transaction(transaction_id):
-    res = supabase.table("transactions").select("id,transaction_date,type,amount,fees,description,related_symbol").eq("id", transaction_id).execute()
+    res = supabase.table("transactions").select("id,transaction_date,type,amount,description,related_symbol").eq("id", transaction_id).execute()
     if not res.data: return False, "Transaction not found."
     t = res.data[0]; user_id = t['user_id']
     if "TRADE" in t['type'] and "STOCK" in t['type']: 
@@ -4368,7 +4368,7 @@ def export_data_page(active_user):
         chunk_end = min(end_date, chunk_start + timedelta(days=30))
         qb = (
             supabase.table("transactions")
-            .select("id,transaction_date,type,amount,fees,description,related_symbol")
+            .select("id,transaction_date,type,amount,description,related_symbol")
             .eq("user_id", uid)
             .gte("transaction_date", chunk_start.isoformat())
             .lte("transaction_date", chunk_end.isoformat())
