@@ -39,7 +39,6 @@ import pandas as pd
 import altair as alt
 import yfinance as yf
 import re
-import httpx
 from supabase import create_client, Client
 from datetime import datetime, date, timedelta
 
@@ -775,39 +774,14 @@ def normalize_columns(df):
         if 'quantity' in df.columns: df['quantity'] = df['quantity'].fillna(0)
     return df
 
-def _fetch_all(query_builder, batch_size: int = 250, max_retries: int = 4, retry_base_sleep: float = 0.6):
-    """Fetch all rows from a Supabase query using range() pagination.
-
-    Notes:
-    - Streamlit Cloud + Supabase can occasionally throw transient httpx.ReadError / timeouts.
-      We retry a few times per page to make exports reliable.
-    - Smaller batches reduce payload size and help prevent network read errors.
-    """
+def _fetch_all(query_builder, batch_size: int = 1000):
+    """Fetch all rows from a Supabase query using range() pagination."""
     out = []
     start = 0
     while True:
         end = start + batch_size - 1
-
-        last_err = None
-        for attempt in range(max_retries):
-            try:
-                res = query_builder.range(start, end).execute()
-                data = getattr(res, "data", None) or []
-                last_err = None
-                break
-            except Exception as e:
-                last_err = e
-                # retry only for transient network errors
-                is_transient = isinstance(e, getattr(httpx, "ReadError", ())) or "ReadError" in str(type(e)) or "timed out" in str(e).lower()
-                if not is_transient or attempt == max_retries - 1:
-                    raise
-                # exponential backoff
-                import time, random
-                time.sleep(retry_base_sleep * (2 ** attempt) + random.random() * 0.2)
-
-        if last_err is not None:
-            raise last_err
-
+        res = query_builder.range(start, end).execute()
+        data = getattr(res, "data", None) or []
         if not data:
             break
         out.extend(data)
@@ -815,7 +789,6 @@ def _fetch_all(query_builder, batch_size: int = 250, max_retries: int = 4, retry
             break
         start += batch_size
     return out
-
 
 def get_cash_balance(user_id):
     try:
@@ -3683,7 +3656,7 @@ def pricing_page(active_user):
 
 
 def safe_reverse_ledger_transaction(transaction_id):
-    res = supabase.table("transactions").select("id,transaction_date,type,amount,fees,description,related_symbol,group_id,user_id").eq("id", transaction_id).execute()
+    res = supabase.table("transactions").select("*").eq("id", transaction_id).execute()
     if not res.data: return False, "Transaction not found."
     t = res.data[0]; user_id = t['user_id']
     if "TRADE" in t['type'] and "STOCK" in t['type']: 
@@ -4152,271 +4125,6 @@ def ledger_page(active_user):
                     "Details": str(rr.get("description") or "")
                 })
             st.dataframe(pd.DataFrame(sub), use_container_width=True)
-
-def export_data_page(active_user):
-    """Export transactions to CSV in a standardized format."""
-    uid = _active_user_id(active_user)
-    st.header("📤 Export Data")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        start_date = st.date_input("From Date", value=(date.today() - timedelta(days=365)), key="export_from")
-    with c2:
-        end_date = st.date_input("To Date", value=date.today(), key="export_to")
-
-    if start_date > end_date:
-        st.error("From Date must be on or before To Date.")
-        return
-
-    def _fee_from_desc(desc: str) -> float:
-        m = re.search(r"\(Fees:\s*\$(\d+(?:\.\d+)?)\)", str(desc or ""), flags=re.I)
-        try:
-            return float(m.group(1)) if m else 0.0
-        except Exception:
-            return 0.0
-
-    def _qty_from_desc(desc: str) -> float:
-        parts = str(desc or "").split()
-        if len(parts) >= 2:
-            try:
-                return float(parts[1])
-            except Exception:
-                return 0.0
-        return 0.0
-
-    def _action_from_desc(desc: str) -> str:
-        w = str(desc or "").strip().split()
-        if not w:
-            return ""
-        w0 = w[0].upper()
-        if w0 in ("BUY", "SELL"):
-            return "Buy" if w0 == "BUY" else "Sell"
-        if w0 == "EXPIRE":
-            # Expiring a short option is effectively buying-to-close at $0.00
-            return "Buy"
-        return w0.title()
-
-    def _parse_expiry_iso(desc: str) -> str | None:
-        s = str(desc or "")
-        # ISO date
-        m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", s)
-        if m:
-            return m.group(1)
-        # Custom format (YYYY-Mon-DD)
-        m = re.search(r"\b(\d{4}-[A-Za-z]{3}-\d{2})\b", s)
-        if m:
-            try:
-                return datetime.strptime(m.group(1), "%Y-%b-%d").date().isoformat()
-            except Exception:
-                return None
-        return None
-
-    def _parse_strike(desc: str) -> float | None:
-        s = str(desc or "")
-        m = re.search(r"\$(\d+(?:\.\d+)?)", s)
-        if not m:
-            return None
-        try:
-            return float(m.group(1))
-        except Exception:
-            return None
-
-    def _parse_trade_price(desc: str) -> float | None:
-        s = str(desc or "")
-        m = re.search(r"@\s*\$(\d+(?:\.\d+)?)", s)
-        if not m:
-            return None
-        try:
-            return float(m.group(1))
-        except Exception:
-            return None
-
-    def _option_type_from_desc(desc: str) -> str | None:
-        s = str(desc or "").upper()
-        if " CALL" in s or s.endswith("CALL"):
-            return "CALL"
-        if " PUT" in s or s.endswith("PUT"):
-            return "PUT"
-        return None
-
-    def _pmcc_flag(user_id: str, symbol: str, exp_iso: str | None, strike: float | None, right: str | None) -> bool:
-        """Returns True if this short call appears linked to a LEAP (PMCC)."""
-        if right != "CALL":
-            return False
-        if not (symbol and exp_iso and (strike is not None)):
-            return False
-        try:
-            # Look up the most recent matching option row (open or closed) to check linked_asset_id
-            q = supabase.table("options").select("id,linked_asset_id").eq("user_id", user_id).eq("symbol", symbol)                .eq("expiration_date", exp_iso).eq("strike_price", float(strike)).eq("type", "CALL")                .order("open_date", desc=True).limit(5).execute()
-            for r in (q.data or []):
-                lid = r.get("linked_asset_id")
-                if not lid:
-                    continue
-                a = supabase.table("assets").select("type").eq("id", lid).limit(1).execute()
-                if a.data:
-                    at = str(a.data[0].get("type", "")).upper()
-                    if at.startswith("LEAP_") or "LEAP" in at:
-                        return True
-            return False
-        except Exception:
-            return False
-
-    def _contracts_from_oids(oids: list[str]) -> int | None:
-        if not oids:
-            return None
-        try:
-            res = supabase.table("options").select("contracts,quantity").in_("id", oids).execute()
-            total = 0
-            for r in (res.data or []):
-                v = r.get("contracts")
-                if v is None:
-                    v = r.get("quantity")
-                try:
-                    total += int(float(v or 0))
-                except Exception:
-                    pass
-            return total
-        except Exception:
-            return None
-
-    def _extract_oids(desc: str):
-        m = re.search(r"\bOID:([A-Za-z0-9_,\-]+)\b", str(desc or ""))
-        if not m:
-            return []
-        raw = m.group(1)
-        return [x.strip() for x in raw.split(",") if x.strip()]
-
-    # Fetch transactions in range
-    qb = supabase.table("transactions").select("id,transaction_date,type,amount,fees,description,related_symbol,group_id,user_id").eq("user_id", uid)        .gte("transaction_date", start_date.isoformat()).lte("transaction_date", end_date.isoformat())        .order("transaction_date", desc=False).order("id", desc=False)
-
-    rows = _fetch_all(qb)
-    if not rows:
-        st.info("No transactions found in that date range.")
-        return
-
-    out_rows = []
-    for tx in rows:
-        ttype = str(tx.get("type", "") or "").upper()
-        desc = str(tx.get("description", "") or "")
-        symbol = str(tx.get("related_symbol", "") or tx.get("symbol", "") or "").upper()
-        tx_date = str(tx.get("transaction_date", "") or "")[:10]
-        fee = _fee_from_desc(desc)
-        action = _action_from_desc(desc)
-
-        # Defaults
-        category = ""
-        strike_date = ""
-        right_label = ""
-        strike_price = ""
-        premium_per_share = ""
-        contracts = ""
-
-        # --- Stock / LEAP trades ---
-        if ttype.startswith("TRADE_"):
-            asset_type = ttype.replace("TRADE_", "").strip()  # e.g. STOCK, LEAP_CALL, LEAP_PUT
-            if asset_type.startswith("LEAP") or "LEAP" in asset_type or asset_type.startswith("LONG"):
-                category = "LEAP"
-                exp_iso = _parse_expiry_iso(desc)
-                if exp_iso:
-                    strike_date = exp_iso
-                r = "CALL" if "CALL" in asset_type else ("PUT" if "PUT" in asset_type else "")
-                right_label = "PMCC" if False else ("Call" if r == "CALL" else ("Put" if r == "PUT" else ""))
-                stx = _parse_strike(desc)
-                if stx is not None:
-                    strike_price = f"{stx:.2f}"
-                price = _parse_trade_price(desc)
-                if price is not None:
-                    premium_per_share = f"{price:.4f}"
-                qty = _qty_from_desc(desc)
-                if qty:
-                    contracts = str(int(qty) if float(qty).is_integer() else qty)
-            else:
-                category = "STOCK"
-                price = _parse_trade_price(desc)
-                if price is not None:
-                    premium_per_share = f"{price:.4f}"
-                qty = _qty_from_desc(desc)
-                if qty:
-                    contracts = str(int(qty) if float(qty).is_integer() else qty)
-
-        # --- Short options (premiums / expiries) ---
-        elif ttype in ("OPTION_PREMIUM", "OPTION_EXPIRE"):
-            category = "SHORT"
-            exp_iso = _parse_expiry_iso(desc)
-            if exp_iso:
-                strike_date = exp_iso
-            right = _option_type_from_desc(desc)
-            stx = _parse_strike(desc)
-            if stx is not None:
-                strike_price = f"{stx:.2f}"
-
-            # contracts
-            qty = _qty_from_desc(desc)
-            if qty:
-                contracts = str(int(qty) if float(qty).is_integer() else qty)
-            else:
-                # For assignment expiries, contracts can be derived from OID list
-                oids = _extract_oids(desc)
-                csum = _contracts_from_oids(oids)
-                if csum is not None and csum != 0:
-                    contracts = str(int(csum))
-
-            # premium per share
-            amt = float(tx.get("amount") or 0.0)
-            if ttype == "OPTION_EXPIRE":
-                premium_per_share = "0.0000"
-            else:
-                # Derive premium/share from cash impact + fees:
-                # Sell: cash = premium - fees => premium = cash + fees
-                # Buy : cash = -(premium + fees) => premium = abs(cash) - fees
-                prem = (amt + fee) if amt >= 0 else (abs(amt) - fee)
-                try:
-                    qty_i = float(contracts) if contracts else _qty_from_desc(desc)
-                    if qty_i and qty_i > 0:
-                        pps = float(prem) / (qty_i * 100.0)
-                        premium_per_share = f"{pps:.4f}"
-                except Exception:
-                    pass
-
-            # PMCC?
-            if right == "CALL" and _pmcc_flag(uid, symbol, exp_iso, stx, right):
-                right_label = "PMCC"
-            else:
-                right_label = "Call" if right == "CALL" else ("Put" if right == "PUT" else "")
-
-        else:
-            # Not a trade we export (deposits/withdrawals/dividends/etc.)
-            continue
-
-        out_rows.append({
-            "Date": tx_date,
-            "Category": category,
-            "Action": action,
-            "Ticker": symbol,
-            "Strike Date": strike_date,
-            "Type": right_label,
-            "Strike Price": strike_price,
-            "Premium/Share": premium_per_share,
-            "Contracts": contracts,
-            "Fee": f"{fee:.2f}",
-        })
-
-    if not out_rows:
-        st.info("No trade/option transactions found in that date range.")
-        return
-
-    out_df = pd.DataFrame(out_rows, columns=[
-        "Date", "Category", "Action", "Ticker", "Strike Date", "Type",
-        "Strike Price", "Premium/Share", "Contracts", "Fee"
-    ])
-
-    st.subheader("Preview")
-    st.dataframe(out_df, use_container_width=True, hide_index=True)
-
-    csv_bytes = out_df.to_csv(index=False).encode("utf-8")
-    fname = f"export_{start_date.isoformat()}_to_{end_date.isoformat()}.csv"
-    st.download_button("Download CSV", data=csv_bytes, file_name=fname, mime="text/csv", use_container_width=True)
-
 
 def trade_entry_page(active_user):
     uid = _active_user_id(active_user)
@@ -5276,7 +4984,7 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Export Data", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
+    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
     user = st.session_state.user
     active_user = _set_active_account(user)
     if page == "Dashboard": dashboard_page(active_user)
@@ -5286,7 +4994,6 @@ def main():
     elif page == "Cash Management": cash_management_page(active_user)
     elif page == "Enter Trade": trade_entry_page(active_user)
     elif page == "Ledger": ledger_page(active_user)
-    elif page == "Export Data": export_data_page(active_user)
     elif page == "Import Data": import_page(active_user)
     elif page == "Bulk Entries": bulk_entries_page(active_user)
     elif page == "Account & Sharing": account_sharing_page(active_user)
