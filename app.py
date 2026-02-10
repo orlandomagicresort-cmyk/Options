@@ -3808,15 +3808,22 @@ def ledger_page(active_user):
                 asset_type = ttype.replace("TRADE_", "").strip()
 
                 # Base query for this ticker (we'll do strict matching first, then a tolerant fallback)
-                # NOTE: depending on how data was imported, some rows may have only `symbol` or only `ticker`.
-                # We match on either column.
-                base_q = (
-                    supabase.table("assets")
-                    .select("*")
-                    .eq("user_id", user_id)
-                    .or_(f"ticker.eq.{ticker},symbol.eq.{ticker}")
-                )
-
+                # NOTE: avoid PostgREST .or_ quirks by querying ticker and symbol separately.
+                def _asset_candidates_for_ticker(_uid, _tk):
+                    cands = []
+                    try:
+                        r1 = supabase.table('assets').select('*').eq('user_id', _uid).eq('ticker', _tk).execute()
+                        cands.extend(list(r1.data or []))
+                    except Exception:
+                        pass
+                    try:
+                        r2 = supabase.table('assets').select('*').eq('user_id', _uid).eq('symbol', _tk).execute()
+                        for rr in (r2.data or []):
+                            if not any(str(x.get('id')) == str(rr.get('id')) for x in cands):
+                                cands.append(rr)
+                    except Exception:
+                        pass
+                    return cands
                 exp_iso = None
                 strike = None
 
@@ -3842,21 +3849,24 @@ def ledger_page(active_user):
                             strike = None
 
                     # ---- Strict match first ----
-                    strict_q = base_q.eq("type", asset_type)
-                    if strike is not None:
-                        strict_q = strict_q.eq("strike_price", strike)
+                    strict_rows = [r for r in _asset_candidates_for_ticker(user_id, ticker) if str(r.get('type','')).upper().strip() == asset_type]
+                    # Filter strict_rows in Python to avoid numeric/date typing mismatches
+                    candidates = list(strict_rows or [])
                     if exp_iso:
-                        strict_q = strict_q.eq("expiration", exp_iso)
-
-                    strict_res = strict_q.execute()
-                    candidates = list(strict_res.data or [])
+                        candidates = [r for r in candidates if str(r.get("expiration") or "")[:10] == exp_iso]
+                    if strike is not None:
+                        def _strike_ok(r):
+                            try:
+                                return abs(float(r.get("strike_price") or 0.0) - float(strike)) < 1e-4
+                            except Exception:
+                                return False
+                        candidates = [r for r in candidates if _strike_ok(r)]
 
                     # ---- Fallback (tolerant) ----
                     # Sometimes the description parsing or DB typing (numeric scale) causes eq() to miss.
                     # We pull all LEAP rows for this ticker and filter in Python with a small tolerance.
                     if not candidates:
-                        all_res = base_q.like("type", "LEAP%").execute()
-                        all_rows = list(all_res.data or [])
+                        all_rows = [r for r in _asset_candidates_for_ticker(user_id, ticker) if str(r.get('type','')).upper().startswith('LEAP_')]
 
                         def _row_match(r):
                             if str(r.get("type", "")).upper() != asset_type:
@@ -3876,8 +3886,7 @@ def ledger_page(active_user):
                         candidates = filtered or []
 
                 else:
-                    res = base_q.eq("type", "STOCK").execute()
-                    candidates = list(res.data or [])
+                    candidates = [r for r in _asset_candidates_for_ticker(user_id, ticker) if str(r.get('type','')).upper().strip() == 'STOCK']
 
                 if not candidates:
                     return
