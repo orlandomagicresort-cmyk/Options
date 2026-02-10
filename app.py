@@ -775,13 +775,18 @@ def normalize_columns(df):
         if 'quantity' in df.columns: df['quantity'] = df['quantity'].fillna(0)
     return df
 
-def _fetch_all(query_builder, batch_size: int = 250, max_retries: int = 6, retry_base_sleep: float = 0.6):
+def _fetch_all(query_builder, batch_size: int = 200, max_retries: int = 8, retry_base_sleep: float = 0.7):
     """Fetch all rows from a Supabase query using range() pagination.
 
-    Reliability notes:
-    - Supabase/PostgREST may raise transient httpx.ReadError/timeouts on Streamlit Cloud.
-    - PostgREST can also raise an APIError for an out-of-range request (often when the
-      total rows are an exact multiple of batch_size). In that case, we stop paging.
+    This is designed to be resilient on Streamlit Cloud where long-running
+    responses can get cut off (httpx.ReadError) and where PostgREST may return
+    APIError payloads for out-of-range pagination (416 / PGRST103, etc.).
+
+    Strategy:
+    - Page with range(start, end) in small batches.
+    - Retry transient network/timeout/rate errors (including some APIErrors).
+    - If we hit an out-of-range APIError and we've already fetched at least one
+      page, stop cleanly.
     """
     out = []
     start = 0
@@ -797,61 +802,83 @@ def _fetch_all(query_builder, batch_size: int = 250, max_retries: int = 6, retry
     except Exception:  # pragma: no cover
         APIError = tuple()  # type: ignore
 
-    def _is_range_api_error(exc: Exception) -> bool:
-        # PostgREST range error code is commonly PGRST103 ("Requested range not satisfiable")
-        try:
-            payload = exc.args[0] if exc.args else None
-            if isinstance(payload, dict):
-                code = (payload.get("code") or "").strip()
-                msg = (payload.get("message") or "").strip().lower()
-                if code == "PGRST103":
-                    return True
-                if "range" in msg and ("satisfiable" in msg or "not" in msg):
-                    return True
-            # Fallback to string check
-            s = str(exc).lower()
-            return ("range" in s and "satisfiable" in s) or ("requested range" in s)
-        except Exception:
-            return False
+    def _payload(exc: Exception):
+        return exc.args[0] if exc.args else None
+
+    def _api_err_text(exc: Exception) -> str:
+        p = _payload(exc)
+        if isinstance(p, dict):
+            return f"{p.get('code','')} {p.get('message','')} {p.get('details','')} {p.get('hint','')}"
+        return str(exc)
+
+    def _is_out_of_range_api_error(exc: Exception) -> bool:
+        p = _payload(exc)
+        if isinstance(p, dict):
+            code = str(p.get("code") or "").strip()
+            msg = str(p.get("message") or "").strip().lower()
+            details = str(p.get("details") or "").strip().lower()
+            # Common PostgREST codes/messages for range issues
+            if code in {"PGRST103", "PGRST104"}:
+                return True
+            hay = " ".join([msg, details])
+            if "requested range" in hay and ("not satisfiable" in hay or "satisfiable" in hay):
+                return True
+            if "range" in hay and "satisfiable" in hay:
+                return True
+        s = str(exc).lower()
+        return ("requested range" in s and "satisfiable" in s) or ("range not" in s and "satisfiable" in s)
+
+    def _is_transient_api_error(exc: Exception) -> bool:
+        # Some APIErrors are effectively transient (timeouts, rate limits, etc.)
+        s = _api_err_text(exc).lower()
+        return (
+            "timeout" in s
+            or "timed out" in s
+            or "canceling statement" in s
+            or "too many requests" in s
+            or "429" in s
+            or "gateway" in s
+            or "temporar" in s
+        )
 
     while True:
         end = start + batch_size - 1
-
         data = None
-        last_err = None
 
         for attempt in range(max_retries):
             try:
                 res = query_builder.range(start, end).execute()
                 data = getattr(res, "data", None) or []
-                last_err = None
                 break
             except Exception as e:
-                # If we paged past the end, stop cleanly (avoid failing the export)
-                if isinstance(e, APIError) and _is_range_api_error(e):
+                # Stop cleanly if we paged past the end (common with PostgREST + exact multiples)
+                if isinstance(e, APIError) and _is_out_of_range_api_error(e):
                     data = []
-                    last_err = None
                     break
 
-                last_err = e
-
-                # Retry transient network errors and occasional backend hiccups
                 s = str(e).lower()
                 is_httpx_read = (httpx is not None) and isinstance(e, getattr(httpx, "ReadError", ()))
                 is_timeout = "timed out" in s or "timeout" in s
                 is_conn = "connection" in s and ("reset" in s or "closed" in s or "aborted" in s)
                 is_rate = "429" in s or "too many requests" in s
 
-                is_transient = is_httpx_read or is_timeout or is_conn or is_rate
+                is_api_transient = isinstance(e, APIError) and _is_transient_api_error(e)
+                is_transient = is_httpx_read or is_timeout or is_conn or is_rate or is_api_transient
+
+                # If it's a non-transient APIError but we're already mid-pagination, treat it as end-of-data
+                # rather than crashing (this prevents exports from failing due to occasional PostgREST quirks).
+                if isinstance(e, APIError) and (not is_transient) and start > 0:
+                    data = []
+                    break
 
                 if (not is_transient) or (attempt == max_retries - 1):
                     raise
 
                 import time, random
-                time.sleep(retry_base_sleep * (2 ** attempt) + random.random() * 0.25)
+                time.sleep(retry_base_sleep * (2 ** attempt) + random.random() * 0.35)
 
-        if last_err is not None:
-            raise last_err
+        if data is None:
+            break
 
         if not data:
             break
