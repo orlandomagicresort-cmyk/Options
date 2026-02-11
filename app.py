@@ -2015,11 +2015,21 @@ def dashboard_page(active_user):
         # LEAP Price comes from the stored LEAP Prices (DB last_price) section
         tmp['db_px_num'] = pd.to_numeric(tmp.get('last_price', tmp.get('current_price', 0)), errors='coerce').fillna(0)
 
+        tmp['cost_num'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0)
+
         grp = tmp.groupby('sym', as_index=False).agg(
             Contracts=('qty_num', 'sum'),
             Value=('val_num', 'sum'),
-            AvgPrice=('px_num', lambda s: float(s.mean()) if len(s) else 0.0),
         )
+        # Weighted average cost at purchase per ticker (from assets.cost_basis)
+        def _wavg_cost(g: pd.DataFrame) -> float:
+            denom = float(pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0).sum())
+            if denom == 0:
+                return 0.0
+            num = float((pd.to_numeric(g.get('cost_num', 0), errors='coerce').fillna(0) * pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0)).sum())
+            return num / denom
+        cost_map = tmp.groupby('sym', as_index=True).apply(_wavg_cost).to_dict()
+        grp['AvgCost'] = grp['sym'].map(cost_map).fillna(0.0)
         # Weighted average LEAP Price per ticker (from DB last_price)
         def _wavg_leap_price(g: pd.DataFrame) -> float:
             denom = float(pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0).sum())
@@ -2031,9 +2041,9 @@ def dashboard_page(active_user):
         grp['LeapPrice'] = grp['sym'].map(leap_price_map).fillna(0.0)
         grp = grp.sort_values('sym')
 
-        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>LEAP Price</th><th>Avg Price</th><th>Value</th></tr></thead><tbody>"
+        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Type</th><th>Contracts</th><th>LEAP Price</th><th>Avg. Cost</th><th>Value</th></tr></thead><tbody>"
         for _, r in grp.iterrows():
-            leap_html += f"<tr><td>{r['sym']}</td><td>{float(r['Contracts']):g}</td><td>${float(r.get('LeapPrice', 0)):,.2f}</td><td>${float(r['AvgPrice']):,.2f}</td><td>${float(r['Value']):,.2f}</td></tr>"
+            leap_html += f"<tr><td>{r['sym']}</td><td>{float(r['Contracts']):g}</td><td>${float(r.get('LeapPrice', 0)):,.2f}</td><td>${float(r['AvgCost']):,.2f}</td><td>${float(r['Value']):,.2f}</td></tr>"
         total_val = float(grp['Value'].sum()) if not grp.empty else 0.0
         total_ct = float(grp['Contracts'].sum()) if not grp.empty else 0.0
         total_leap_price = 0.0
@@ -2065,10 +2075,18 @@ def dashboard_page(active_user):
                     "strike_num": 0.0,
                     "strike_den": 0.0,
                     "price": float(r.get('price', 0) or 0),
-                    "covered": False
+                    "covered": False,
+                    "has_call": False,
+                    "has_put": False
                 }
             by_sym[sym]["qty"] += float(r.get('qty', 0) or 0)
             by_sym[sym]["liability"] += float(r.get('liability', 0) or 0)
+            # Track whether this ticker has CALLs and/or PUTs
+            _t = str(r.get('type', '') or '').upper()
+            if 'CALL' in _t:
+                by_sym[sym]['has_call'] = True
+            if 'PUT' in _t:
+                by_sym[sym]['has_put'] = True
             # Weighted avg strike per ticker (weights = contracts)
             _ct = float(r.get('qty', 0) or 0)
             _k = float(r.get('strike', 0) or 0)
@@ -2081,6 +2099,16 @@ def dashboard_page(active_user):
         for _k_sym, _d in by_sym.items():
             den = float(_d.get('strike_den', 0) or 0)
             _d['strike_wavg'] = float(_d.get('strike_num', 0) or 0) / den if den else 0.0
+            # Option type label per ticker
+            if _d.get('has_call') and _d.get('has_put'):
+                _d['opt_type'] = 'CALL+PUT'
+            elif _d.get('has_call'):
+                _d['opt_type'] = 'CALL'
+            elif _d.get('has_put'):
+                _d['opt_type'] = 'PUT'
+            else:
+                _d['opt_type'] = ''
+                _d['opt_type'] = ''
 
         final_display = list(by_sym.values())
         final_display.sort(key=lambda x: x['symbol'])
@@ -2093,7 +2121,7 @@ def dashboard_page(active_user):
             if liab_raw > 0:
                 s_liab = f"<span class='liability-alert'>{s_liab}</span>"
             s_coll = "Covered" if r["covered"] else "<span style='color:#e67c73'>Unsecured</span>"
-            opt_html += f"<tr><td>{r['symbol']}</td><td>{float(r['qty']):g}</td><td>${float(r.get('strike_wavg', 0)):,.2f}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_coll}</td></tr>"
+            opt_html += f"<tr><td>{r['symbol']}</td><td>{r.get('opt_type','')}</td><td>{float(r['qty']):g}</td><td>${float(r.get('strike_wavg', 0)):,.2f}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_coll}</td></tr>"
         total_qty = sum(float(r['qty']) for r in final_display)
         total_liab = sum(float(r['liability']) for r in final_display)
         total_strike = 0.0
@@ -2102,7 +2130,7 @@ def dashboard_page(active_user):
                 total_strike = sum(float(r.get('strike_wavg', 0) or 0) * float(r.get('qty', 0) or 0) for r in final_display) / float(total_qty)
         except Exception:
             total_strike = 0.0
-        opt_html += f"<tr class='total-row'><td>Total</td><td>{total_qty:g}</td><td>${total_strike:,.2f}</td><td></td><td>${total_liab:,.2f}</td><td></td></tr>"
+        opt_html += f"<tr class='total-row'><td>Total</td><td></td><td>{total_qty:g}</td><td>${total_strike:,.2f}</td><td></td><td>${total_liab:,.2f}</td><td></td></tr>"
         opt_html += "</tbody></table>"
         st.markdown(opt_html, unsafe_allow_html=True)
     else:
