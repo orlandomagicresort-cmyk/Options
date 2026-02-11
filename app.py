@@ -2012,19 +2012,39 @@ def dashboard_page(active_user):
         tmp['px_num'] = pd.to_numeric(tmp.get('current_price', tmp.get('last_price', 0)), errors='coerce').fillna(0)
         tmp['val_num'] = tmp['qty_num'] * 100.0 * tmp['px_num']
 
+        # LEAP Price comes from the stored LEAP Prices (DB last_price) section
+        tmp['db_px_num'] = pd.to_numeric(tmp.get('last_price', tmp.get('current_price', 0)), errors='coerce').fillna(0)
+
         grp = tmp.groupby('sym', as_index=False).agg(
             Contracts=('qty_num', 'sum'),
             Value=('val_num', 'sum'),
             AvgPrice=('px_num', lambda s: float(s.mean()) if len(s) else 0.0),
         )
+        # Weighted average LEAP Price per ticker (from DB last_price)
+        def _wavg_leap_price(g: pd.DataFrame) -> float:
+            denom = float(pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0).sum())
+            if denom == 0:
+                return 0.0
+            num = float((pd.to_numeric(g.get('db_px_num', 0), errors='coerce').fillna(0) * pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0)).sum())
+            return num / denom
+        leap_price_map = tmp.groupby('sym', as_index=True).apply(_wavg_leap_price).to_dict()
+        grp['LeapPrice'] = grp['sym'].map(leap_price_map).fillna(0.0)
         grp = grp.sort_values('sym')
 
-        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>Avg Price</th><th>Value</th></tr></thead><tbody>"
+        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>LEAP Price</th><th>Avg Price</th><th>Value</th></tr></thead><tbody>"
         for _, r in grp.iterrows():
-            leap_html += f"<tr><td>{r['sym']}</td><td>{float(r['Contracts']):g}</td><td>${float(r['AvgPrice']):,.2f}</td><td>${float(r['Value']):,.2f}</td></tr>"
+            leap_html += f"<tr><td>{r['sym']}</td><td>{float(r['Contracts']):g}</td><td>${float(r.get('LeapPrice', 0)):,.2f}</td><td>${float(r['AvgPrice']):,.2f}</td><td>${float(r['Value']):,.2f}</td></tr>"
         total_val = float(grp['Value'].sum()) if not grp.empty else 0.0
         total_ct = float(grp['Contracts'].sum()) if not grp.empty else 0.0
-        leap_html += f"<tr class='total-row'><td>Total</td><td>{total_ct:g}</td><td></td><td>${total_val:,.2f}</td></tr>"
+        total_leap_price = 0.0
+        try:
+            _den = float(pd.to_numeric(tmp.get('qty_num', 0), errors='coerce').fillna(0).sum())
+            if _den:
+                _num = float((pd.to_numeric(tmp.get('db_px_num', 0), errors='coerce').fillna(0) * pd.to_numeric(tmp.get('qty_num', 0), errors='coerce').fillna(0)).sum())
+                total_leap_price = _num / _den
+        except Exception:
+            total_leap_price = 0.0
+        leap_html += f"<tr class='total-row'><td>Total</td><td>{total_ct:g}</td><td>${total_leap_price:,.2f}</td><td></td><td>${total_val:,.2f}</td></tr>"
         leap_html += "</tbody></table>"
         st.markdown(leap_html, unsafe_allow_html=True)
     else:
@@ -2042,18 +2062,30 @@ def dashboard_page(active_user):
                     "symbol": sym,
                     "qty": 0.0,
                     "liability": 0.0,
+                    "strike_num": 0.0,
+                    "strike_den": 0.0,
                     "price": float(r.get('price', 0) or 0),
                     "covered": False
                 }
             by_sym[sym]["qty"] += float(r.get('qty', 0) or 0)
             by_sym[sym]["liability"] += float(r.get('liability', 0) or 0)
+            # Weighted avg strike per ticker (weights = contracts)
+            _ct = float(r.get('qty', 0) or 0)
+            _k = float(r.get('strike', 0) or 0)
+            by_sym[sym]["strike_num"] += (_k * _ct)
+            by_sym[sym]["strike_den"] += _ct
             if r.get('linked_assets'):
                 by_sym[sym]["covered"] = True
+
+        # Finalize weighted strike
+        for _k_sym, _d in by_sym.items():
+            den = float(_d.get('strike_den', 0) or 0)
+            _d['strike_wavg'] = float(_d.get('strike_num', 0) or 0) / den if den else 0.0
 
         final_display = list(by_sym.values())
         final_display.sort(key=lambda x: x['symbol'])
 
-        opt_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>Current Price</th><th>ITM Liability</th><th>Collateral</th></tr></thead><tbody>"
+        opt_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>Strike Price</th><th>Current Price</th><th>ITM Liability</th><th>Collateral</th></tr></thead><tbody>"
         for r in final_display:
             s_price = f"${r['price']:,.2f}" if r['price'] > 0 else "<span style='opacity:0.5'>0.00</span>"
             liab_raw = float(r['liability'])
@@ -2061,10 +2093,16 @@ def dashboard_page(active_user):
             if liab_raw > 0:
                 s_liab = f"<span class='liability-alert'>{s_liab}</span>"
             s_coll = "Covered" if r["covered"] else "<span style='color:#e67c73'>Unsecured</span>"
-            opt_html += f"<tr><td>{r['symbol']}</td><td>{float(r['qty']):g}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_coll}</td></tr>"
+            opt_html += f"<tr><td>{r['symbol']}</td><td>{float(r['qty']):g}</td><td>${float(r.get('strike_wavg', 0)):,.2f}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_coll}</td></tr>"
         total_qty = sum(float(r['qty']) for r in final_display)
         total_liab = sum(float(r['liability']) for r in final_display)
-        opt_html += f"<tr class='total-row'><td>Total</td><td>{total_qty:g}</td><td></td><td>${total_liab:,.2f}</td><td></td></tr>"
+        total_strike = 0.0
+        try:
+            if total_qty:
+                total_strike = sum(float(r.get('strike_wavg', 0) or 0) * float(r.get('qty', 0) or 0) for r in final_display) / float(total_qty)
+        except Exception:
+            total_strike = 0.0
+        opt_html += f"<tr class='total-row'><td>Total</td><td>{total_qty:g}</td><td>${total_strike:,.2f}</td><td></td><td>${total_liab:,.2f}</td><td></td></tr>"
         opt_html += "</tbody></table>"
         st.markdown(opt_html, unsafe_allow_html=True)
     else:
