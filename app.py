@@ -2041,7 +2041,7 @@ def dashboard_page(active_user):
         grp['LeapPrice'] = grp['sym'].map(leap_price_map).fillna(0.0)
         grp = grp.sort_values('sym')
 
-        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Type</th><th>Contracts</th><th>LEAP Price</th><th>Avg. Cost</th><th>Value</th></tr></thead><tbody>"
+        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>LEAP Price</th><th>Avg. Cost</th><th>Value</th></tr></thead><tbody>"
         for _, r in grp.iterrows():
             leap_html += f"<tr><td>{r['sym']}</td><td>{float(r['Contracts']):g}</td><td>${float(r.get('LeapPrice', 0)):,.2f}</td><td>${float(r['AvgCost']):,.2f}</td><td>${float(r['Value']):,.2f}</td></tr>"
         total_val = float(grp['Value'].sum()) if not grp.empty else 0.0
@@ -2113,7 +2113,7 @@ def dashboard_page(active_user):
         final_display = list(by_sym.values())
         final_display.sort(key=lambda x: x['symbol'])
 
-        opt_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>Strike Price</th><th>Current Price</th><th>ITM Liability</th><th>Collateral</th></tr></thead><tbody>"
+        opt_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Type</th><th>Contracts</th><th>Strike Price</th><th>Current Price</th><th>ITM Liability</th><th>Collateral</th></tr></thead><tbody>"
         for r in final_display:
             s_price = f"${r['price']:,.2f}" if r['price'] > 0 else "<span style='opacity:0.5'>0.00</span>"
             liab_raw = float(r['liability'])
