@@ -2733,8 +2733,16 @@ def option_details_page(active_user):
         # Exclude deposits/withdrawals from profit/forecast (flow-adjusted)
         # We treat net deposits as additional invested capital (not profit).
         def _net_flows_selected(d0, d1):
-            """Net DEPOSIT/WITHDRAWAL flows between (d0, d1], converted to selected currency.
-            NOTE: If both CAD and USD flows exist, we convert using current FX for simplicity.
+            """Net DEPOSIT/WITHDRAWAL flows between (d0, d1], expressed in the selected currency.
+
+            Currency note (important):
+            This app logs deposits/withdrawals in BOTH:
+              - USD (cash movement)
+              - CAD (CAD-equivalent 'basis') for the SAME cash event
+            If we add both, we double-count. So we:
+              1) Prefer transactions already recorded in the selected currency (USD or CAD)
+              2) Only if none exist in the selected currency, convert the other currency using the current FX rate
+                 (best-effort fallback when only one side exists).
             """
             try:
                 tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
@@ -2742,21 +2750,32 @@ def option_details_page(active_user):
                 tx = pd.DataFrame(tx_res.data)
                 if tx.empty:
                     return 0.0
+
                 tx = normalize_columns(tx)
                 tx["transaction_date"] = pd.to_datetime(tx["transaction_date"], errors="coerce")
                 tx = tx[tx["transaction_date"].notna()]
+
                 mask = (tx["transaction_date"] > pd.to_datetime(d0)) & (tx["transaction_date"] <= pd.to_datetime(d1))
                 tx = tx.loc[mask].copy()
                 if tx.empty:
                     return 0.0
 
-                usd_sum = float(tx.loc[tx["currency"] == "USD", "amount"].sum()) if "currency" in tx.columns else 0.0
-                cad_sum = float(tx.loc[tx["currency"] == "CAD", "amount"].sum()) if "currency" in tx.columns else 0.0
+                if "currency" not in tx.columns:
+                    return float(tx["amount"].sum())
+
+                sel = str(selected_currency).upper().strip()
+                tx_sel = tx.loc[tx["currency"].astype(str).str.upper() == sel]
+                if not tx_sel.empty:
+                    return float(tx_sel["amount"].sum())
+
+                # Fallback: convert other currency to selected (when selected currency rows don't exist)
+                usd_sum = float(tx.loc[tx["currency"].astype(str).str.upper() == "USD", "amount"].sum())
+                cad_sum = float(tx.loc[tx["currency"].astype(str).str.upper() == "CAD", "amount"].sum())
 
                 fx_now = float(get_usd_to_cad_rate() or 1.0)
-                if selected_currency == "CAD":
+                if sel == "CAD":
                     return cad_sum + (usd_sum * fx_now)
-                # selected USD
+                # sel == USD
                 return usd_sum + (cad_sum / fx_now if fx_now else 0.0)
             except Exception:
                 return 0.0
