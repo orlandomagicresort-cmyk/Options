@@ -3897,7 +3897,7 @@ def pricing_page(active_user):
     show["Updated"] = show["_updated"].map({True: "Yes", False: "No"})
 
 
-    # Sort for readability: Ticker (asc), then Strike (desc)
+        # Sort for readability: Ticker (asc), then Strike (desc)
     if 'Ticker' in show.columns and 'Strike' in show.columns:
         show = show.sort_values(by=['Ticker', 'Strike'], ascending=[True, False])
 
