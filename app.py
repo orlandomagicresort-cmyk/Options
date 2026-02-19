@@ -3919,7 +3919,7 @@ def pricing_page(active_user):
             "Lead Price (New)": st.column_config.NumberColumn("Lead Price (New)", format="$%.4f"),
         }
     )
-st.caption("Tip: If a contract can't be found on Yahoo for that expiry/strike, the app keeps the stored DB price.")
+st.caption("")
 
 
 
