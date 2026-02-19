@@ -3799,7 +3799,7 @@ def pricing_page(active_user):
     leaps['right'] = leaps['type'].apply(_right_from_type)
 
     leaps['sort_ticker'] = leaps['ticker_clean'].astype(str).str.upper()
-    leaps.sort_values(by=['sort_ticker', 'exp_iso', 'strike_price'], inplace=True)
+    leaps.sort_values(by=['sort_ticker', 'exp_iso', 'strike_price'], ascending=[True, True, False], inplace=True)
 
     leaps['type_disp'] = (
         leaps['type'].astype(str)
