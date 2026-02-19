@@ -2722,16 +2722,62 @@ def option_details_page(active_user):
     prof_html += "<tr><td colspan='2' style='background-color:#f0f2f6; text-align:center; font-size:0.85em; font-weight:bold;'>YTD Snapshot Analysis</td></tr>"
 
     if baseline:
-        start_date_str = baseline['snapshot_date']; start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        base_equity_usd = float(baseline['total_equity']); base_rate = float(baseline.get('exchange_rate', 1.0) or 1.0)
+        start_date_str = baseline['snapshot_date']
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        base_equity_usd = float(baseline['total_equity'])
+        base_rate = float(baseline.get('exchange_rate', 1.0) or 1.0)
+
+        # Baseline value (in selected currency)
         start_val = base_equity_usd * base_rate if selected_currency == "CAD" else base_equity_usd
-        profit_dollar = net_liq_disp - start_val; profit_pct = (profit_dollar / start_val) if start_val != 0 else 0
-        today = date.today(); days_passed = (today - start_date).days; weeks_passed = days_passed / 7.0
-        if days_passed < 1: days_passed = 1
+
+        # Exclude deposits/withdrawals from profit/forecast (flow-adjusted)
+        # We treat net deposits as additional invested capital (not profit).
+        def _net_flows_selected(d0, d1):
+            """Net DEPOSIT/WITHDRAWAL flows between (d0, d1], converted to selected currency.
+            NOTE: If both CAD and USD flows exist, we convert using current FX for simplicity.
+            """
+            try:
+                tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+                    .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                tx = pd.DataFrame(tx_res.data)
+                if tx.empty:
+                    return 0.0
+                tx = normalize_columns(tx)
+                tx["transaction_date"] = pd.to_datetime(tx["transaction_date"], errors="coerce")
+                tx = tx[tx["transaction_date"].notna()]
+                mask = (tx["transaction_date"] > pd.to_datetime(d0)) & (tx["transaction_date"] <= pd.to_datetime(d1))
+                tx = tx.loc[mask].copy()
+                if tx.empty:
+                    return 0.0
+
+                usd_sum = float(tx.loc[tx["currency"] == "USD", "amount"].sum()) if "currency" in tx.columns else 0.0
+                cad_sum = float(tx.loc[tx["currency"] == "CAD", "amount"].sum()) if "currency" in tx.columns else 0.0
+
+                fx_now = float(get_usd_to_cad_rate() or 1.0)
+                if selected_currency == "CAD":
+                    return cad_sum + (usd_sum * fx_now)
+                # selected USD
+                return usd_sum + (cad_sum / fx_now if fx_now else 0.0)
+            except Exception:
+                return 0.0
+
+        net_flows = _net_flows_selected(start_date, date.today())
+        invest_base = start_val + net_flows  # what you'd have with 0% return, after net contributions
+
+        profit_dollar = net_liq_disp - invest_base
+        profit_pct = (profit_dollar / invest_base) if invest_base != 0 else 0
+
+        today = date.today()
+        days_passed = (today - start_date).days
+        if days_passed < 1:
+            days_passed = 1
+
         annualized_return = ((1 + profit_pct) ** (365.0 / days_passed)) - 1 if profit_pct > -1 else 0
         cls_ytd = "pos-val" if profit_dollar >= 0 else "neg-val"
+
         prof_html += f"<tr><td>Baseline Date (Start)</td><td>{start_date_str}</td></tr>"
         prof_html += f"<tr><td>Baseline Value</td><td>${start_val:,.2f}</td></tr>"
+        prof_html += f"<tr><td>Net Deposits/Withdrawals Since Baseline</td><td>${net_flows:,.2f}</td></tr>"
         prof_html += f"<tr><td>YTD Profit ($)</td><td class='{cls_ytd}'>${profit_dollar:,.2f}</td></tr>"
         prof_html += f"<tr><td>YTD Profit (%)</td><td class='{cls_ytd}'>{profit_pct*100:.2f}%</td></tr>"
         prof_html += f"<tr><td>FY Forecast (Annualized)</td><td>{annualized_return*100:.2f}%</td></tr>"
