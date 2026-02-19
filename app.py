@@ -3877,18 +3877,14 @@ def pricing_page(active_user):
         out_df["new_price"] = out_df["current_db_price"]
 
     # Display
-    show = out_df[[
-        "id", "ticker_clean", "exp_disp", "strike_price", "right", "type_disp",
-        "current_db_price", "yahoo_mid", "new_price"
-    ]].copy()
+    show = out_df[["ticker_clean", "exp_disp", "strike_price", "right", "current_db_price", "yahoo_mid", "new_price"]].copy()
 
     show.rename(columns={
         "ticker_clean": "Ticker",
         "exp_disp": "Exp",
         "strike_price": "Strike",
-        "right": "Right",
-        "type_disp": "Type",
-        "current_db_price": "DB Price",
+        "right": "Option",
+                "current_db_price": "DB Price",
         "yahoo_mid": "Yahoo Mid",
         "new_price": "Lead Price (New)"
     }, inplace=True)
@@ -3898,6 +3894,8 @@ def pricing_page(active_user):
     show["_updated"] = (
         (show["DB Price"].fillna(0).astype(float) - show["Lead Price (New)"].fillna(0).astype(float)).abs() > 1e-9
     )
+    show["Updated"] = show["_updated"].map({True: "Yes", False: "No"})
+
 
     def _highlight_updated_rows(row):
         if bool(row.get("_updated", False)):
@@ -3905,6 +3903,13 @@ def pricing_page(active_user):
         return [""] * len(row)
 
     styled_show = show.style.apply(_highlight_updated_rows, axis=1)
+    try:
+        styled_show = styled_show.hide(axis="columns", subset=["_updated"])
+    except Exception:
+        try:
+            styled_show = styled_show.hide_columns(["_updated"])
+        except Exception:
+            pass
     # Render as HTML using the same finance-table styling as the rest of the dashboard (no scrollbars)
     try:
         styled_show = styled_show.hide(axis="index")
