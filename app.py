@@ -3897,16 +3897,16 @@ def pricing_page(active_user):
     show["Updated"] = show["_updated"].map({True: "Yes", False: "No"})
 
 
-    def _highlight_updated_rows(row):
+        # Sort for readability: Ticker (asc), then Strike (desc)
+    if 'Ticker' in show.columns and 'Strike' in show.columns:
+        show = show.sort_values(by=['Ticker', 'Strike'], ascending=[True, False])
+
+def _highlight_updated_rows(row):
         if bool(row.get("_updated", False)):
             return ["background-color: #E6FFEA"] * len(row)
         return [""] * len(row)
 
-        # Sort for readability: Ticker (asc), then Strike (desc)
-    if 'Ticker' in show.columns and 'Strike' in show.columns:
-        show = show.sort_values(by=['Ticker','Strike'], ascending=[True, False])
-
-styled_show = show.style.apply(_highlight_updated_rows, axis=1)
+    styled_show = show.style.apply(_highlight_updated_rows, axis=1)
     try:
         styled_show = styled_show.hide(axis="columns", subset=["_updated"])
     except Exception:
@@ -3927,22 +3927,34 @@ styled_show = show.style.apply(_highlight_updated_rows, axis=1)
     except Exception:
         pass
     st.markdown(styled_show.to_html(), unsafe_allow_html=True)
-    # Copy helpers for Excel
-    try:
-        _copy_cols = [c for c in ['Ticker','Expiry','Strike','Option','LEAP Price (New)'] if c in show.columns]
-        if len(_copy_cols) >= 2 and 'LEAP Price (New)' in show.columns:
-            st.markdown("**Copy helpers (Excel):**")
-            _label_cols = [c for c in ['Ticker','Expiry','Strike','Option'] if c in show.columns]
-            show['_row_label'] = show[_label_cols].astype(str).agg(" | ".join, axis=1) if _label_cols else show.index.astype(str)
-            _sel = st.selectbox("Select a row to copy LEAP Price (New)", show['_row_label'].tolist(), key="leap_copy_row")
-            _val = show.loc[show['_row_label'] == _sel, 'LEAP Price (New)'].iloc[0]
-            st.text_input("LEAP Price (New) (copy this value)", value=str(_val), key="leap_copy_value")
-            _col_txt = "\n".join([str(v) for v in show['LEAP Price (New)'].tolist()])
-            st.text_area("Copy all LEAP Price (New) values (one per line)", value=_col_txt, height=200, key="leap_copy_all")
-    except Exception:
-        pass
 
 
+    # Copy helpers (Excel friendly)
+    if 'Lead Price (New)' in show.columns:
+        st.markdown("**Copy helpers (Excel):**")
+        _label_cols = [c for c in ['Ticker', 'Exp', 'Strike', 'Option'] if c in show.columns]
+        if _label_cols:
+            show['_row_label'] = show[_label_cols].astype(str).agg(" | ".join, axis=1)
+        else:
+            show['_row_label'] = show.index.astype(str)
+        _selected = st.selectbox(
+            "Select a row to copy Lead Price (New)",
+            show['_row_label'].tolist(),
+            key="leap_copy_row"
+        )
+        _value_to_copy = show.loc[show['_row_label'] == _selected, 'Lead Price (New)'].iloc[0]
+        st.text_input(
+            "Lead Price (New) (copy this value)",
+            value=str(_value_to_copy),
+            key="leap_copy_value"
+        )
+        _all_values = "\n".join(show['Lead Price (New)'].astype(str).tolist())
+        st.text_area(
+            "Copy all Lead Price (New) values (one per line)",
+            value=_all_values,
+            height=200,
+            key="leap_copy_all"
+        )
 def safe_reverse_ledger_transaction(transaction_id):
     res = supabase.table("transactions").select("*").eq("id", transaction_id).execute()
     if not res.data: return False, "Transaction not found."
