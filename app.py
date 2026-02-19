@@ -3828,20 +3828,33 @@ def pricing_page(active_user):
         "new_price": "Lead Price (New)"
     }, inplace=True)
 
+    
+    # Shade rows where the refreshed price differs from the stored DB price
+    show["_updated"] = (
+        (show["DB Price"].fillna(0).astype(float) - show["Lead Price (New)"].fillna(0).astype(float)).abs() > 1e-9
+    )
+
+    def _highlight_updated_rows(row):
+        if bool(row.get("_updated", False)):
+            return ["background-color: #E6FFEA"] * len(row)
+        return [""] * len(row)
+
+    styled_show = show.style.apply(_highlight_updated_rows, axis=1)
+
     st.dataframe(
-        show,
+        styled_show,
         hide_index=True,
         use_container_width=True,
         column_config={
             "id": None,
+            "_updated": None,
             "Strike": st.column_config.NumberColumn("Strike", format="$%.2f"),
             "DB Price": st.column_config.NumberColumn("DB Price", format="$%.4f"),
             "Yahoo Mid": st.column_config.NumberColumn("Yahoo Mid", format="$%.4f"),
             "Lead Price (New)": st.column_config.NumberColumn("Lead Price (New)", format="$%.4f"),
         }
     )
-
-    st.caption("Tip: If a contract can't be found on Yahoo for that expiry/strike, the app keeps the stored DB price.")
+st.caption("Tip: If a contract can't be found on Yahoo for that expiry/strike, the app keeps the stored DB price.")
 
 
 
