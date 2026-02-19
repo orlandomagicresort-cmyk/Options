@@ -3906,19 +3906,7 @@ def pricing_page(active_user):
 
     styled_show = show.style.apply(_highlight_updated_rows, axis=1)
 
-    st.table(
-        styled_show,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "id": None,
-            "_updated": None,
-            "Strike": st.column_config.NumberColumn("Strike", format="$%.2f"),
-            "DB Price": st.column_config.NumberColumn("DB Price", format="$%.4f"),
-            "Yahoo Mid": st.column_config.NumberColumn("Yahoo Mid", format="$%.4f"),
-            "Lead Price (New)": st.column_config.NumberColumn("Lead Price (New)", format="$%.4f"),
-        }
-    )
+    st.table(styled_show)
 st.caption("")
 
 
