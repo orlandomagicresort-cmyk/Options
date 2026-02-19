@@ -2069,23 +2069,7 @@ def dashboard_page(active_user):
             df2 = df2.sort_values(["Sector", "Total Market Value"], ascending=[True, False]).reset_index(drop=True)
 
             # Render as a subtotal + detail HTML table
-            sec_html = """
-            <table style="width:100%; border-collapse:collapse;">
-              <thead>
-                <tr style="text-align:left; border-bottom:1px solid #ddd;">
-                  <th>Sector</th>
-                  <th>Ticker</th>
-                  <th>Shares</th>
-                  <th>Stock Value</th>
-                  <th>LEAP Contracts</th>
-                  <th>LEAP Value</th>
-                  <th>Short Contracts</th>
-                  <th>Total Market Value</th>
-                  <th>% of Portfolio</th>
-                </tr>
-              </thead>
-              <tbody>
-            """
+            sec_html = "<table class='finance-table'><thead><tr>"                       "<th style='text-align:left'>Sector</th>"                       "<th style='text-align:left'>Ticker</th>"                       "<th>Shares</th><th>Stock Value</th><th>LEAP Contracts</th><th>LEAP Value</th>"                       "<th>Short Contracts</th><th>Total Market Value</th><th>% of Portfolio</th>"                       "</tr></thead><tbody>"
 
             for sector, g in df2.groupby("Sector", dropna=False):
                 sector_name = str(sector) if sector is not None and str(sector).strip() else "Unknown"
@@ -2116,7 +2100,7 @@ def dashboard_page(active_user):
                     pct = float(r["% of Portfolio"] or 0.0) * 100.0
                     sec_html += (
                         f"<tr style='border-top:1px solid #222;'>"
-                        f"<td>{sector_name}</td>"
+                        f"<td></td>"
                         f"<td>{r['Ticker']}</td>"
                         f"<td>{float(r['Shares']):g}</td>"
                         f"<td>${float(r['Stock Value']):,.2f}</td>"
