@@ -575,7 +575,7 @@ def community_page(user):
     for col in ["WTD %", "MTD %", "YTD %", "52W %"]:
         if col in show.columns:
             show[col] = pd.to_numeric(show[col], errors="coerce") * 100
-    st.dataframe(
+    st.table(
 
         show,
         use_container_width=True,
@@ -660,7 +660,7 @@ def account_sharing_page(user):
         df = pd.DataFrame(rows)
         df["delegate"] = df.get("delegate_email")
         view_cols = [c for c in ["delegate","role","status","created_at"] if c in df.columns]
-        st.dataframe(df[view_cols], use_container_width=True)
+        st.table(df[view_cols], use_container_width=True)
         revoke_id = st.selectbox("Revoke access for", [""] + [str(r["id"]) for r in rows], format_func=lambda x: "" if x=="" else x, key="revoke_sel")
         if revoke_id and st.button("Revoke Selected", type="secondary"):
             _require_editor()
@@ -3334,7 +3334,7 @@ def snapshot_page(user):
                 "52W %": pct_fmt
             })
 
-            st.dataframe(
+            st.table(
                 styled_df,
                 column_config={
                     "Date": st.column_config.TextColumn("Snapshot Date"),
@@ -3906,7 +3906,7 @@ def pricing_page(active_user):
 
     styled_show = show.style.apply(_highlight_updated_rows, axis=1)
 
-    st.dataframe(
+    st.table(
         styled_show,
         hide_index=True,
         use_container_width=True,
@@ -4392,7 +4392,7 @@ def ledger_page(active_user):
                     "Amount": float(rr.get("amount") or 0.0),
                     "Details": str(rr.get("description") or "")
                 })
-            st.dataframe(pd.DataFrame(sub), use_container_width=True)
+            st.table(pd.DataFrame(sub), use_container_width=True)
 
 def trade_entry_page(active_user):
     uid = _active_user_id(active_user)
@@ -5120,7 +5120,7 @@ def bulk_entries_page(active_user):
     st.subheader("Review & Submit")
     import pandas as pd
     sdf = pd.DataFrame(rows_out)
-    st.dataframe(sdf, use_container_width=True)
+    st.table(sdf, use_container_width=True)
     total_cash = float(sdf["Net Cash Change"].sum()) if not sdf.empty else 0.0
     st.metric("Total Net Cash Change", f"${total_cash:,.2f}")
 
