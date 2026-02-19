@@ -3391,7 +3391,7 @@ def snapshot_page(user):
                 tooltip=[alt.Tooltip('snapshot_date:T', title='Date'), alt.Tooltip('Net Dep:Q', title='Deposit (USD)', format=',.2f')]
             )
 
-            chart = (line + rules).properties(height=320)
+            chart = (line + rules).properties()
             st.altair_chart(chart, use_container_width=True)
 
 
