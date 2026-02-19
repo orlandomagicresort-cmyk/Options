@@ -3799,7 +3799,7 @@ def pricing_page(active_user):
     leaps['right'] = leaps['type'].apply(_right_from_type)
 
     leaps['sort_ticker'] = leaps['ticker_clean'].astype(str).str.upper()
-    leaps.sort_values(by=['sort_ticker', 'exp_iso', 'strike_price'], ascending=[True, True, False], inplace=True)
+    leaps.sort_values(by=['sort_ticker', 'exp_iso', 'strike_price'], inplace=True)
 
     leaps['type_disp'] = (
         leaps['type'].astype(str)
@@ -3895,6 +3895,14 @@ def pricing_page(active_user):
         (show["DB Price"].fillna(0).astype(float) - show["Lead Price (New)"].fillna(0).astype(float)).abs() > 1e-9
     )
     show["Updated"] = show["_updated"].map({True: "Yes", False: "No"})
+    # Sort: Ticker (asc), Expiry (asc), Strike (desc)
+    try:
+        show["_exp_sort"] = pd.to_datetime(show["Exp"], errors="coerce")
+        show["Strike"] = pd.to_numeric(show["Strike"], errors="coerce")
+        show = show.sort_values(by=["Ticker", "_exp_sort", "Strike"], ascending=[True, True, False]).drop(columns=["_exp_sort"])
+    except Exception:
+        pass
+
 
 
     def _highlight_updated_rows(row):
@@ -3903,6 +3911,17 @@ def pricing_page(active_user):
         return [""] * len(row)
 
     styled_show = show.style.apply(_highlight_updated_rows, axis=1)
+    # Display formatting
+    try:
+        styled_show = styled_show.format({
+            "Strike": "${:,.2f}",
+            "DB Price": "{:,.3f}",
+            "Yahoo Mid": "{:,.3f}",
+            "Lead Price (New)": "{:,.3f}",
+        })
+    except Exception:
+        pass
+
     try:
         styled_show = styled_show.hide(axis="columns", subset=["_updated"])
     except Exception:
@@ -3923,6 +3942,39 @@ def pricing_page(active_user):
     except Exception:
         pass
     st.markdown(styled_show.to_html(), unsafe_allow_html=True)
+    # Copy / export helpers for Excel (only the New prices)
+    try:
+        if "Lead Price (New)" in show.columns:
+            export_cols = [c for c in ["Ticker", "Exp", "Strike", "Option", "Lead Price (New)"] if c in show.columns]
+            export_df = show[export_cols].copy()
+
+            # Download as CSV (Excel-friendly)
+            st.download_button(
+                "Download New Prices (CSV)",
+                data=export_df.to_csv(index=False),
+                file_name="leap_new_prices.csv",
+                mime="text/csv",
+                key="dl_leap_new_prices_csv",
+            )
+
+            # Quick copy: one value per line (paste into Excel column)
+            st.text_area(
+                "Copy Lead Price (New) values (one per line)",
+                value="\n".join(export_df["Lead Price (New)"].astype(str).tolist()),
+                height=180,
+                key="copy_leap_new_prices_lines",
+            )
+
+            # Quick copy: tab-separated table (paste into Excel with columns)
+            st.text_area(
+                "Copy table (tab-separated) for Excel",
+                value=export_df.to_csv(index=False, sep="\t"),
+                height=220,
+                key="copy_leap_new_prices_tsv",
+            )
+    except Exception:
+        pass
+
 def safe_reverse_ledger_transaction(transaction_id):
     res = supabase.table("transactions").select("*").eq("id", transaction_id).execute()
     if not res.data: return False, "Transaction not found."
