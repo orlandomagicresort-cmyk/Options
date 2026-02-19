@@ -3948,30 +3948,9 @@ def pricing_page(active_user):
             export_cols = [c for c in ["Ticker", "Exp", "Strike", "Option", "Lead Price (New)"] if c in show.columns]
             export_df = show[export_cols].copy()
 
-            # Download as CSV (Excel-friendly)
-            st.download_button(
-                "Download New Prices (CSV)",
-                data=export_df.to_csv(index=False),
-                file_name="leap_new_prices.csv",
-                mime="text/csv",
-                key="dl_leap_new_prices_csv",
-            )
-
             # Quick copy: one value per line (paste into Excel column)
-            st.text_area(
-                "Copy Lead Price (New) values (one per line)",
-                value="\n".join(export_df["Lead Price (New)"].astype(str).tolist()),
-                height=180,
-                key="copy_leap_new_prices_lines",
-            )
 
             # Quick copy: tab-separated table (paste into Excel with columns)
-            st.text_area(
-                "Copy table (tab-separated) for Excel",
-                value=export_df.to_csv(index=False, sep="\t"),
-                height=220,
-                key="copy_leap_new_prices_tsv",
-            )
     except Exception:
         pass
 
