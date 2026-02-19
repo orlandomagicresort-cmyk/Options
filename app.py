@@ -884,6 +884,22 @@ def _clean_symbol_for_yahoo(symbol: str) -> str:
         s = s.split(":")[-1]
     return s.strip().upper()
 
+
+@st.cache_data(ttl=60 * 60 * 24 * 7, show_spinner=False)
+def get_sector_industry(symbol: str):
+    """Return (sector, industry) for a ticker symbol using yfinance.
+    Cached for 7 days to avoid rate limits / slowness."""
+    sym = _clean_symbol_for_yahoo(symbol)
+    if not sym:
+        return ("Unknown", "Unknown")
+    try:
+        t = yf.Ticker(sym)
+        info = getattr(t, "info", None) or {}
+        sector = info.get("sector") or "Unknown"
+        industry = info.get("industry") or "Unknown"
+        return (sector, industry)
+    except Exception:
+        return ("Unknown", "Unknown")
 def get_yahoo_option_mid_price(symbol: str, expiry, strike, right: str):
     """Get Yahoo mid price ( (bid+ask)/2 ) for an option contract, with sensible fallbacks.
 
@@ -1992,6 +2008,130 @@ def dashboard_page(active_user):
             st.info("No holdings to summarize.")
     except Exception as e:
         st.warning(f"Total Holdings summary unavailable: {e}")
+
+    st.subheader("Total Holdings (by Sector)")
+    try:
+        # Rebuild the same per-ticker totals used above (so this section is self-contained)
+        totals2 = {}
+
+        if not stocks_df.empty:
+            tmp_s2 = stocks_df.copy()
+            tmp_s2["sym"] = tmp_s2.get("symbol", tmp_s2.get("ticker", "UNK")).astype(str).str.upper().str.strip()
+            tmp_s2["shares"] = pd.to_numeric(tmp_s2.get("quantity", 0), errors="coerce").fillna(0.0)
+            tmp_s2["stock_val"] = pd.to_numeric(tmp_s2.get("market_value", 0), errors="coerce").fillna(0.0)
+            for sym, g in tmp_s2.groupby("sym"):
+                totals2.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                         "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                         "Short Contracts": 0.0})
+                totals2[sym]["Shares"] += float(g["shares"].sum())
+                totals2[sym]["Stock Value"] += float(g["stock_val"].sum())
+
+        if not leaps_df.empty:
+            tmp_l2 = leaps_df.copy()
+            tmp_l2["sym"] = tmp_l2.get("symbol", tmp_l2.get("ticker", "UNK")).astype(str).str.upper().str.strip()
+            tmp_l2["contracts"] = pd.to_numeric(tmp_l2.get("quantity", 0), errors="coerce").fillna(0.0)
+            tmp_l2["px"] = pd.to_numeric(tmp_l2.get("current_price", tmp_l2.get("last_price", 0)), errors="coerce").fillna(0.0)
+            tmp_l2["leap_val"] = tmp_l2["contracts"] * 100.0 * tmp_l2["px"]
+            for sym, g in tmp_l2.groupby("sym"):
+                totals2.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                         "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                         "Short Contracts": 0.0})
+                totals2[sym]["LEAP Contracts"] += float(g["contracts"].sum())
+                totals2[sym]["LEAP Value"] += float(g["leap_val"].sum())
+
+        if grouped_options:
+            by_sym_short2 = {}
+            for r in grouped_options.values():
+                sym = str(r.get("symbol", "UNK")).upper().strip()
+                by_sym_short2[sym] = by_sym_short2.get(sym, 0.0) + float(r.get("qty", 0.0) or 0.0)
+            for sym, ct in by_sym_short2.items():
+                totals2.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                         "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                         "Short Contracts": 0.0})
+                totals2[sym]["Short Contracts"] += float(ct)
+
+        if not totals2:
+            st.info("No holdings to summarize by sector.")
+        else:
+            df2 = pd.DataFrame(list(totals2.values()))
+            df2["Total Market Value"] = pd.to_numeric(df2["Stock Value"], errors="coerce").fillna(0.0) + pd.to_numeric(df2["LEAP Value"], errors="coerce").fillna(0.0)
+            total_mv = float(df2["Total Market Value"].sum()) if not df2.empty else 0.0
+            if total_mv != 0:
+                df2["% of Portfolio"] = df2["Total Market Value"] / total_mv
+            else:
+                df2["% of Portfolio"] = 0.0
+
+            # Attach sector/industry (cached)
+            df2["Sector"] = df2["Ticker"].apply(lambda t: get_sector_industry(t)[0])
+            df2["Industry"] = df2["Ticker"].apply(lambda t: get_sector_industry(t)[1])
+
+            # Sort by Sector, then by Market Value desc
+            df2 = df2.sort_values(["Sector", "Total Market Value"], ascending=[True, False]).reset_index(drop=True)
+
+            # Render as a subtotal + detail HTML table
+            sec_html = """
+            <table style="width:100%; border-collapse:collapse;">
+              <thead>
+                <tr style="text-align:left; border-bottom:1px solid #ddd;">
+                  <th>Sector</th>
+                  <th>Ticker</th>
+                  <th>Shares</th>
+                  <th>Stock Value</th>
+                  <th>LEAP Contracts</th>
+                  <th>LEAP Value</th>
+                  <th>Short Contracts</th>
+                  <th>Total Market Value</th>
+                  <th>% of Portfolio</th>
+                </tr>
+              </thead>
+              <tbody>
+            """
+
+            for sector, g in df2.groupby("Sector", dropna=False):
+                sector_name = str(sector) if sector is not None and str(sector).strip() else "Unknown"
+                s_shares = float(g["Shares"].sum())
+                s_stock = float(g["Stock Value"].sum())
+                s_leap_ct = float(g["LEAP Contracts"].sum())
+                s_leap_val = float(g["LEAP Value"].sum())
+                s_short_ct = float(g["Short Contracts"].sum())
+                s_total = float(g["Total Market Value"].sum())
+                s_pct = (s_total / total_mv * 100.0) if total_mv else 0.0
+
+                # Subtotal row
+                sec_html += (
+                    f"<tr style='font-weight:700; background:rgba(255,255,255,0.04); border-top:1px solid #333;'>"
+                    f"<td>{sector_name}</td><td>Subtotal</td>"
+                    f"<td>{s_shares:g}</td>"
+                    f"<td>${s_stock:,.2f}</td>"
+                    f"<td>{s_leap_ct:g}</td>"
+                    f"<td>${s_leap_val:,.2f}</td>"
+                    f"<td>{s_short_ct:g}</td>"
+                    f"<td>${s_total:,.2f}</td>"
+                    f"<td>{s_pct:,.2f}%</td>"
+                    f"</tr>"
+                )
+
+                # Detail rows
+                for _, r in g.sort_values("Total Market Value", ascending=False).iterrows():
+                    pct = float(r["% of Portfolio"] or 0.0) * 100.0
+                    sec_html += (
+                        f"<tr style='border-top:1px solid #222;'>"
+                        f"<td>{sector_name}</td>"
+                        f"<td>{r['Ticker']}</td>"
+                        f"<td>{float(r['Shares']):g}</td>"
+                        f"<td>${float(r['Stock Value']):,.2f}</td>"
+                        f"<td>{float(r['LEAP Contracts']):g}</td>"
+                        f"<td>${float(r['LEAP Value']):,.2f}</td>"
+                        f"<td>{float(r['Short Contracts']):g}</td>"
+                        f"<td>${float(r['Total Market Value']):,.2f}</td>"
+                        f"<td>{pct:,.2f}%</td>"
+                        f"</tr>"
+                    )
+
+            sec_html += "</tbody></table>"
+            st.markdown(sec_html, unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"Total Holdings by Sector unavailable: {e}")
 
     st.subheader("Stock Holdings (USD)")
     if not stocks_df.empty:
