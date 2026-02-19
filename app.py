@@ -575,7 +575,7 @@ def community_page(user):
     for col in ["WTD %", "MTD %", "YTD %", "52W %"]:
         if col in show.columns:
             show[col] = pd.to_numeric(show[col], errors="coerce") * 100
-    st.table(
+    st.dataframe(
 
         show,
         use_container_width=True,
@@ -660,7 +660,7 @@ def account_sharing_page(user):
         df = pd.DataFrame(rows)
         df["delegate"] = df.get("delegate_email")
         view_cols = [c for c in ["delegate","role","status","created_at"] if c in df.columns]
-        st.table(df[view_cols], use_container_width=True)
+        st.dataframe(df[view_cols], use_container_width=True)
         revoke_id = st.selectbox("Revoke access for", [""] + [str(r["id"]) for r in rows], format_func=lambda x: "" if x=="" else x, key="revoke_sel")
         if revoke_id and st.button("Revoke Selected", type="secondary"):
             _require_editor()
@@ -3334,7 +3334,7 @@ def snapshot_page(user):
                 "52W %": pct_fmt
             })
 
-            st.table(
+            st.dataframe(
                 styled_df,
                 column_config={
                     "Date": st.column_config.TextColumn("Snapshot Date"),
@@ -3391,7 +3391,7 @@ def snapshot_page(user):
                 tooltip=[alt.Tooltip('snapshot_date:T', title='Date'), alt.Tooltip('Net Dep:Q', title='Deposit (USD)', format=',.2f')]
             )
 
-            chart = (line + rules).properties()
+            chart = (line + rules).properties(height=320)
             st.altair_chart(chart, use_container_width=True)
 
 
@@ -3906,7 +3906,19 @@ def pricing_page(active_user):
 
     styled_show = show.style.apply(_highlight_updated_rows, axis=1)
 
-    st.table(styled_show)
+    st.dataframe(
+        styled_show,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "id": None,
+            "_updated": None,
+            "Strike": st.column_config.NumberColumn("Strike", format="$%.2f"),
+            "DB Price": st.column_config.NumberColumn("DB Price", format="$%.4f"),
+            "Yahoo Mid": st.column_config.NumberColumn("Yahoo Mid", format="$%.4f"),
+            "Lead Price (New)": st.column_config.NumberColumn("Lead Price (New)", format="$%.4f"),
+        }
+    )
 st.caption("")
 
 
@@ -4380,7 +4392,7 @@ def ledger_page(active_user):
                     "Amount": float(rr.get("amount") or 0.0),
                     "Details": str(rr.get("description") or "")
                 })
-            st.table(pd.DataFrame(sub), use_container_width=True)
+            st.dataframe(pd.DataFrame(sub), use_container_width=True)
 
 def trade_entry_page(active_user):
     uid = _active_user_id(active_user)
@@ -5108,7 +5120,7 @@ def bulk_entries_page(active_user):
     st.subheader("Review & Submit")
     import pandas as pd
     sdf = pd.DataFrame(rows_out)
-    st.table(sdf, use_container_width=True)
+    st.dataframe(sdf, use_container_width=True)
     total_cash = float(sdf["Net Cash Change"].sum()) if not sdf.empty else 0.0
     st.metric("Total Net Cash Change", f"${total_cash:,.2f}")
 
