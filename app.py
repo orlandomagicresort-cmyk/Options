@@ -4423,7 +4423,7 @@ def ledger_page(active_user):
                     "Amount": float(rr.get("amount") or 0.0),
                     "Details": str(rr.get("description") or "")
                 })
-            st.table(pd.DataFrame(sub), use_container_width=True)
+            st.dataframe(pd.DataFrame(sub), use_container_width=True)
 
 def trade_entry_page(active_user):
     uid = _active_user_id(active_user)
