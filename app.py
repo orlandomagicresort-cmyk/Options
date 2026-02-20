@@ -3334,7 +3334,7 @@ def snapshot_page(user):
                 "52W %": pct_fmt
             })
 
-            st.table(
+            st.dataframe(
                 styled_df,
                 column_config={
                     "Date": st.column_config.TextColumn("Snapshot Date"),
