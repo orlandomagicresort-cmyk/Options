@@ -4278,11 +4278,46 @@ def ledger_page(active_user):
 
                 if side == "SELL":
                     # Reverse an open: remove contracts from open options
+                    # Pull candidate open options and filter strike in Python (tolerant to numeric typing/scale)
                     res = supabase.table("options").select("*")\
                         .eq("user_id", user_id).eq("symbol", ticker)\
-                        .eq("strike_price", strike).eq("expiration_date", exp)\
-                        .eq("type", right).eq("status", "open")\
+                        .eq("expiration_date", exp).eq("type", right).eq("status", "open")\
                         .order("open_date", desc=True).execute()
+                    # Filter by strike with tolerance to avoid Postgres numeric/float mismatch
+                    cand = []
+                    for opt in (res.data or []):
+                        try:
+                            if strike is None:
+                                continue
+                            if abs(float(opt.get("strike_price") or 0.0) - float(strike)) < 1e-4:
+                                cand.append(opt)
+                        except Exception:
+                            continue
+                    # Fallback: if nothing matched, use unfiltered results (best effort)
+                    if not cand:
+                        cand = list(res.data or [])
+                    remaining = qty
+                    if cand:
+                        for opt in cand:
+                            if remaining <= 0:
+                                break
+                            avail = int(opt.get("contracts") or opt.get("quantity") or 0)
+                            if avail <= remaining:
+                                # Close fully
+                                try:
+                                    supabase.table("options").update({"status": "closed", "contracts": 0}).eq("id", opt["id"]).execute()
+                                except Exception:
+                                    try:
+                                        supabase.table("options").update({"status": "closed"}).eq("id", opt["id"]).execute()
+                                    except Exception:
+                                        pass
+                                remaining -= avail
+                            else:
+                                try:
+                                    supabase.table("options").update({"contracts": avail - remaining}).eq("id", opt["id"]).execute()
+                                except Exception:
+                                    pass
+                                remaining = 0
                     remaining = qty
                     if res.data:
                         for opt in res.data:
