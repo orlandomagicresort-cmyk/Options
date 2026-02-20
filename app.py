@@ -2204,7 +2204,18 @@ def dashboard_page(active_user):
                     "has_put": False
                 }
             by_sym[sym]["qty"] += float(r.get('qty', 0) or 0)
-            by_sym[sym]["liability"] += float(r.get('liability', 0) or 0)
+                        # ITM Liability must be calculated per contract (not using an averaged strike)
+            _ct = float(r.get('qty', 0) or 0)
+            _px = float(r.get('price', 0) or 0)
+            _k = float(r.get('strike', 0) or 0)
+            _t = str(r.get('type', '') or '').upper()
+            _itm = 0.0
+            if _ct and _px and _k:
+                if 'CALL' in _t:
+                    _itm = max(0.0, _px - _k) * _ct * 100.0
+                elif 'PUT' in _t:
+                    _itm = max(0.0, _k - _px) * _ct * 100.0
+            by_sym[sym]["liability"] += _itm
             # Track whether this ticker has CALLs and/or PUTs
             _t = str(r.get('type', '') or '').upper()
             if 'CALL' in _t:
