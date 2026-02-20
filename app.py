@@ -575,7 +575,7 @@ def community_page(user):
     for col in ["WTD %", "MTD %", "YTD %", "52W %"]:
         if col in show.columns:
             show[col] = pd.to_numeric(show[col], errors="coerce") * 100
-    st.table(
+    st.dataframe(
 
         show,
         use_container_width=True,
