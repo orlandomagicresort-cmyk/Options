@@ -1314,9 +1314,12 @@ def get_open_short_call_contracts(user_id, symbol):
 # 6. DASHBOARD & PAGES
 # --------------------------------------------------------------------------------
 
-def dashboard_page(active_user):
+def dashboard_page(active_user, view: str = "summary"):
     uid = _active_user_id(active_user)
-    st.header("📊 Executive Dashboard")
+    if view == "holdings":
+        st.header("📦 Holdings")
+    else:
+        st.header("📊 Executive Dashboard")
 
     # Delegated mode diagnostics: if key tables are unreadable, the dashboard will show zeros.
     try:
@@ -1326,7 +1329,8 @@ def dashboard_page(active_user):
             ph = supabase.table("portfolio_history").select("id").eq("user_id", uid).limit(1).execute().data or []
             tx = supabase.table("transactions").select("id").eq("user_id", uid).limit(1).execute().data or []
             if (not ph) and (not tx):
-                st.warning("Delegated access is active, but portfolio_history / transactions are not readable. This is a Supabase Row Level Security (RLS) policy issue, so calculations fall back to 0. To make delegated mode behave exactly like the owner, allow delegates to SELECT the owner's rows in these tables.")
+                if view != "holdings":
+                    st.warning("Delegated access is active, but portfolio_history / transactions are not readable. This is a Supabase Row Level Security (RLS) policy issue, so calculations fall back to 0. To make delegated mode behave exactly like the owner, allow delegates to SELECT the owner's rows in these tables.")
     except Exception:
         pass
 
@@ -1335,7 +1339,8 @@ def dashboard_page(active_user):
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
     fx = float(get_usd_to_cad_rate() or 1.0)
-    st.caption(f"Exchange Rate (live): 1 USD = {fx:.4f} CAD")
+    if view != "holdings":
+        st.caption(f"Exchange Rate (live): 1 USD = {fx:.4f} CAD")
 
     # --- Data Loading ---
     cash_usd = float(get_cash_balance(uid) or 0.0)
@@ -1799,162 +1804,169 @@ def dashboard_page(active_user):
         summ_html += f"<tr><td>{lbl}</td><td class='{cls}'>{_fmt_pct(pct)}</td><td class='{cls}'>{_fmt_money(usd)}</td><td class='{cls}'>{_fmt_money(cad)}</td></tr>"
     summ_html += "</tbody></table>"
 
-    # --------------------------------------------------------------------------------
-    # Portfolio Value table (keep same components, now show USD and CAD)
-    # --------------------------------------------------------------------------------
-    st.subheader("Portfolio Value")
+    if view != "holdings":
+        # --------------------------------------------------------------------------------
+        # Portfolio Value table (keep same components, now show USD and CAD)
+        # --------------------------------------------------------------------------------
+        st.subheader("Portfolio Value")
 
-    pv_rows = [
-        ("Cash Balance", cash_usd, cash_usd * fx),
-        ("Stock Equity", stock_value_usd, stock_value_usd * fx),
-        ("LEAP Equity", leap_value_usd, leap_value_usd * fx),
-        ("ITM Call Liability (Deducted)", -itm_liability_usd, -itm_liability_usd * fx),
-    ]
+        pv_rows = [
+            ("Cash Balance", cash_usd, cash_usd * fx),
+            ("Stock Equity", stock_value_usd, stock_value_usd * fx),
+            ("LEAP Equity", leap_value_usd, leap_value_usd * fx),
+            ("ITM Call Liability (Deducted)", -itm_liability_usd, -itm_liability_usd * fx),
+        ]
 
-    pv_html = "<table class='finance-table'><thead><tr><th>Component</th><th>US$</th><th>CA$</th></tr></thead><tbody>"
-    for label, usd_v, cad_v in pv_rows:
-        pv_html += f"<tr><td>{label}</td><td>{_fmt_money(usd_v)}</td><td>{_fmt_money(cad_v)}</td></tr>"
-    pv_html += f"<tr class='total-row'><td>Total Portfolio Value</td><td>{_fmt_money(net_liq_usd)}</td><td>{_fmt_money(net_liq_cad)}</td></tr></tbody></table>"
-    st.markdown(pv_html, unsafe_allow_html=True)
+        pv_html = "<table class='finance-table'><thead><tr><th>Component</th><th>US$</th><th>CA$</th></tr></thead><tbody>"
+        for label, usd_v, cad_v in pv_rows:
+            pv_html += f"<tr><td>{label}</td><td>{_fmt_money(usd_v)}</td><td>{_fmt_money(cad_v)}</td></tr>"
+        pv_html += f"<tr class='total-row'><td>Total Portfolio Value</td><td>{_fmt_money(net_liq_usd)}</td><td>{_fmt_money(net_liq_cad)}</td></tr></tbody></table>"
+        st.markdown(pv_html, unsafe_allow_html=True)
 
-    st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
-    st.markdown(summ_html, unsafe_allow_html=True)
+        st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
+        st.markdown(summ_html, unsafe_allow_html=True)
 
-    # --- Win/Loss Weeks (from Weekly Snapshots) ---
-    # Always render the section; compute stats best-effort.
-    win_ct = 0
-    loss_ct = 0
-    total_ct = 0
-    win_avg = 0.0
-    loss_avg = 0.0
-    _wk_stats_note = None
+        # --- Win/Loss Weeks (from Weekly Snapshots) ---
+        # Always render the section; compute stats best-effort.
+        win_ct = 0
+        loss_ct = 0
+        total_ct = 0
+        win_avg = 0.0
+        loss_avg = 0.0
+        _wk_stats_note = None
 
-    try:
-        hist_df = get_portfolio_history(uid)
-        hist_df = normalize_columns(hist_df)
-
-        if hist_df is None or hist_df.empty:
-            _wk_stats_note = "No weekly snapshot history found yet. Create Weekly Snapshots to populate this section."
-        elif "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
-            _wk_stats_note = "Weekly snapshot data is missing required fields."
-        else:
-            hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
-            hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
-            hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
-            hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
-
-            if len(hist_df) < 2:
-                _wk_stats_note = "Need at least 2 Weekly Snapshots to calculate win/loss weeks."
-            else:
-                # Deposits/Withdrawals in USD for flow-normalized weekly returns (same logic as Weekly Snapshot page)
-                tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
-                    .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
-                tx_df = pd.DataFrame(tx_res.data)
-                if not tx_df.empty:
-                    tx_df = normalize_columns(tx_df)
-                    tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
-                    tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
-                    if "currency" in tx_df.columns:
-                        tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
-                else:
-                    tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
-
-                weekly_rows = []
-                for i in range(1, len(hist_df)):
-                    prev_date = hist_df.iloc[i-1]["snapshot_date"]
-                    prev_eq = float(hist_df.iloc[i-1]["total_equity"] or 0.0)
-                    curr_date = hist_df.iloc[i]["snapshot_date"]
-                    curr_eq = float(hist_df.iloc[i]["total_equity"] or 0.0)
-
-                    net_flow = 0.0
-                    if not tx_df.empty:
-                        mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
-                        net_flow = float(tx_df.loc[mask, "amount"].sum())
-
-                    base_capital = prev_eq + net_flow
-                    weekly_profit = curr_eq - base_capital
-                    weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
-                    weekly_rows.append({"date": curr_date, "profit": weekly_profit, "ret": weekly_ret})
-
-                if not weekly_rows:
-                    _wk_stats_note = "No weekly snapshot rows found to compute win/loss."
-                else:
-                    wk = pd.DataFrame(weekly_rows)
-                    win_mask = wk["profit"] > 0
-                    loss_mask = wk["profit"] < 0
-
-                    win_ct = int(win_mask.sum())
-                    loss_ct = int(loss_mask.sum())
-                    total_ct = int(len(wk))
-
-                    win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
-                    loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
-    except Exception:
-        _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
-
-    # Render (format matches the provided mock)
-    st.subheader("Win/Loss Weeks")
-    c1, c2, c3 = st.columns([1.35, 1, 1])
-
-    with c1:
-        # Pie chart (Altair) - avoids matplotlib dependency on Streamlit Cloud
         try:
-            import altair as alt
-            pie_df = pd.DataFrame({
-                "Outcome": ["Wins", "Losses"],
-                "Weeks": [int(win_ct), int(loss_ct)]
-            })
-            # If empty, show neutral values
-            if int(pie_df["Weeks"].sum()) == 0:
-                pie_df["Weeks"] = [1, 1]
+            hist_df = get_portfolio_history(uid)
+            hist_df = normalize_columns(hist_df)
 
-            pie_df["Pct"] = pie_df["Weeks"] / pie_df["Weeks"].sum()
-            pie_df["Label"] = pie_df.apply(lambda r: f"{r['Pct']*100:.0f}% {r['Outcome']}", axis=1)
+            if hist_df is None or hist_df.empty:
+                _wk_stats_note = "No weekly snapshot history found yet. Create Weekly Snapshots to populate this section."
+            elif "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+                _wk_stats_note = "Weekly snapshot data is missing required fields."
+            else:
+                hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
+                hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
+                hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
+                hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
 
-            base = alt.Chart(pie_df).encode(
-                theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
-                color=alt.Color(field="Outcome", type="nominal"),
-                tooltip=[alt.Tooltip("Outcome:N"), alt.Tooltip("Weeks:Q"), alt.Tooltip("Pct:Q", format=".0%")]
-            )
+                if len(hist_df) < 2:
+                    _wk_stats_note = "Need at least 2 Weekly Snapshots to calculate win/loss weeks."
+                else:
+                    # Deposits/Withdrawals in USD for flow-normalized weekly returns (same logic as Weekly Snapshot page)
+                    tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+                        .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                    tx_df = pd.DataFrame(tx_res.data)
+                    if not tx_df.empty:
+                        tx_df = normalize_columns(tx_df)
+                        tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+                        tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
+                        if "currency" in tx_df.columns:
+                            tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+                    else:
+                        tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
 
-            pie = base.mark_arc()
-            # Add labels in the center of each arc
-            text = base.mark_text(radius=90, size=16, fontWeight="bold", color="white").encode(
-                text=alt.Text(field="Label", type="nominal")
-            )
-            st.altair_chart((pie + text), use_container_width=True)
+                    weekly_rows = []
+                    for i in range(1, len(hist_df)):
+                        prev_date = hist_df.iloc[i-1]["snapshot_date"]
+                        prev_eq = float(hist_df.iloc[i-1]["total_equity"] or 0.0)
+                        curr_date = hist_df.iloc[i]["snapshot_date"]
+                        curr_eq = float(hist_df.iloc[i]["total_equity"] or 0.0)
+
+                        net_flow = 0.0
+                        if not tx_df.empty:
+                            mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
+                            net_flow = float(tx_df.loc[mask, "amount"].sum())
+
+                        base_capital = prev_eq + net_flow
+                        weekly_profit = curr_eq - base_capital
+                        weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
+                        weekly_rows.append({"date": curr_date, "profit": weekly_profit, "ret": weekly_ret})
+
+                    if not weekly_rows:
+                        _wk_stats_note = "No weekly snapshot rows found to compute win/loss."
+                    else:
+                        wk = pd.DataFrame(weekly_rows)
+                        win_mask = wk["profit"] > 0
+                        loss_mask = wk["profit"] < 0
+
+                        win_ct = int(win_mask.sum())
+                        loss_ct = int(loss_mask.sum())
+                        total_ct = int(len(wk))
+
+                        win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
+                        loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
         except Exception:
-            # Fallback: simple metrics if chart can't render
-            st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
+            _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
-    def _panel(title: str, weeks: int, avg_pct: float):
-        sign = "+" if avg_pct >= 0 else ""
-        st.markdown(
-            f"""
-<div style="padding: 6px 4px;">
-  <div style="font-size: 64px; font-weight: 900; text-decoration: underline; margin-bottom: 12px;">{title}</div>
-  <div style="font-size: 60px; font-weight: 900; line-height: 1.05;">{weeks} Weeks</div>
-  <div style="font-size: 58px; font-weight: 900; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
-</div>
-""",
-            unsafe_allow_html=True,
-        )
+        # Render (format matches the provided mock)
+        st.subheader("Win/Loss Weeks")
+        c1, c2, c3 = st.columns([1.35, 1, 1])
 
-    with c2:
-        _panel("Wins", win_ct, win_avg)
+        with c1:
+            # Pie chart (Altair) - avoids matplotlib dependency on Streamlit Cloud
+            try:
+                import altair as alt
+                pie_df = pd.DataFrame({
+                    "Outcome": ["Wins", "Losses"],
+                    "Weeks": [int(win_ct), int(loss_ct)]
+                })
+                # If empty, show neutral values
+                if int(pie_df["Weeks"].sum()) == 0:
+                    pie_df["Weeks"] = [1, 1]
 
-    with c3:
-        _panel("Losses", loss_ct, loss_avg)
+                pie_df["Pct"] = pie_df["Weeks"] / pie_df["Weeks"].sum()
+                pie_df["Label"] = pie_df.apply(lambda r: f"{r['Pct']*100:.0f}% {r['Outcome']}", axis=1)
 
-    if _wk_stats_note:
-        st.caption(_wk_stats_note)
+                base = alt.Chart(pie_df).encode(
+                    theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
+                    color=alt.Color(field="Outcome", type="nominal"),
+                    tooltip=[alt.Tooltip("Outcome:N"), alt.Tooltip("Weeks:Q"), alt.Tooltip("Pct:Q", format=".0%")]
+                )
+
+                pie = base.mark_arc()
+                # Add labels in the center of each arc
+                text = base.mark_text(radius=90, size=16, fontWeight="bold", color="white").encode(
+                    text=alt.Text(field="Label", type="nominal")
+                )
+                st.altair_chart((pie + text), use_container_width=True)
+            except Exception:
+                # Fallback: simple metrics if chart can't render
+                st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
+
+        def _panel(title: str, weeks: int, avg_pct: float):
+            sign = "+" if avg_pct >= 0 else ""
+            st.markdown(
+                f"""
+    <div style="padding: 6px 4px;">
+      <div style="font-size: 64px; font-weight: 900; text-decoration: underline; margin-bottom: 12px;">{title}</div>
+      <div style="font-size: 60px; font-weight: 900; line-height: 1.05;">{weeks} Weeks</div>
+      <div style="font-size: 58px; font-weight: 900; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
+    </div>
+    """,
+                unsafe_allow_html=True,
+            )
+
+        with c2:
+            _panel("Wins", win_ct, win_avg)
+
+        with c3:
+            _panel("Losses", loss_ct, loss_avg)
+
+        if _wk_stats_note:
+            st.caption(_wk_stats_note)
 
 
 
-    # --------------------------------------------------------------------------------
+    
+
+    if view == "summary":
+        return
+
+# --------------------------------------------------------------------------------
     # Keep the remainder of the dashboard identical to Option Details for now (tables + contract management)
     # --------------------------------------------------------------------------------
-    st.divider()
+    if view != "holdings":
+        st.divider()
     # Reuse the exact existing view by calling the duplicate page, but avoid double header.
     # We'll render the holdings + options tables by reusing the option_details_page logic, but skipping its header.
     # Easiest: inline-call by temporarily rendering a subheader marker and then executing the rest:
@@ -5460,10 +5472,11 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
+    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
     user = st.session_state.user
     active_user = _set_active_account(user)
-    if page == "Dashboard": dashboard_page(active_user)
+    if page == "Dashboard": dashboard_page(active_user, view="summary")
+    elif page == "Holdings": dashboard_page(active_user, view="holdings")
     elif page == "Option Details": option_details_page(active_user)
     elif page == "Update LEAP Prices": pricing_page(active_user)
     elif page == "Weekly Snapshot": snapshot_page(active_user)
