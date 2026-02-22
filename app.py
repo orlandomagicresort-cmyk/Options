@@ -5835,9 +5835,31 @@ def _render_with_tabs(user, active_user):
     """Render the app using two-level navigation: primary st.tabs + secondary underline radio."""
     # Action bar (account selector + logout)
     st.markdown('<div class="ws-actionbar">', unsafe_allow_html=True)
-    left, right = st.columns([6.2, 3.8], vertical_alignment="center")
-    with left:
+
+    _spacer, right = st.columns([7.2, 2.8], vertical_alignment="center")
+    with _spacer:
+        # Intentionally empty (keeps right actions aligned to the far right)
         pass
+
+    with right:
+        try:
+            accts = _get_accessible_accounts(user)
+            labels = [a["label"] for a in accts] if accts else ["My Account"]
+        except Exception:
+            labels = ["My Account"]
+
+        cur = st.session_state.get("active_account_label") or (labels[0] if labels else "My Account")
+        if labels and cur not in labels:
+            cur = labels[0]
+            st.session_state["active_account_label"] = cur
+
+        sel_acct = st.selectbox(
+            "Account",
+            labels,
+            index=labels.index(cur) if cur in labels else 0,
+            label_visibility="collapsed",
+            key="ws_account_select",
+        )
         if sel_acct != st.session_state.get("active_account_label"):
             st.session_state["active_account_label"] = sel_acct
             st.rerun()
@@ -5850,7 +5872,9 @@ def _render_with_tabs(user, active_user):
             st.session_state.user = None
             st.session_state.access_token = ""
             st.rerun()
+
     st.markdown("</div>", unsafe_allow_html=True)
+
 
     # Primary tabs
     t_home, t_activity, t_maint, t_comm = st.tabs(["Home", "Activity", "Maintenance", "Community"])
