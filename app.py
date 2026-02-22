@@ -222,11 +222,6 @@ st.set_page_config(
 
 
 
-# --- Sidebar Branding ---
-with st.sidebar:
-    st.image("logo.png", width=70)
-
-
 st.markdown("""
     <style>
     .stDataFrame { border: 1px solid #f0f2f6; }
@@ -662,7 +657,11 @@ def account_sharing_page(user):
 
 
 def handle_auth():
-    st.sidebar.title("🔐 Stock Portfolio")
+    # Sidebar header (centered logo + title)
+    _c1, _c2, _c3 = st.sidebar.columns([1, 2, 1])
+    with _c2:
+        st.image("logo.png", width=140)
+    st.sidebar.title("Stock Portfolio")
     if not supabase: 
         st.warning("⚠️ Database not connected.")
         return False
