@@ -610,37 +610,6 @@ def account_sharing_page(user):
         st.divider()
 
 
-st.subheader("Change Password")
-st.caption("Enter your current password, then choose a new one.")
-
-with st.form("change_password_form", clear_on_submit=True):
-    current_pw = st.text_input("Current password", type="password")
-    new_pw1 = st.text_input("New password", type="password")
-    new_pw2 = st.text_input("Confirm new password", type="password")
-    do_change = st.form_submit_button("Update password", type="primary")
-
-if do_change:
-    try:
-        email_for_pw = (getattr(user, "email", "") or "").strip().lower()
-        if not email_for_pw or "@" not in email_for_pw:
-            st.error("Couldn't determine your account email. Please log out and log back in.")
-        elif not current_pw or not new_pw1 or not new_pw2:
-            st.error("Please fill in all password fields.")
-        elif new_pw1 != new_pw2:
-            st.error("New password entries don't match.")
-        elif len(new_pw1) < 8:
-            st.error("New password must be at least 8 characters.")
-        else:
-            # Verify current password by re-authenticating.
-            supabase.auth.sign_in_with_password({"email": email_for_pw, "password": current_pw})
-            # Update password for the currently authenticated user.
-            supabase.auth.update_user({"password": new_pw1})
-            st.success("Password updated. Please use the new password next time you log in.")
-    except Exception as e:
-        st.error(f"Could not update password: {e}")
-
-    st.divider()
-
     # If your Supabase schema includes account_access.owner_email, you can backfill it for existing grants
     with st.expander("Admin: Fix delegated dropdown name", expanded=False):
         st.caption("If delegated labels show as acct XXXXXXXX, your delegates can't read your display name due to Supabase RLS. Add a text column account_access.owner_email, then click below to populate it on all access rows you granted.")
@@ -704,6 +673,36 @@ if do_change:
                 st.error(f"Failed to revoke: {e}")
     else:
         st.info("No delegates yet.")
+
+    st.divider()
+    st.subheader("Change Password")
+    st.caption("Enter your current password, then choose a new one.")
+
+    with st.form("change_password_form", clear_on_submit=True):
+        current_pw = st.text_input("Current password", type="password")
+        new_pw1 = st.text_input("New password", type="password")
+        new_pw2 = st.text_input("Confirm new password", type="password")
+        do_change = st.form_submit_button("Update password", type="primary")
+
+    if do_change:
+        try:
+            email_for_pw = (getattr(user, "email", "") or "").strip().lower()
+            if not email_for_pw or "@" not in email_for_pw:
+                st.error("Couldn't determine your account email. Please log out and log back in.")
+            elif not current_pw or not new_pw1 or not new_pw2:
+                st.error("Please fill in all password fields.")
+            elif new_pw1 != new_pw2:
+                st.error("New password entries don't match.")
+            elif len(new_pw1) < 8:
+                st.error("New password must be at least 8 characters.")
+            else:
+                # Verify current password by re-authenticating.
+                supabase.auth.sign_in_with_password({"email": email_for_pw, "password": current_pw})
+                # Update password for the currently authenticated user.
+                supabase.auth.update_user({"password": new_pw1})
+                st.success("Password updated. Please use the new password next time you log in.")
+        except Exception as e:
+            st.error(f"Could not update password: {e}")
 
 
 # --------------------------------------------------------------------------------
