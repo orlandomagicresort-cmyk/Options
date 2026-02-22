@@ -5837,32 +5837,7 @@ def _render_with_tabs(user, active_user):
     st.markdown('<div class="ws-actionbar">', unsafe_allow_html=True)
     left, right = st.columns([6.2, 3.8], vertical_alignment="center")
     with left:
-        st.markdown('<div class="ws-brand">Options</div>', unsafe_allow_html=True)
-        email = (getattr(st.session_state.get("user", None), "email", "") or "").strip()
-        if email:
-            st.markdown(f'<div class="ws-muted">Signed in as {email}</div>', unsafe_allow_html=True)
-        else:
-            st.markdown('<div class="ws-muted">Signed in</div>', unsafe_allow_html=True)
-
-    with right:
-        try:
-            accts = _get_accessible_accounts(user)
-            labels = [a["label"] for a in accts] if accts else ["My Account"]
-        except Exception:
-            labels = ["My Account"]
-
-        cur = st.session_state.get("active_account_label") or (labels[0] if labels else "My Account")
-        if labels and cur not in labels:
-            cur = labels[0]
-            st.session_state["active_account_label"] = cur
-
-        sel_acct = st.selectbox(
-            "Account",
-            labels,
-            index=labels.index(cur) if cur in labels else 0,
-            label_visibility="collapsed",
-            key="ws_account_select",
-        )
+        pass
         if sel_acct != st.session_state.get("active_account_label"):
             st.session_state["active_account_label"] = sel_acct
             st.rerun()
