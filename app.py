@@ -587,7 +587,6 @@ def community_page(user):
     },
 )
     
-
 def account_sharing_page(user):
     uid = _active_user_id(user)
     st.header("👤 Profile")
@@ -600,60 +599,49 @@ def account_sharing_page(user):
         pref = {}
 
     st.subheader("Your Profile")
-    disp = st.text_input(
-        "Display name (shown in Community)",
-        value=pref.get("display_name") or getattr(user, "email", ""),
-        key="pref_display",
-    )
+    disp = st.text_input("Display name (shown in Community)", value=pref.get("display_name") or getattr(user, "email", ""), key="pref_display")
     share = st.toggle("Share my stats with the community", value=bool(pref.get("share_stats")), key="pref_share")
     if st.button("Save Preferences", type="primary"):
-        _safe_upsert_preferences(
-            uid,
-            (disp.strip() if disp and disp.strip() else (getattr(user, "email", "") or None)),
-            bool(share),
-        )
+        _safe_upsert_preferences(uid, (disp.strip() if disp and disp.strip() else (getattr(user, "email", "") or None)), bool(share))
         st.success("Saved.")
 
     st.divider()
 
-    # Change Password
-    st.subheader("Change Password")
-    st.caption("Enter your current password, then choose a new one.")
 
-    with st.form("change_password_form", clear_on_submit=True):
-        current_pw = st.text_input("Current password", type="password")
-        new_pw1 = st.text_input("New password", type="password")
-        new_pw2 = st.text_input("Confirm new password", type="password")
-        do_change = st.form_submit_button("Update password", type="primary")
+st.subheader("Change Password")
+st.caption("Enter your current password, then choose a new one.")
 
-    if do_change:
-        try:
-            email_for_pw = (getattr(user, "email", "") or "").strip().lower()
-            if not email_for_pw or "@" not in email_for_pw:
-                st.error("Couldn't determine your account email. Please log out and log back in.")
-            elif not current_pw or not new_pw1 or not new_pw2:
-                st.error("Please fill in all password fields.")
-            elif new_pw1 != new_pw2:
-                st.error("New password entries don't match.")
-            elif len(new_pw1) < 8:
-                st.error("New password must be at least 8 characters.")
-            else:
-                # Verify current password by re-authenticating.
-                supabase.auth.sign_in_with_password({"email": email_for_pw, "password": current_pw})
-                # Update password for the currently authenticated user.
-                supabase.auth.update_user({"password": new_pw1})
-                st.success("Password updated. Please use the new password next time you log in.")
-        except Exception as e:
-            st.error(f"Could not update password: {e}")
+with st.form("change_password_form", clear_on_submit=True):
+    current_pw = st.text_input("Current password", type="password")
+    new_pw1 = st.text_input("New password", type="password")
+    new_pw2 = st.text_input("Confirm new password", type="password")
+    do_change = st.form_submit_button("Update password", type="primary")
+
+if do_change:
+    try:
+        email_for_pw = (getattr(user, "email", "") or "").strip().lower()
+        if not email_for_pw or "@" not in email_for_pw:
+            st.error("Couldn't determine your account email. Please log out and log back in.")
+        elif not current_pw or not new_pw1 or not new_pw2:
+            st.error("Please fill in all password fields.")
+        elif new_pw1 != new_pw2:
+            st.error("New password entries don't match.")
+        elif len(new_pw1) < 8:
+            st.error("New password must be at least 8 characters.")
+        else:
+            # Verify current password by re-authenticating.
+            supabase.auth.sign_in_with_password({"email": email_for_pw, "password": current_pw})
+            # Update password for the currently authenticated user.
+            supabase.auth.update_user({"password": new_pw1})
+            st.success("Password updated. Please use the new password next time you log in.")
+    except Exception as e:
+        st.error(f"Could not update password: {e}")
 
     st.divider()
 
     # If your Supabase schema includes account_access.owner_email, you can backfill it for existing grants
     with st.expander("Admin: Fix delegated dropdown name", expanded=False):
-        st.caption(
-            "If delegated labels show as acct XXXXXXXX, your delegates can't read your display name due to Supabase RLS. "
-            "Add a text column account_access.owner_email, then click below to populate it on all access rows you granted."
-        )
+        st.caption("If delegated labels show as acct XXXXXXXX, your delegates can't read your display name due to Supabase RLS. Add a text column account_access.owner_email, then click below to populate it on all access rows you granted.")
         if st.button("Backfill owner_email on my grants"):
             try:
                 owner_email = (getattr(st.session_state.user, "email", None) or getattr(user, "email", None) or "").strip()
@@ -675,7 +663,6 @@ def account_sharing_page(user):
         email = st.text_input("Delegate email")
         role = st.selectbox("Role", ["viewer", "editor"], index=0)
         submitted = st.form_submit_button("Grant Access", type="primary")
-
     if submitted:
         _require_editor()  # owner only, but keep consistent
         email_clean = (email or "").strip().lower()
@@ -683,15 +670,13 @@ def account_sharing_page(user):
             st.error("Please enter a valid email.")
         else:
             try:
-                supabase.table("account_access").insert(
-                    {
-                        "owner_user_id": uid,
-                        "owner_email": (getattr(user, "email", None) or None),
-                        "delegate_email": email_clean,
-                        "role": role,
-                        "status": "pending",
-                    }
-                ).execute()
+                supabase.table("account_access").insert({
+                    "owner_user_id": uid,
+                    "owner_email": (getattr(user, "email", None) or None),
+                    "delegate_email": email_clean,
+                    "role": role,
+                    "status": "pending",
+                }).execute()
                 st.success("Access granted (pending). It will become active when that user logs in.")
             except Exception as e:
                 st.error(f"Could not grant access: {e}")
@@ -701,29 +686,23 @@ def account_sharing_page(user):
         rows = supabase.table("account_access").select("*").eq("owner_user_id", uid).order("created_at", desc=True).execute().data or []
     except Exception:
         rows = []
-
     if rows:
         df = pd.DataFrame(rows)
         df["delegate"] = df.get("delegate_email")
-        view_cols = [c for c in ["delegate", "role", "status", "created_at"] if c in df.columns]
+        view_cols = [c for c in ["delegate","role","status","created_at"] if c in df.columns]
         st.dataframe(df[view_cols], use_container_width=True, hide_index=True)
-
-        revoke_id = st.selectbox(
-            "Revoke access for",
-            [""] + [str(r["id"]) for r in rows],
-            format_func=lambda x: "" if x == "" else x,
-            key="revoke_sel",
-        )
+        revoke_id = st.selectbox("Revoke access for", [""] + [str(r["id"]) for r in rows], format_func=lambda x: "" if x=="" else x, key="revoke_sel")
         if revoke_id and st.button("Revoke Selected", type="secondary"):
             _require_editor()
             try:
-                supabase.table("account_access").update({"status": "revoked"}).eq("id", revoke_id).execute()
+                supabase.table("account_access").update({"status":"revoked"}).eq("id", revoke_id).execute()
                 st.success("Revoked.")
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to revoke: {e}")
     else:
         st.info("No delegates yet.")
+
 
 # --------------------------------------------------------------------------------
 # 3. AUTHENTICATION & SESSION
