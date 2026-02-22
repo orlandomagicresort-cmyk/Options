@@ -678,7 +678,12 @@ def account_sharing_page(user):
     st.subheader("Change Password")
     st.caption("Enter your current password, then choose a new one.")
 
+    # Password changes apply to the currently logged-in auth user (not the delegated/active account).
+    auth_user = st.session_state.get("user", None) or user
+    auth_email_default = (getattr(auth_user, "email", "") or "").strip().lower()
+
     with st.form("change_password_form", clear_on_submit=True):
+        email_for_pw = st.text_input("Account email", value=auth_email_default, disabled=bool(auth_email_default))
         current_pw = st.text_input("Current password", type="password")
         new_pw1 = st.text_input("New password", type="password")
         new_pw2 = st.text_input("Confirm new password", type="password")
@@ -686,9 +691,9 @@ def account_sharing_page(user):
 
     if do_change:
         try:
-            email_for_pw = (getattr(user, "email", "") or "").strip().lower()
-            if not email_for_pw or "@" not in email_for_pw:
-                st.error("Couldn't determine your account email. Please log out and log back in.")
+            email_clean = (email_for_pw or "").strip().lower()
+            if not email_clean or "@" not in email_clean:
+                st.error("Please enter a valid account email address.")
             elif not current_pw or not new_pw1 or not new_pw2:
                 st.error("Please fill in all password fields.")
             elif new_pw1 != new_pw2:
@@ -697,13 +702,12 @@ def account_sharing_page(user):
                 st.error("New password must be at least 8 characters.")
             else:
                 # Verify current password by re-authenticating.
-                supabase.auth.sign_in_with_password({"email": email_for_pw, "password": current_pw})
+                supabase.auth.sign_in_with_password({"email": email_clean, "password": current_pw})
                 # Update password for the currently authenticated user.
                 supabase.auth.update_user({"password": new_pw1})
                 st.success("Password updated. Please use the new password next time you log in.")
         except Exception as e:
             st.error(f"Could not update password: {e}")
-
 
 # --------------------------------------------------------------------------------
 # 3. AUTHENTICATION & SESSION
