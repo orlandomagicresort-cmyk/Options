@@ -1921,7 +1921,7 @@ def dashboard_page(active_user, view: str = "summary"):
 
                 arc = (
                     alt.Chart(pie_df)
-                    .mark_arc(innerRadius=75, cornerRadius=8)
+                    .mark_arc(innerRadius=95, outerRadius=165, cornerRadius=10)
                     .encode(
                         theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
                         color=alt.Color(
@@ -1936,14 +1936,14 @@ def dashboard_page(active_user, view: str = "summary"):
                             alt.Tooltip("Pct:Q", format=".0%"),
                         ],
                     )
-                    .properties(height=260)
+                    .properties(height=360)
                 )
 
                 labels = (
                     alt.Chart(pie_df)
                     .mark_text(
-                        radius=120,
-                        size=13,
+                        radius=170,
+                        size=14,
                         fontWeight="bold",
                         color="black",
                         stroke="white",
@@ -1954,7 +1954,7 @@ def dashboard_page(active_user, view: str = "summary"):
 
                 center = (
                     alt.Chart(pd.DataFrame({"t": [0]}))
-                    .mark_text(size=22, fontWeight="bold", color="black")
+                    .mark_text(size=26, fontWeight="bold", color="black")
                     .encode(text=alt.value(f"{win_rate*100:.0f}% Win Rate"))
                 )
 
