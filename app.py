@@ -5717,11 +5717,12 @@ def main():
     force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
-    st.sidebar.divider()
-    page = _top_nav(user, active_user)
     user = st.session_state.user
     active_user = _set_active_account(user)
+    page = _top_nav(user, active_user)
+
     if page == "Dashboard": dashboard_page(active_user, view="summary")
+
     elif page == "Holdings": dashboard_page(active_user, view="holdings")
     elif page == "Option Details": option_details_page(active_user)
     elif page == "Update LEAP Prices": pricing_page(active_user)
