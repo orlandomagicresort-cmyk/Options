@@ -25,6 +25,11 @@ def apply_global_ui_theme():
         /* Dataframe readability */
         [data-testid="stDataFrame"] thead tr th { font-weight: 700 !important; }
         [data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
+        
+        /* P/L conditional formatting (requested) */
+        .finance-table td.pl-pos { color: #0a7d22; font-weight: 700; }
+        .finance-table td.pl-neg { color: #b00020; font-weight: 700; }
+
         </style>
         """,
         unsafe_allow_html=True,
@@ -535,6 +540,11 @@ def community_page(user):
     if "w52_pct" in df.columns:
         df["w52_pct"] = df["w52_pct"].fillna(0.0)
 
+    # Sort by WTD % (highest to lowest)
+    if "wtd_pct" in df.columns:
+        df["wtd_pct"] = df["wtd_pct"].fillna(0.0)
+        df = df.sort_values(by="wtd_pct", ascending=False).reset_index(drop=True)
+
     show = df.rename(columns={
         "display_name": "User",
         "wtd_pct": "WTD %",
@@ -650,7 +660,7 @@ def account_sharing_page(user):
         df = pd.DataFrame(rows)
         df["delegate"] = df.get("delegate_email")
         view_cols = [c for c in ["delegate","role","status","created_at"] if c in df.columns]
-        st.dataframe(df[view_cols], use_container_width=True)
+        st.table(df[view_cols], use_container_width=True)
         revoke_id = st.selectbox("Revoke access for", [""] + [str(r["id"]) for r in rows], format_func=lambda x: "" if x=="" else x, key="revoke_sel")
         if revoke_id and st.button("Revoke Selected", type="secondary"):
             _require_editor()
@@ -874,6 +884,22 @@ def _clean_symbol_for_yahoo(symbol: str) -> str:
         s = s.split(":")[-1]
     return s.strip().upper()
 
+
+@st.cache_data(ttl=60 * 60 * 24 * 7, show_spinner=False)
+def get_sector_industry(symbol: str):
+    """Return (sector, industry) for a ticker symbol using yfinance.
+    Cached for 7 days to avoid rate limits / slowness."""
+    sym = _clean_symbol_for_yahoo(symbol)
+    if not sym:
+        return ("Unknown", "Unknown")
+    try:
+        t = yf.Ticker(sym)
+        info = getattr(t, "info", None) or {}
+        sector = info.get("sector") or "Unknown"
+        industry = info.get("industry") or "Unknown"
+        return (sector, industry)
+    except Exception:
+        return ("Unknown", "Unknown")
 def get_yahoo_option_mid_price(symbol: str, expiry, strike, right: str):
     """Get Yahoo mid price ( (bid+ask)/2 ) for an option contract, with sensible fallbacks.
 
@@ -1001,16 +1027,16 @@ def compute_52w_pct_from_history(user_id: str):
             base_capital = prev_eq + net_flow
             weekly_profit = curr_eq - base_capital
 
-            if i == 0 or base_capital == 0:
+            if base_capital == 0:
                 weekly_ret = 0.0
             else:
                 weekly_ret = weekly_profit / base_capital
 
             weekly_rets.append(float(weekly_ret))
 
-        # Trailing 52 snapshot weeks (exclude i=0)
+        # Trailing 52 snapshot weeks (include i=0)
         end_i = len(hist_df) - 1
-        start_k = max(1, end_i - 51)
+        start_k = max(0, end_i - 51)
         window_rets = [float(weekly_rets[k]) for k in range(start_k, end_i + 1)]
 
         prod = 1.0
@@ -1498,63 +1524,25 @@ def dashboard_page(active_user):
     mtd_profit = net_liq_usd - m_base_cap
     mtd_pct = (mtd_profit / m_base_cap) if m_base_cap != 0 else 0.0
 
-    # --- YTD base: snapshot on Dec 31 of prior year if present, else last snapshot before Jan 1 ---
+        # --- YTD base: equity as of Dec 31 prior year (opening balance). If no Dec 31 snapshot, assume 0 opening equity. ---
     year_start = date(today.year, 1, 1)
     dec31 = date(today.year - 1, 12, 31)
+
     y_base_eq, y_base_d = _last_snapshot_on_or_before(dec31)
     if y_base_eq is None:
-        # If nothing before year start, use first snapshot in year
-        if not hist.empty:
-            sub = hist[hist["snap_d"] >= year_start]
-            if not sub.empty:
-                r = sub.iloc[0]
-                y_base_eq, y_base_d = float(r["total_equity"]), r["snap_d"]
-            else:
-                y_base_eq, y_base_d = 0.0, year_start
-        else:
-            y_base_eq, y_base_d = 0.0, year_start
+        # No opening snapshot -> assume 0 opening equity at Jan 1
+        y_base_eq, y_base_d = 0.0, year_start
 
-    # --- YTD compound: product of weekly (flow-adjusted) returns since Jan 1 ---
-    def _ytd_compound_from_snapshots():
-        if hist.empty:
-            return 0.0, 0.0, 0
-        snaps = hist[hist["snap_d"] >= year_start].copy()
-        if snaps.empty:
-            return 0.0, 0.0, 0
-        # Ensure we include the base snapshot if it's before Jan 1 (e.g., Dec 31)
-        base_eq, base_d = y_base_eq, y_base_d
-        prod = 1.0
-        prev_d = base_d
-        prev_eq = base_eq
+    # Net flows from Jan 1 to today (USD)
+    ytd_flows = _net_flows_usd(year_start, today)
+    ytd_base_cap = y_base_eq + ytd_flows
 
-        for _, r in snaps.iterrows():
-            d = r["snap_d"]
-            eq = float(r["total_equity"])
-            if d <= prev_d:
-                continue
-            net_flow = _net_flows_usd(prev_d, d)
-            base_cap = prev_eq + net_flow
-            profit = eq - base_cap
-            ret = (profit / base_cap) if base_cap != 0 else 0.0
-            prod *= (1.0 + ret)
-            prev_d, prev_eq = d, eq
+    # YTD profit and % return (flow-adjusted)
+    ytd_profit = net_liq_usd - ytd_base_cap
+    ytd_pct = (ytd_profit / ytd_base_cap) if ytd_base_cap != 0 else 0.0
 
-        # Include partial period from last snapshot to today
-        net_flow = _net_flows_usd(prev_d, today)
-        base_cap = prev_eq + net_flow
-        profit = net_liq_usd - base_cap
-        ret = (profit / base_cap) if base_cap != 0 else 0.0
-        prod *= (1.0 + ret)
-
-        ytd_pct_local = prod - 1.0
-
-        # YTD profit dollars relative to base (also flow-adjusted)
-        total_flows = _net_flows_usd(y_base_d, today)
-        ytd_profit_local = net_liq_usd - (y_base_eq + total_flows)
-        weeks_elapsed = max(1, int((today - year_start).days // 7) + 1)
-        return ytd_profit_local, ytd_pct_local, weeks_elapsed
-
-    ytd_profit, ytd_pct, ytd_weeks = _ytd_compound_from_snapshots()
+    # Weeks elapsed (used for averages elsewhere)
+    ytd_weeks = max(1, int((today - year_start).days // 7) + 1)
 
     # FY Run Rate: annualize YTD return (based on elapsed days)
     days_elapsed = max(1, (today - year_start).days)
@@ -1616,7 +1604,7 @@ def dashboard_page(active_user):
                 base_capital = prev_eq + net_flow
                 weekly_profit = curr_eq - base_capital
 
-                if i == 0 or base_capital == 0:
+                if base_capital == 0:
                     weekly_ret = 0.0
                 else:
                     weekly_ret = weekly_profit / base_capital
@@ -1637,7 +1625,7 @@ def dashboard_page(active_user):
 
             # Compound Weekly % week-over-week (skip first row which is always 0)
             prod = 1.0
-            for r in weekly_rets[1:]:
+            for r in weekly_rets:
                 if r is None or (isinstance(r, float) and (math.isinf(r) or math.isnan(r))):
                     r = 0.0
                 prod *= (1.0 + float(r))
@@ -1649,7 +1637,7 @@ def dashboard_page(active_user):
             life_pct_local = float(prod - 1.0)
 
             # Lifetime profit dollars: sum of flow-normalized weekly P/L values + current week P/L.
-            life_profit_local = float(sum(weekly_profits[1:])) if len(weekly_profits) > 1 else 0.0
+            life_profit_local = float(sum(weekly_profits)) if len(weekly_profits) > 0 else 0.0
             life_profit_local += float(cur_profit)
 
             return life_profit_local, life_pct_local
@@ -1712,7 +1700,7 @@ def dashboard_page(active_user):
                 base_capital = prev_eq + net_flow
                 weekly_profit = curr_eq - base_capital
 
-                if i == 0 or base_capital == 0:
+                if base_capital == 0:
                     weekly_ret = 0.0
                 else:
                     weekly_ret = weekly_profit / base_capital
@@ -1735,7 +1723,7 @@ def dashboard_page(active_user):
             # Trailing 52 weeks INCLUDING current week:
             # take up to the last 51 snapshot weekly returns + current week = 52 periods
             end_i = len(hist_df) - 1
-            start_k = max(1, end_i - 50)
+            start_k = max(0, end_i - 50)
 
             window_rets = [float(weekly_rets[k]) for k in range(start_k, end_i + 1)]
             # append current week
@@ -1831,6 +1819,132 @@ def dashboard_page(active_user):
 
     st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
     st.markdown(summ_html, unsafe_allow_html=True)
+
+    # --- Win/Loss Weeks (from Weekly Snapshots) ---
+    # Always render the section; compute stats best-effort.
+    win_ct = 0
+    loss_ct = 0
+    total_ct = 0
+    win_avg = 0.0
+    loss_avg = 0.0
+    _wk_stats_note = None
+
+    try:
+        hist_df = get_portfolio_history(uid)
+        hist_df = normalize_columns(hist_df)
+
+        if hist_df is None or hist_df.empty:
+            _wk_stats_note = "No weekly snapshot history found yet. Create Weekly Snapshots to populate this section."
+        elif "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+            _wk_stats_note = "Weekly snapshot data is missing required fields."
+        else:
+            hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
+            hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
+            hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
+            hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
+
+            if len(hist_df) < 2:
+                _wk_stats_note = "Need at least 2 Weekly Snapshots to calculate win/loss weeks."
+            else:
+                # Deposits/Withdrawals in USD for flow-normalized weekly returns (same logic as Weekly Snapshot page)
+                tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+                    .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                tx_df = pd.DataFrame(tx_res.data)
+                if not tx_df.empty:
+                    tx_df = normalize_columns(tx_df)
+                    tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+                    tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
+                    if "currency" in tx_df.columns:
+                        tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+                else:
+                    tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
+
+                weekly_rows = []
+                for i in range(1, len(hist_df)):
+                    prev_date = hist_df.iloc[i-1]["snapshot_date"]
+                    prev_eq = float(hist_df.iloc[i-1]["total_equity"] or 0.0)
+                    curr_date = hist_df.iloc[i]["snapshot_date"]
+                    curr_eq = float(hist_df.iloc[i]["total_equity"] or 0.0)
+
+                    net_flow = 0.0
+                    if not tx_df.empty:
+                        mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
+                        net_flow = float(tx_df.loc[mask, "amount"].sum())
+
+                    base_capital = prev_eq + net_flow
+                    weekly_profit = curr_eq - base_capital
+                    weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
+                    weekly_rows.append({"date": curr_date, "profit": weekly_profit, "ret": weekly_ret})
+
+                if not weekly_rows:
+                    _wk_stats_note = "No weekly snapshot rows found to compute win/loss."
+                else:
+                    wk = pd.DataFrame(weekly_rows)
+                    win_mask = wk["profit"] > 0
+                    loss_mask = wk["profit"] < 0
+
+                    win_ct = int(win_mask.sum())
+                    loss_ct = int(loss_mask.sum())
+                    total_ct = int(len(wk))
+
+                    win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
+                    loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
+    except Exception:
+        _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
+
+    # Render (format matches the provided mock)
+    st.subheader("Win/Loss Weeks")
+    c1, c2, c3 = st.columns([1.35, 1, 1])
+
+    with c1:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+
+        vals = [max(win_ct, 0), max(loss_ct, 0)]
+        labels = ["Wins", "Losses"]
+        # Avoid empty pie; keep proportions neutral if no data
+        if sum(vals) == 0:
+            vals = [1, 1]
+
+        _idx = {"i": 0}
+        def _autopct(pct):
+            i = _idx["i"]
+            _idx["i"] += 1
+            lab = labels[i] if i < len(labels) else ""
+            return f"{pct:.0f}% {lab}"
+
+        ax.pie(
+            vals,
+            autopct=_autopct,
+            startangle=90,
+            textprops={"fontsize": 14, "fontweight": "bold"},
+        )
+        ax.axis("equal")
+        st.pyplot(fig, clear_figure=True)
+
+    def _panel(title: str, weeks: int, avg_pct: float):
+        sign = "+" if avg_pct >= 0 else ""
+        st.markdown(
+            f"""
+<div style="padding: 6px 4px;">
+  <div style="font-size: 64px; font-weight: 900; text-decoration: underline; margin-bottom: 12px;">{title}</div>
+  <div style="font-size: 60px; font-weight: 900; line-height: 1.05;">{weeks} Weeks</div>
+  <div style="font-size: 58px; font-weight: 900; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
+</div>
+""",
+            unsafe_allow_html=True,
+        )
+
+    with c2:
+        _panel("Wins", win_ct, win_avg)
+
+    with c3:
+        _panel("Losses", loss_ct, loss_avg)
+
+    if _wk_stats_note:
+        st.caption(_wk_stats_note)
+
+
 
     # --------------------------------------------------------------------------------
     # Keep the remainder of the dashboard identical to Option Details for now (tables + contract management)
@@ -2021,6 +2135,114 @@ def dashboard_page(active_user):
     except Exception as e:
         st.warning(f"Total Holdings summary unavailable: {e}")
 
+    st.subheader("Total Holdings (by Sector)")
+    try:
+        # Rebuild the same per-ticker totals used above (so this section is self-contained)
+        totals2 = {}
+
+        if not stocks_df.empty:
+            tmp_s2 = stocks_df.copy()
+            tmp_s2["sym"] = tmp_s2.get("symbol", tmp_s2.get("ticker", "UNK")).astype(str).str.upper().str.strip()
+            tmp_s2["shares"] = pd.to_numeric(tmp_s2.get("quantity", 0), errors="coerce").fillna(0.0)
+            tmp_s2["stock_val"] = pd.to_numeric(tmp_s2.get("market_value", 0), errors="coerce").fillna(0.0)
+            for sym, g in tmp_s2.groupby("sym"):
+                totals2.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                         "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                         "Short Contracts": 0.0})
+                totals2[sym]["Shares"] += float(g["shares"].sum())
+                totals2[sym]["Stock Value"] += float(g["stock_val"].sum())
+
+        if not leaps_df.empty:
+            tmp_l2 = leaps_df.copy()
+            tmp_l2["sym"] = tmp_l2.get("symbol", tmp_l2.get("ticker", "UNK")).astype(str).str.upper().str.strip()
+            tmp_l2["contracts"] = pd.to_numeric(tmp_l2.get("quantity", 0), errors="coerce").fillna(0.0)
+            tmp_l2["px"] = pd.to_numeric(tmp_l2.get("current_price", tmp_l2.get("last_price", 0)), errors="coerce").fillna(0.0)
+            tmp_l2["leap_val"] = tmp_l2["contracts"] * 100.0 * tmp_l2["px"]
+            for sym, g in tmp_l2.groupby("sym"):
+                totals2.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                         "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                         "Short Contracts": 0.0})
+                totals2[sym]["LEAP Contracts"] += float(g["contracts"].sum())
+                totals2[sym]["LEAP Value"] += float(g["leap_val"].sum())
+
+        if grouped_options:
+            by_sym_short2 = {}
+            for r in grouped_options.values():
+                sym = str(r.get("symbol", "UNK")).upper().strip()
+                by_sym_short2[sym] = by_sym_short2.get(sym, 0.0) + float(r.get("qty", 0.0) or 0.0)
+            for sym, ct in by_sym_short2.items():
+                totals2.setdefault(sym, {"Ticker": sym, "Shares": 0.0, "Stock Value": 0.0,
+                                         "LEAP Contracts": 0.0, "LEAP Value": 0.0,
+                                         "Short Contracts": 0.0})
+                totals2[sym]["Short Contracts"] += float(ct)
+
+        if not totals2:
+            st.info("No holdings to summarize by sector.")
+        else:
+            df2 = pd.DataFrame(list(totals2.values()))
+            df2["Total Market Value"] = pd.to_numeric(df2["Stock Value"], errors="coerce").fillna(0.0) + pd.to_numeric(df2["LEAP Value"], errors="coerce").fillna(0.0)
+            total_mv = float(df2["Total Market Value"].sum()) if not df2.empty else 0.0
+            if total_mv != 0:
+                df2["% of Portfolio"] = df2["Total Market Value"] / total_mv
+            else:
+                df2["% of Portfolio"] = 0.0
+
+            # Attach sector/industry (cached)
+            df2["Sector"] = df2["Ticker"].apply(lambda t: get_sector_industry(t)[0])
+            df2["Industry"] = df2["Ticker"].apply(lambda t: get_sector_industry(t)[1])
+
+            # Sort by Sector, then by Market Value desc
+            df2 = df2.sort_values(["Sector", "Total Market Value"], ascending=[True, False]).reset_index(drop=True)
+
+            # Render as a subtotal + detail HTML table
+            sec_html = "<table class='finance-table'><thead><tr>"                       "<th style='text-align:left'>Sector</th>"                       "<th style='text-align:left'>Ticker</th>"                       "<th>Shares</th><th>Stock Value</th><th>LEAP Contracts</th><th>LEAP Value</th>"                       "<th>Short Contracts</th><th>Total Market Value</th><th>% of Portfolio</th>"                       "</tr></thead><tbody>"
+
+            for sector, g in df2.groupby("Sector", dropna=False):
+                sector_name = str(sector) if sector is not None and str(sector).strip() else "Unknown"
+                s_shares = float(g["Shares"].sum())
+                s_stock = float(g["Stock Value"].sum())
+                s_leap_ct = float(g["LEAP Contracts"].sum())
+                s_leap_val = float(g["LEAP Value"].sum())
+                s_short_ct = float(g["Short Contracts"].sum())
+                s_total = float(g["Total Market Value"].sum())
+                s_pct = (s_total / total_mv * 100.0) if total_mv else 0.0
+
+                # Subtotal row
+                sec_html += (
+                    f"<tr style='font-weight:700; background:rgba(255,255,255,0.04); border-top:1px solid #333;'>"
+                    f"<td>{sector_name}</td><td>Subtotal</td>"
+                    f"<td>{s_shares:g}</td>"
+                    f"<td>${s_stock:,.2f}</td>"
+                    f"<td>{s_leap_ct:g}</td>"
+                    f"<td>${s_leap_val:,.2f}</td>"
+                    f"<td>{s_short_ct:g}</td>"
+                    f"<td>${s_total:,.2f}</td>"
+                    f"<td>{s_pct:,.2f}%</td>"
+                    f"</tr>"
+                )
+
+                # Detail rows
+                for _, r in g.sort_values("Total Market Value", ascending=False).iterrows():
+                    pct = float(r["% of Portfolio"] or 0.0) * 100.0
+                    sec_html += (
+                        f"<tr style='border-top:1px solid #222;'>"
+                        f"<td></td>"
+                        f"<td>{r['Ticker']}</td>"
+                        f"<td>{float(r['Shares']):g}</td>"
+                        f"<td>${float(r['Stock Value']):,.2f}</td>"
+                        f"<td>{float(r['LEAP Contracts']):g}</td>"
+                        f"<td>${float(r['LEAP Value']):,.2f}</td>"
+                        f"<td>{float(r['Short Contracts']):g}</td>"
+                        f"<td>${float(r['Total Market Value']):,.2f}</td>"
+                        f"<td>{pct:,.2f}%</td>"
+                        f"</tr>"
+                    )
+
+            sec_html += "</tbody></table>"
+            st.markdown(sec_html, unsafe_allow_html=True)
+    except Exception as e:
+        st.warning(f"Total Holdings by Sector unavailable: {e}")
+
     st.subheader("Stock Holdings (USD)")
     if not stocks_df.empty:
         stock_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>Market Value</th></tr></thead><tbody>"
@@ -2040,19 +2262,49 @@ def dashboard_page(active_user):
         tmp['px_num'] = pd.to_numeric(tmp.get('current_price', tmp.get('last_price', 0)), errors='coerce').fillna(0)
         tmp['val_num'] = tmp['qty_num'] * 100.0 * tmp['px_num']
 
+        # LEAP Price comes from the stored LEAP Prices (DB last_price) section
+        tmp['db_px_num'] = pd.to_numeric(tmp.get('last_price', tmp.get('current_price', 0)), errors='coerce').fillna(0)
+
+        tmp['cost_num'] = pd.to_numeric(tmp.get('cost_basis', 0), errors='coerce').fillna(0)
+
         grp = tmp.groupby('sym', as_index=False).agg(
             Contracts=('qty_num', 'sum'),
             Value=('val_num', 'sum'),
-            AvgPrice=('px_num', lambda s: float(s.mean()) if len(s) else 0.0),
         )
+        # Weighted average cost at purchase per ticker (from assets.cost_basis)
+        def _wavg_cost(g: pd.DataFrame) -> float:
+            denom = float(pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0).sum())
+            if denom == 0:
+                return 0.0
+            num = float((pd.to_numeric(g.get('cost_num', 0), errors='coerce').fillna(0) * pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0)).sum())
+            return num / denom
+        cost_map = tmp.groupby('sym', as_index=True).apply(_wavg_cost).to_dict()
+        grp['AvgCost'] = grp['sym'].map(cost_map).fillna(0.0)
+        # Weighted average LEAP Price per ticker (from DB last_price)
+        def _wavg_leap_price(g: pd.DataFrame) -> float:
+            denom = float(pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0).sum())
+            if denom == 0:
+                return 0.0
+            num = float((pd.to_numeric(g.get('db_px_num', 0), errors='coerce').fillna(0) * pd.to_numeric(g.get('qty_num', 0), errors='coerce').fillna(0)).sum())
+            return num / denom
+        leap_price_map = tmp.groupby('sym', as_index=True).apply(_wavg_leap_price).to_dict()
+        grp['LeapPrice'] = grp['sym'].map(leap_price_map).fillna(0.0)
         grp = grp.sort_values('sym')
 
-        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>Avg Price</th><th>Value</th></tr></thead><tbody>"
+        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>LEAP Price</th><th>Avg. Cost</th><th>Value</th></tr></thead><tbody>"
         for _, r in grp.iterrows():
-            leap_html += f"<tr><td>{r['sym']}</td><td>{float(r['Contracts']):g}</td><td>${float(r['AvgPrice']):,.2f}</td><td>${float(r['Value']):,.2f}</td></tr>"
+            leap_html += f"<tr><td>{r['sym']}</td><td>{float(r['Contracts']):g}</td><td>${float(r.get('LeapPrice', 0)):,.2f}</td><td>${float(r['AvgCost']):,.2f}</td><td>${float(r['Value']):,.2f}</td></tr>"
         total_val = float(grp['Value'].sum()) if not grp.empty else 0.0
         total_ct = float(grp['Contracts'].sum()) if not grp.empty else 0.0
-        leap_html += f"<tr class='total-row'><td>Total</td><td>{total_ct:g}</td><td></td><td>${total_val:,.2f}</td></tr>"
+        total_leap_price = 0.0
+        try:
+            _den = float(pd.to_numeric(tmp.get('qty_num', 0), errors='coerce').fillna(0).sum())
+            if _den:
+                _num = float((pd.to_numeric(tmp.get('db_px_num', 0), errors='coerce').fillna(0) * pd.to_numeric(tmp.get('qty_num', 0), errors='coerce').fillna(0)).sum())
+                total_leap_price = _num / _den
+        except Exception:
+            total_leap_price = 0.0
+        leap_html += f"<tr class='total-row'><td>Total</td><td>{total_ct:g}</td><td>${total_leap_price:,.2f}</td><td></td><td>${total_val:,.2f}</td></tr>"
         leap_html += "</tbody></table>"
         st.markdown(leap_html, unsafe_allow_html=True)
     else:
@@ -2070,18 +2322,59 @@ def dashboard_page(active_user):
                     "symbol": sym,
                     "qty": 0.0,
                     "liability": 0.0,
+                    "strike_num": 0.0,
+                    "strike_den": 0.0,
                     "price": float(r.get('price', 0) or 0),
-                    "covered": False
+                    "covered": False,
+                    "has_call": False,
+                    "has_put": False
                 }
             by_sym[sym]["qty"] += float(r.get('qty', 0) or 0)
-            by_sym[sym]["liability"] += float(r.get('liability', 0) or 0)
+                        # ITM Liability must be calculated per contract (not using an averaged strike)
+            _ct = float(r.get('qty', 0) or 0)
+            _px = float(r.get('price', 0) or 0)
+            _k = float(r.get('strike', 0) or 0)
+            _t = str(r.get('type', '') or '').upper()
+            _itm = 0.0
+            if _ct and _px and _k:
+                if 'CALL' in _t:
+                    _itm = max(0.0, _px - _k) * _ct * 100.0
+                elif 'PUT' in _t:
+                    _itm = max(0.0, _k - _px) * _ct * 100.0
+            by_sym[sym]["liability"] += _itm
+            # Track whether this ticker has CALLs and/or PUTs
+            _t = str(r.get('type', '') or '').upper()
+            if 'CALL' in _t:
+                by_sym[sym]['has_call'] = True
+            if 'PUT' in _t:
+                by_sym[sym]['has_put'] = True
+            # Weighted avg strike per ticker (weights = contracts)
+            _ct = float(r.get('qty', 0) or 0)
+            _k = float(r.get('strike', 0) or 0)
+            by_sym[sym]["strike_num"] += (_k * _ct)
+            by_sym[sym]["strike_den"] += _ct
             if r.get('linked_assets'):
                 by_sym[sym]["covered"] = True
+
+        # Finalize weighted strike
+        for _k_sym, _d in by_sym.items():
+            den = float(_d.get('strike_den', 0) or 0)
+            _d['strike_wavg'] = float(_d.get('strike_num', 0) or 0) / den if den else 0.0
+            # Option type label per ticker
+            if _d.get('has_call') and _d.get('has_put'):
+                _d['opt_type'] = 'CALL+PUT'
+            elif _d.get('has_call'):
+                _d['opt_type'] = 'CALL'
+            elif _d.get('has_put'):
+                _d['opt_type'] = 'PUT'
+            else:
+                _d['opt_type'] = ''
+                _d['opt_type'] = ''
 
         final_display = list(by_sym.values())
         final_display.sort(key=lambda x: x['symbol'])
 
-        opt_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Contracts</th><th>Current Price</th><th>ITM Liability</th><th>Collateral</th></tr></thead><tbody>"
+        opt_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Type</th><th>Contracts</th><th>Strike Price</th><th>Current Price</th><th>ITM Liability</th><th>Collateral</th></tr></thead><tbody>"
         for r in final_display:
             s_price = f"${r['price']:,.2f}" if r['price'] > 0 else "<span style='opacity:0.5'>0.00</span>"
             liab_raw = float(r['liability'])
@@ -2089,15 +2382,318 @@ def dashboard_page(active_user):
             if liab_raw > 0:
                 s_liab = f"<span class='liability-alert'>{s_liab}</span>"
             s_coll = "Covered" if r["covered"] else "<span style='color:#e67c73'>Unsecured</span>"
-            opt_html += f"<tr><td>{r['symbol']}</td><td>{float(r['qty']):g}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_coll}</td></tr>"
+            opt_html += f"<tr><td>{r['symbol']}</td><td>{r.get('opt_type','')}</td><td>{float(r['qty']):g}</td><td>${float(r.get('strike_wavg', 0)):,.2f}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_coll}</td></tr>"
         total_qty = sum(float(r['qty']) for r in final_display)
         total_liab = sum(float(r['liability']) for r in final_display)
-        opt_html += f"<tr class='total-row'><td>Total</td><td>{total_qty:g}</td><td></td><td>${total_liab:,.2f}</td><td></td></tr>"
+        total_strike = 0.0
+        try:
+            if total_qty:
+                total_strike = sum(float(r.get('strike_wavg', 0) or 0) * float(r.get('qty', 0) or 0) for r in final_display) / float(total_qty)
+        except Exception:
+            total_strike = 0.0
+        opt_html += f"<tr class='total-row'><td>Total</td><td></td><td>{total_qty:g}</td><td>${total_strike:,.2f}</td><td></td><td>${total_liab:,.2f}</td><td></td></tr>"
         opt_html += "</tbody></table>"
         st.markdown(opt_html, unsafe_allow_html=True)
     else:
         st.info("No Active Short Options.")
+# --- P/L by Ticker (USD) ---
+    pl_period_options = ["WTD", "MTD", "YTD", "52W", "Lifetime"]
+    pl_title_col, pl_filter_col = st.columns([4, 1])
+    with pl_title_col:
+        st.subheader("P/L by Ticker (USD)")
+    with pl_filter_col:
+        pl_period = st.selectbox(
+            "Period",
+            pl_period_options,
+            index=4,  # default Lifetime
+            key=f"pl_period_{uid}",
+            label_visibility="collapsed"
+        )
 
+    # Period start date (used ONLY to filter REALIZED P/L components)
+    _today = date.today()
+    pl_start_date = None
+    if pl_period == "WTD":
+        pl_start_date = _today - timedelta(days=_today.weekday())  # Monday
+    elif pl_period == "MTD":
+        pl_start_date = _today.replace(day=1)
+    elif pl_period == "YTD":
+        pl_start_date = _today.replace(month=1, day=1)
+    elif pl_period == "52W":
+        pl_start_date = _today - timedelta(days=364)
+
+    try:
+        # --------------------------
+        # CURRENT UNREALIZED (Lifetime) – Stocks & LEAPs
+        # --------------------------
+        unreal_stock = {}
+        try:
+            _stocks_df = stocks_df
+        except Exception:
+            _stocks_df = pd.DataFrame()
+
+        if _stocks_df is not None and not _stocks_df.empty:
+            tmp = _stocks_df.copy()
+            tmp["sym"] = tmp.get("symbol", tmp.get("ticker", "UNK")).astype(str).str.upper().str.strip()
+            tmp["qty"] = pd.to_numeric(tmp.get("quantity", 0), errors="coerce").fillna(0.0)
+            tmp["avg"] = pd.to_numeric(tmp.get("cost_basis", 0), errors="coerce").fillna(0.0)
+            tmp["px"]  = pd.to_numeric(tmp.get("current_price", 0), errors="coerce").fillna(0.0)
+            tmp["pl"] = (tmp["px"] - tmp["avg"]) * tmp["qty"]
+            unreal_stock = tmp.groupby("sym")["pl"].sum().to_dict()
+
+        unreal_leap = {}
+        try:
+            _leaps_df = leaps_df
+        except Exception:
+            _leaps_df = pd.DataFrame()
+
+        if _leaps_df is not None and not _leaps_df.empty:
+            tmp = _leaps_df.copy()
+            tmp["sym"] = tmp.get("symbol", tmp.get("ticker", "UNK")).astype(str).str.upper().str.strip()
+            tmp["qty"] = pd.to_numeric(tmp.get("quantity", 0), errors="coerce").fillna(0.0)
+            tmp["avg"] = pd.to_numeric(tmp.get("cost_basis", 0), errors="coerce").fillna(0.0)
+            tmp["px"]  = pd.to_numeric(tmp.get("current_price", tmp.get("last_price", 0)), errors="coerce").fillna(0.0)
+            # LEAP contract multiplier = 100
+            tmp["pl"] = (tmp["px"] - tmp["avg"]) * tmp["qty"] * 100.0
+            unreal_leap = tmp.groupby("sym")["pl"].sum().to_dict()
+
+        # --------------------------
+        # ITM $ by ticker (Short option liability) – CURRENT only
+        # Display as NEGATIVE (deduction)
+        # --------------------------
+        itm_by_sym = {}
+        try:
+            if "grouped_options" in locals() and grouped_options:
+                for r in grouped_options.values():
+                    sym = str(r.get("symbol", "UNK")).upper().strip()
+                    itm_by_sym[sym] = itm_by_sym.get(sym, 0.0) + float(r.get("liability", 0.0) or 0.0)
+        except Exception:
+            itm_by_sym = {}
+
+        # --------------------------
+        # REALIZED P/L (filtered by period start)
+        # Stocks/LEAPs: running average cost (sequential)
+        # Shorts: OPTION_PREMIUM cashflows
+        # --------------------------
+        def _parse_trade_desc(desc: str):
+            """Parse trade descriptions into (Buy/Sell, qty, symbol, price).
+
+            Supports variants like:
+              - Buy 100 AAPL @ $100.00
+              - SELL 50 TSLA @ 210.15
+              - Buy 100 AAPL at 100
+              - Sell 10 MSFT price 402.12
+            """
+            d = (desc or "").strip()
+
+            # Normalize spacing
+            dn = re.sub(r"\s+", " ", d).strip()
+
+            # Common patterns: action qty sym @|at|price $price
+            m = re.search(
+                r"^(Buy|Sell)\s+([0-9]*\.?[0-9]+)\s+([A-Za-z0-9\.\-]+)\b.*?(?:@|\bat\b|\bprice\b|\bpx\b)\s*\$?\s*([0-9,]*\.?[0-9]+)",
+                dn,
+                flags=re.IGNORECASE,
+            )
+            if not m:
+                return None
+
+            action = m.group(1).capitalize()
+            qty = float(m.group(2))
+            sym = m.group(3).upper().strip()
+            price = float(m.group(4).replace(",", ""))
+
+            if qty <= 0 or price <= 0:
+                return None
+            return action, qty, sym, price
+
+        tx_rows = []
+        try:
+            qb = supabase.table("transactions").select(
+                "transaction_date,type,amount,description,related_symbol"
+            ).eq("user_id", uid)
+            tx_rows = _fetch_all(qb) or []
+        except Exception:
+            tx_rows = []
+
+        # Sort by date
+        try:
+            tx_rows = sorted(tx_rows, key=lambda r: str(r.get("transaction_date") or ""))
+        except Exception:
+            pass
+
+        # Running state (lifetime)
+        stock_qty = {}
+        stock_cost = {}
+        leap_qty = {}
+        leap_cost = {}
+
+        stock_real = {}
+        leap_real = {}
+        short_real = {}
+
+        for r in tx_rows:
+            # Parse date
+            try:
+                tdate = date.fromisoformat(str(r.get("transaction_date") or "")[:10])
+            except Exception:
+                tdate = None
+
+            ttype = str(r.get("type", "") or "").upper().strip()
+            sym = str(r.get("related_symbol", "") or "").upper().strip()
+            amt = float(clean_number(r.get("amount", 0) or 0))
+            desc = str(r.get("description", "") or "")
+
+            if not sym or sym == "CASH":
+                continue
+
+            # Shorts: premium cashflows
+            if ttype in ("OPTION_PREMIUM", "OPTION_FEES"):
+                if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
+                    short_real[sym] = short_real.get(sym, 0.0) + amt
+                continue
+
+            # Allocate dividends/interest/fees to the underlying ticker P/L (these affect portfolio performance)
+            if ttype in ("DIVIDEND", "INTEREST", "FEES"):
+                if sym and sym != "UNK":
+                    if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
+                        stock_real[sym] = stock_real.get(sym, 0.0) + amt
+                continue
+
+            parsed = _parse_trade_desc(desc)
+            if not parsed:
+                continue
+            action, qty, psym, price = parsed
+
+            is_leap = ("LEAP" in ttype) or ("LEAP" in desc.upper())
+
+            if not is_leap:
+                q = float(stock_qty.get(psym, 0.0) or 0.0)
+                c = float(stock_cost.get(psym, 0.0) or 0.0)
+
+                if action == "Buy":
+                    stock_qty[psym] = q + qty
+                    stock_cost[psym] = c + (qty * price)
+                else:  # Sell
+                    if q <= 0:
+                        continue
+                    avg = c / q if q != 0 else 0.0
+                    pl = (price - avg) * qty
+                    # Only count realized P/L if within selected period
+                    if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
+                        stock_real[psym] = stock_real.get(psym, 0.0) + pl
+                    q_new = q - qty
+                    stock_qty[psym] = q_new
+                    stock_cost[psym] = avg * q_new
+            else:
+                q = float(leap_qty.get(psym, 0.0) or 0.0)
+                c = float(leap_cost.get(psym, 0.0) or 0.0)
+
+                if action == "Buy":
+                    leap_qty[psym] = q + qty
+                    leap_cost[psym] = c + (qty * price)
+                else:
+                    if q <= 0:
+                        continue
+                    avg = c / q if q != 0 else 0.0
+                    pl = (price - avg) * qty * 100.0
+                    if pl_start_date is None or (tdate is not None and tdate >= pl_start_date):
+                        leap_real[psym] = leap_real.get(psym, 0.0) + pl
+                    q_new = q - qty
+                    leap_qty[psym] = q_new
+                    leap_cost[psym] = avg * q_new
+
+        # Remove near-zero noise
+        stock_real = {k:v for k,v in stock_real.items() if abs(v) >= 0.005}
+        leap_real  = {k:v for k,v in leap_real.items() if abs(v) >= 0.005}
+        short_real = {k:v for k,v in short_real.items() if abs(v) >= 0.005}
+
+        # Only show tickers that have activity/holdings relevant to this view
+        tickers = sorted(set(
+            list(unreal_stock.keys()) + list(unreal_leap.keys()) + list(itm_by_sym.keys()) +
+            list(stock_real.keys()) + list(leap_real.keys()) + list(short_real.keys())
+        ))
+
+        if not tickers:
+            st.info("No P/L data available yet.")
+        else:
+            # Build table rows
+            rows = []
+            for sym in tickers:
+                v_stock = float(stock_real.get(sym, 0.0) or 0.0)
+                v_leap  = float(leap_real.get(sym, 0.0) or 0.0)
+                v_short = float(short_real.get(sym, 0.0) or 0.0)
+                v_unrl  = float(unreal_stock.get(sym, 0.0) or 0.0) + float(unreal_leap.get(sym, 0.0) or 0.0)
+                v_itm   = -float(itm_by_sym.get(sym, 0.0) or 0.0)  # negative
+
+                total = v_stock + v_leap + v_short + v_unrl + v_itm
+
+                # Hide pure-zero rows
+                if abs(total) < 0.005:
+                    continue
+
+                rows.append({
+                    "Ticker": sym,
+                    "Stock P/L": v_stock,
+                    "LEAP P/L": v_leap,
+                    "Short P/L": v_short,
+                    "Unrealized P/L": v_unrl,
+                    "ITM $": v_itm,
+                    "Total": total
+                })
+
+            if not rows:
+                st.info("No P/L data available yet.")
+            else:
+                df_pl = pd.DataFrame(rows)
+                df_pl = df_pl.sort_values(by="Ticker", ascending=True).reset_index(drop=True)
+
+                # Totals row
+                tot_stock = float(df_pl["Stock P/L"].sum())
+                tot_leap  = float(df_pl["LEAP P/L"].sum())
+                tot_short = float(df_pl["Short P/L"].sum())
+                tot_unrl  = float(df_pl["Unrealized P/L"].sum())
+                tot_itm   = float(df_pl["ITM $"].sum())
+                tot_total = float(df_pl["Total"].sum())
+
+                def _fmt_money(v: float) -> str:
+                    return f"${v:,.2f}"
+
+                # Render in the same HTML table style used elsewhere
+                pl_html = (
+                    "<table class='finance-table'><thead><tr>"
+                    "<th>Ticker</th><th>Stock P/L</th><th>LEAP P/L</th><th>Short P/L</th>"
+                    "<th>Unrealized P/L</th><th>ITM $</th><th>Total</th>"
+                    "</tr></thead><tbody>"
+                )
+
+                for _, rr in df_pl.iterrows():
+                    pl_html += (
+                        f"<tr><td>{rr['Ticker']}</td>"
+                        f"<td>{_fmt_money(rr['Stock P/L'])}</td>"
+                        f"<td>{_fmt_money(rr['LEAP P/L'])}</td>"
+                        f"<td>{_fmt_money(rr['Short P/L'])}</td>"
+                        f"<td>{_fmt_money(rr['Unrealized P/L'])}</td>"
+                        f"<td>{_fmt_money(rr['ITM $'])}</td>"
+                        f"<td>{_fmt_money(rr['Total'])}</td></tr>"
+                    )
+
+                pl_html += (
+                    "<tr class='total-row'>"
+                    "<td>Total</td>"
+                    f"<td>{_fmt_money(tot_stock)}</td>"
+                    f"<td>{_fmt_money(tot_leap)}</td>"
+                    f"<td>{_fmt_money(tot_short)}</td>"
+                    f"<td>{_fmt_money(tot_unrl)}</td>"
+                    f"<td>{_fmt_money(tot_itm)}</td>"
+                    f"<td>{_fmt_money(tot_total)}</td>"
+                    "</tr></tbody></table>"
+                )
+
+                st.markdown(pl_html, unsafe_allow_html=True)
+
+    except Exception as e:
+        st.warning(f"P/L by Ticker unavailable: {e}")
 
 def option_details_page(active_user):
     uid = _active_user_id(active_user)
@@ -2263,16 +2859,81 @@ def option_details_page(active_user):
     prof_html += "<tr><td colspan='2' style='background-color:#f0f2f6; text-align:center; font-size:0.85em; font-weight:bold;'>YTD Snapshot Analysis</td></tr>"
 
     if baseline:
-        start_date_str = baseline['snapshot_date']; start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        base_equity_usd = float(baseline['total_equity']); base_rate = float(baseline.get('exchange_rate', 1.0) or 1.0)
+        start_date_str = baseline['snapshot_date']
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
+        base_equity_usd = float(baseline['total_equity'])
+        base_rate = float(baseline.get('exchange_rate', 1.0) or 1.0)
+
+        # Baseline value (in selected currency)
         start_val = base_equity_usd * base_rate if selected_currency == "CAD" else base_equity_usd
-        profit_dollar = net_liq_disp - start_val; profit_pct = (profit_dollar / start_val) if start_val != 0 else 0
-        today = date.today(); days_passed = (today - start_date).days; weeks_passed = days_passed / 7.0
-        if days_passed < 1: days_passed = 1
+
+        # Exclude deposits/withdrawals from profit/forecast (flow-adjusted)
+        # We treat net deposits as additional invested capital (not profit).
+        def _net_flows_selected(d0, d1):
+            """Net DEPOSIT/WITHDRAWAL flows between (d0, d1], expressed in the selected currency.
+
+            Currency note (important):
+            This app logs deposits/withdrawals in BOTH:
+              - USD (cash movement)
+              - CAD (CAD-equivalent 'basis') for the SAME cash event
+            If we add both, we double-count. So we:
+              1) Prefer transactions already recorded in the selected currency (USD or CAD)
+              2) Only if none exist in the selected currency, convert the other currency using the current FX rate
+                 (best-effort fallback when only one side exists).
+            """
+            try:
+                tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+                    .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                tx = pd.DataFrame(tx_res.data)
+                if tx.empty:
+                    return 0.0
+
+                tx = normalize_columns(tx)
+                tx["transaction_date"] = pd.to_datetime(tx["transaction_date"], errors="coerce")
+                tx = tx[tx["transaction_date"].notna()]
+
+                mask = (tx["transaction_date"] > pd.to_datetime(d0)) & (tx["transaction_date"] <= pd.to_datetime(d1))
+                tx = tx.loc[mask].copy()
+                if tx.empty:
+                    return 0.0
+
+                if "currency" not in tx.columns:
+                    return float(tx["amount"].sum())
+
+                sel = str(selected_currency).upper().strip()
+                tx_sel = tx.loc[tx["currency"].astype(str).str.upper() == sel]
+                if not tx_sel.empty:
+                    return float(tx_sel["amount"].sum())
+
+                # Fallback: convert other currency to selected (when selected currency rows don't exist)
+                usd_sum = float(tx.loc[tx["currency"].astype(str).str.upper() == "USD", "amount"].sum())
+                cad_sum = float(tx.loc[tx["currency"].astype(str).str.upper() == "CAD", "amount"].sum())
+
+                fx_now = float(get_usd_to_cad_rate() or 1.0)
+                if sel == "CAD":
+                    return cad_sum + (usd_sum * fx_now)
+                # sel == USD
+                return usd_sum + (cad_sum / fx_now if fx_now else 0.0)
+            except Exception:
+                return 0.0
+
+        net_flows = _net_flows_selected(start_date, date.today())
+        invest_base = start_val + net_flows  # what you'd have with 0% return, after net contributions
+
+        profit_dollar = net_liq_disp - invest_base
+        profit_pct = (profit_dollar / invest_base) if invest_base != 0 else 0
+
+        today = date.today()
+        days_passed = (today - start_date).days
+        if days_passed < 1:
+            days_passed = 1
+
         annualized_return = ((1 + profit_pct) ** (365.0 / days_passed)) - 1 if profit_pct > -1 else 0
         cls_ytd = "pos-val" if profit_dollar >= 0 else "neg-val"
+
         prof_html += f"<tr><td>Baseline Date (Start)</td><td>{start_date_str}</td></tr>"
         prof_html += f"<tr><td>Baseline Value</td><td>${start_val:,.2f}</td></tr>"
+        prof_html += f"<tr><td>Net Deposits/Withdrawals Since Baseline</td><td>${net_flows:,.2f}</td></tr>"
         prof_html += f"<tr><td>YTD Profit ($)</td><td class='{cls_ytd}'>${profit_dollar:,.2f}</td></tr>"
         prof_html += f"<tr><td>YTD Profit (%)</td><td class='{cls_ytd}'>{profit_pct*100:.2f}%</td></tr>"
         prof_html += f"<tr><td>FY Forecast (Annualized)</td><td>{annualized_return*100:.2f}%</td></tr>"
@@ -2296,26 +2957,64 @@ def option_details_page(active_user):
 
     st.subheader(f"Stock Holdings ({selected_currency})")
     if not stocks_df.empty:
-        stock_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>Market Value</th></tr></thead><tbody>"
+        stock_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>Stock P/L</th><th>Market Value</th></tr></thead><tbody>"
         for _, row in stocks_df.iterrows():
-            stock_html += f"<tr><td>{row.get('symbol','UNK')}</td><td>{float(row.get('quantity',0)):g}</td><td>${float(row.get('cost_basis',0)):,.2f}</td><td>${float(row.get('current_price',0)):,.2f}</td><td>${float(row.get('market_value',0)):,.2f}</td></tr>"
+            pl_val = (float(row.get('current_price',0)) - float(row.get('cost_basis',0))) * float(row.get('quantity',0))
+            pl_cls = 'pl-pos' if pl_val >= 0 else 'pl-neg'
+            stock_html += (
+                f"<tr><td>{row.get('symbol','UNK')}</td>"
+                f"<td>{float(row.get('quantity',0)):g}</td>"
+                f"<td>${float(row.get('cost_basis',0)):,.2f}</td>"
+                f"<td>${float(row.get('current_price',0)):,.2f}</td>"
+                f"<td class='{pl_cls}'>${pl_val:,.2f}</td>"
+                f"<td>${float(row.get('market_value',0)):,.2f}</td></tr>"
+            )
+        # Totals: Stock P/L and Market Value
+        try:
+            q_s = pd.to_numeric(stocks_df.get('quantity', 0), errors='coerce').fillna(0)
+            cb_s = pd.to_numeric(stocks_df.get('cost_basis', 0), errors='coerce').fillna(0)
+            px_s = pd.to_numeric(stocks_df.get('current_price', 0), errors='coerce').fillna(0)
+            mv_s = pd.to_numeric(stocks_df.get('market_value', 0), errors='coerce').fillna(0)
+            stock_pl_total = float((((px_s - cb_s) * q_s)).sum())
+            stock_mv_total = float(mv_s.sum())
+        except Exception:
+            stock_pl_total = 0.0
+            stock_mv_total = 0.0
+        stock_pl_cls = 'pl-pos' if stock_pl_total >= 0 else 'pl-neg'
+        stock_html += f"<tr class='total-row'><td colspan='4'>Total</td><td class='{stock_pl_cls}'>${stock_pl_total:,.2f}</td><td>${stock_mv_total:,.2f}</td></tr>"
         stock_html += "</tbody></table>"
         st.markdown(stock_html, unsafe_allow_html=True)
     else: st.info("No Stock Holdings.")
 
     st.subheader(f"Long Option (LEAP) Holdings ({selected_currency})")
     if not leaps_df.empty:
-        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Type</th><th>Exp</th><th>Strike</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>Value</th></tr></thead><tbody>"
+        leap_html = "<table class='finance-table'><thead><tr><th>Ticker</th><th>Type</th><th>Exp</th><th>Strike</th><th>Qty</th><th>Avg Cost</th><th>Price</th><th>LEAP P/L</th><th>Value</th></tr></thead><tbody>"
         for _, row in leaps_df.iterrows():
-            leap_html += f"<tr><td>{row.get('symbol','UNK')}</td><td>{row.get('type_disp','').replace('LEAP','').strip()}</td><td>{format_date_custom(row.get('expiration',''))}</td><td>${float(row.get('strike_price',0)):,.2f}</td><td>{float(row.get('quantity',0)):g}</td><td>${float(row.get('cost_basis',0)):,.2f}</td><td>${float(row.get('current_price',0)):,.2f}</td><td>${float(row.get('market_value',0)):,.2f}</td></tr>"
+            pl_val = (float(row.get('current_price',0)) - float(row.get('cost_basis',0))) * float(row.get('quantity',0)) * 100.0
+            pl_cls = 'pl-pos' if pl_val >= 0 else 'pl-neg'
+            leap_html += (
+                f"<tr><td>{row.get('symbol','UNK')}</td>"
+                f"<td>{row.get('type_disp','').replace('LEAP','').strip()}</td>"
+                f"<td>{format_date_custom(row.get('expiration',''))}</td>"
+                f"<td>${float(row.get('strike_price',0)):,.2f}</td>"
+                f"<td>{float(row.get('quantity',0)):g}</td>"
+                f"<td>${float(row.get('cost_basis',0)):,.2f}</td>"
+                f"<td>${float(row.get('current_price',0)):,.2f}</td>"
+                f"<td class='{pl_cls}'>${pl_val:,.2f}</td>"
+                f"<td>${float(row.get('market_value',0)):,.2f}</td></tr>"
+            )
         # Total row (must exactly match the per-line Value = current_price * qty * 100)
         try:
             qty_s = pd.to_numeric(leaps_df.get('quantity', 0), errors='coerce').fillna(0)
             px_s = pd.to_numeric(leaps_df.get('current_price', 0), errors='coerce').fillna(0)
+            cb_s = pd.to_numeric(leaps_df.get('cost_basis', 0), errors='coerce').fillna(0)
             leap_total = float((qty_s * 100.0 * px_s).sum())
+            leap_pl_total = float((((px_s - cb_s) * qty_s * 100.0)).sum())
         except Exception:
             leap_total = 0.0
-        leap_html += f"<tr class='total-row'><td colspan='7'>Total</td><td>${leap_total:,.2f}</td></tr>"
+            leap_pl_total = 0.0
+        leap_pl_cls = 'pl-pos' if leap_pl_total >= 0 else 'pl-neg'
+        leap_html += f"<tr class='total-row'><td colspan='7'>Total</td><td class='{leap_pl_cls}'>${leap_pl_total:,.2f}</td><td>${leap_total:,.2f}</td></tr>"
         leap_html += "</tbody></table>"
         st.markdown(leap_html, unsafe_allow_html=True)
     else: st.info("No Long Option Holdings.")
@@ -2365,37 +3064,132 @@ def option_details_page(active_user):
                 total_avail = int(sel_row['qty'])
                 
                 with c_act:
-                    action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)"], label_visibility="collapsed")
+                    action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Buy-To-Close (Close Short)"], label_visibility="collapsed")
                 
-                # --- ROLL INPUTS ---
+                # --- ACTION INPUTS ---
                 qty_to_process = total_avail
-                
+
+                # --- BUY-TO-CLOSE INPUTS ---
+                btc_close_date = date.today()
+                btc_close_price = 0.0
+                btc_close_fees = 0.0
+
+                if "Buy-To-Close" in action_choice:
+                    st.markdown("---")
+                    st.caption("🧾 **Buy-To-Close Details**: Buy back the selected short option to close it.")
+                    b_c0, b_c1, b_c2, b_c3 = st.columns([1, 1, 1, 1])
+                    with b_c0:
+                        qty_to_process = st.number_input(
+                            "Contracts to Close",
+                            min_value=1,
+                            max_value=total_avail,
+                            value=total_avail,
+                            step=1,
+                            key=f"btc_qty_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+                    with b_c1:
+                        btc_close_date = st.date_input(
+                            "Transaction Date",
+                            value=date.today(),
+                            key=f"btc_date_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+                    with b_c2:
+                        btc_close_price = st.number_input(
+                            "Premium to Buy Back ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"btc_prem_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+                    with b_c3:
+                        btc_close_fees = st.number_input(
+                            "Fees ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"btc_fees_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+
+                    calc_btc = float(btc_close_price) * int(qty_to_process) * 100
+                    net_cash = -calc_btc - float(btc_close_fees)
+                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+
                 if "Roll" in action_choice:
                     st.markdown("---")
-                    st.caption("🔄 **Roll Details**: Buy back current position and sell a new one.")
-                    
-                    r_c0, r_c1, r_c2, r_c3 = st.columns([1, 1, 1, 1])
-                    with r_c0:
-                        qty_to_process = st.number_input("Qty to Roll", min_value=1, max_value=total_avail, value=total_avail, step=1)
-                    with r_c1:
-                        btc_price = st.number_input("BTC Price ($)", min_value=0.0, format="%.2f", step=0.01)
-                    with r_c2:
-                        new_strike = st.number_input("New Strike ($)", value=float(sel_row['strike']), format="%.2f")
-                    with r_c3:
-                        new_premium = st.number_input("New Premium ($)", min_value=0.0, format="%.2f", step=0.01)
-                    
-                    def _next_friday_local(d: date) -> date:
-                        days_ahead = (4 - d.weekday()) % 7
-                        if days_ahead == 0:
-                            days_ahead = 7
-                        return d + timedelta(days=days_ahead)
+                    st.caption("🔄 **Roll Details**: Split into Buy-To-Close (current) and Sell-To-Open (new).")
 
-                    def_date = _next_friday_local(date.today())
-                    new_exp = st.date_input("New Expiration Date", value=def_date)
-# Ensure standard float/int calculation (prevents numpy errors)
+                    roll_key = f"roll_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                    qty_to_process = st.number_input(
+                        "Contracts to Roll",
+                        min_value=1,
+                        max_value=total_avail,
+                        value=total_avail,
+                        step=1,
+                        key=f"{roll_key}_qty"
+                    )
+
+                    roll_date = st.date_input(
+                        "Roll Transaction Date",
+                        value=date.today(),
+                        key=f"{roll_key}_date"
+                    )
+
+                    st.markdown("#### Step 1 — Buy-To-Close current contract")
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        btc_price = st.number_input(
+                            "BTC Price ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_btc_price"
+                        )
+                    with b2:
+                        roll_btc_fees = st.number_input(
+                            "BTC Fees ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_btc_fees"
+                        )
+
+                    st.markdown("#### Step 2 — Sell-To-Open new contract")
+                    s1, s2, s3 = st.columns(3)
+                    with s1:
+                        new_strike = st.number_input(
+                            "New Strike ($)",
+                            value=float(sel_row['strike']),
+                            format="%.2f",
+                            key=f"{roll_key}_new_strike"
+                        )
+                    with s2:
+                        def_date = _next_friday_local(date.today())
+                        new_exp = st.date_input(
+                            "New Expiration Date",
+                            value=def_date,
+                            key=f"{roll_key}_new_exp"
+                        )
+                    with s3:
+                        new_premium = st.number_input(
+                            "New Premium ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_new_prem"
+                        )
+
+                    new_fees = st.number_input(
+                        "New Option Fees ($)",
+                        min_value=0.0,
+                        format="%.2f",
+                        step=0.01,
+                        key=f"{roll_key}_new_fees"
+                    )
+
+                    # Cash impact (fees reduce cash)
                     calc_btc = float(btc_price) * int(qty_to_process) * 100
                     calc_sto = float(new_premium) * int(qty_to_process) * 100
-                    net_cash = calc_sto - calc_btc
+                    net_cash = calc_sto - calc_btc - float(roll_btc_fees) - float(new_fees)
                     st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
 
                 with c_btn:
@@ -2466,6 +3260,29 @@ def option_details_page(active_user):
                             st.cache_data.clear()
                             st.rerun()
 
+                        # 3. BUY-TO-CLOSE (BTC only; writes to ledger via update_short_option_position)
+                        elif "Buy-To-Close" in action_choice:
+                            qty_safe = int(qty_to_process)
+                            txg = uuid.uuid4().hex[:12]
+
+                            update_short_option_position(
+                                uid,
+                                sel_row['symbol'],
+                                qty_safe,
+                                float(btc_close_price),
+                                "Buy",
+                                btc_close_date,
+                                sel_row['type'],
+                                sel_row['expiration'],
+                                float(sel_row['strike']),
+                                fees=float(btc_close_fees),
+                                txg=txg
+                            )
+
+                            st.success("Buy-To-Close recorded.")
+                            st.cache_data.clear()
+                            st.rerun()
+
                         # 3. ROLL (BTC then STO; both write to ledger via update_short_option_position)
                         elif "Roll" in action_choice:
                             qty_safe = int(qty_to_process)
@@ -2480,45 +3297,45 @@ def option_details_page(active_user):
                                         inherited_link_id = c['linked_asset_id']
                                         break
 
-                            txn_date_today = date.today()
                             txg = uuid.uuid4().hex[:12]
 
-                            # A) BTC: Buy-to-close existing contract(s) -> logs negative cash impact
+                            # A) BTC: Buy-to-close existing contract(s)
                             update_short_option_position(
                                 uid,
                                 sel_row['symbol'],
                                 qty_safe,
                                 float(btc_price),
                                 "Buy",
-                                txn_date_today,
+                                roll_date,
                                 sel_row['type'],
                                 sel_row['expiration'],
                                 float(sel_row['strike']),
-                                fees=0.0,
+                                fees=float(roll_btc_fees),
                                 txg=txg
                             )
 
-                            # B) STO: Sell-to-open new contract -> logs positive cash impact
+                            # B) STO: Sell-to-open new contract
                             update_short_option_position(
                                 uid,
                                 sel_row['symbol'],
                                 qty_safe,
                                 float(new_premium),
                                 "Sell",
-                                txn_date_today,
+                                roll_date,
                                 sel_row['type'],
                                 new_exp,
                                 float(new_strike),
-                                fees=0.0,
+                                fees=float(new_fees),
                                 linked_asset_id_override=inherited_link_id,
                                 txg=txg
                             )
 
-                            st.success(f"Rolled {qty_safe} contracts. Net Cash: ${(float(new_premium) - float(btc_price)) * qty_safe * 100:+,.2f}")
+                            net_cash = (float(new_premium) * qty_safe * 100) - (float(btc_price) * qty_safe * 100) - float(roll_btc_fees) - float(new_fees)
+                            st.success(f"Rolled {qty_safe} contracts. Net Cash: ${net_cash:+,.2f}")
                             st.cache_data.clear()
                             st.rerun()
-
-    else: st.info("No Active Short Options.")
+    else:
+        st.info("No Active Short Options.")
 
 def snapshot_page(user):
     st.header("📸 Weekly Snapshot & History")
@@ -2579,7 +3396,7 @@ def snapshot_page(user):
                 base_capital = prev_eq + net_flow
                 weekly_profit = curr_eq - base_capital
 
-                if i == 0 or base_capital == 0:
+                if base_capital == 0:
                     weekly_ret = 0.0
                 else:
                     weekly_ret = weekly_profit / base_capital  # decimal (0.0123 = 1.23%)
@@ -2605,7 +3422,7 @@ def snapshot_page(user):
 
                 # YTD weekly returns: include weekly returns for rows in same year up to i (excluding row 0)
                 year_idx = [k for k in range(len(calc_df)) if pd.to_datetime(calc_df.loc[k, "Date"]).date().year == yr and k <= i]
-                year_rets = [float(calc_df.loc[k, "Weekly %"]) for k in year_idx if k > 0]
+                year_rets = [float(calc_df.loc[k, "Weekly %"]) for k in year_idx]
 
                 ytd_prod = 1.0
                 for r in year_rets:
@@ -2618,8 +3435,8 @@ def snapshot_page(user):
                 wkly_avg_vals.append(wkly_avg)
 
                 # 52W rolling window: last 52 weekly returns ending at i (or since inception)
-                start_k = max(1, i - 51)
-                window_rets = [float(calc_df.loc[k, "Weekly %"]) for k in range(start_k, i + 1) if k > 0]
+                start_k = max(0, i - 51)
+                window_rets = [float(calc_df.loc[k, "Weekly %"]) for k in range(start_k, i + 1)]
 
                 roll_prod = 1.0
                 for r in window_rets:
@@ -2711,7 +3528,7 @@ def snapshot_page(user):
                 tooltip=[alt.Tooltip('snapshot_date:T', title='Date'), alt.Tooltip('Net Dep:Q', title='Deposit (USD)', format=',.2f')]
             )
 
-            chart = (line + rules).properties(height=320)
+            chart = (line + rules).properties()
             st.altair_chart(chart, use_container_width=True)
 
 
@@ -3197,38 +4014,82 @@ def pricing_page(active_user):
         out_df["new_price"] = out_df["current_db_price"]
 
     # Display
-    show = out_df[[
-        "id", "ticker_clean", "exp_disp", "strike_price", "right", "type_disp",
-        "current_db_price", "yahoo_mid", "new_price"
-    ]].copy()
+    show = out_df[["ticker_clean", "exp_disp", "strike_price", "right", "current_db_price", "yahoo_mid", "new_price"]].copy()
 
     show.rename(columns={
         "ticker_clean": "Ticker",
         "exp_disp": "Exp",
         "strike_price": "Strike",
-        "right": "Right",
-        "type_disp": "Type",
-        "current_db_price": "DB Price",
+        "right": "Option",
+                "current_db_price": "DB Price",
         "yahoo_mid": "Yahoo Mid",
         "new_price": "Lead Price (New)"
     }, inplace=True)
 
-    st.dataframe(
-        show,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "id": None,
-            "Strike": st.column_config.NumberColumn("Strike", format="$%.2f"),
-            "DB Price": st.column_config.NumberColumn("DB Price", format="$%.4f"),
-            "Yahoo Mid": st.column_config.NumberColumn("Yahoo Mid", format="$%.4f"),
-            "Lead Price (New)": st.column_config.NumberColumn("Lead Price (New)", format="$%.4f"),
-        }
+    
+    # Shade rows where the refreshed price differs from the stored DB price
+    show["_updated"] = (
+        (show["DB Price"].fillna(0).astype(float) - show["Lead Price (New)"].fillna(0).astype(float)).abs() > 1e-9
     )
+    show["Updated"] = show["_updated"].map({True: "Yes", False: "No"})
+    # Sort: Ticker (asc), Expiry (asc), Strike (desc)
+    try:
+        show["_exp_sort"] = pd.to_datetime(show["Exp"], errors="coerce")
+        show["Strike"] = pd.to_numeric(show["Strike"], errors="coerce")
+        show = show.sort_values(by=["Ticker", "_exp_sort", "Strike"], ascending=[True, True, False]).drop(columns=["_exp_sort"])
+    except Exception:
+        pass
 
-    st.caption("Tip: If a contract can't be found on Yahoo for that expiry/strike, the app keeps the stored DB price.")
 
 
+    def _highlight_updated_rows(row):
+        if bool(row.get("_updated", False)):
+            return ["background-color: #E6FFEA"] * len(row)
+        return [""] * len(row)
+
+    styled_show = show.style.apply(_highlight_updated_rows, axis=1)
+    # Display formatting
+    try:
+        styled_show = styled_show.format({
+            "Strike": "${:,.2f}",
+            "DB Price": "{:,.3f}",
+            "Yahoo Mid": "{:,.3f}",
+            "Lead Price (New)": "{:,.3f}",
+        })
+    except Exception:
+        pass
+
+    try:
+        styled_show = styled_show.hide(axis="columns", subset=["_updated"])
+    except Exception:
+        try:
+            styled_show = styled_show.hide_columns(["_updated"])
+        except Exception:
+            pass
+    # Render as HTML using the same finance-table styling as the rest of the dashboard (no scrollbars)
+    try:
+        styled_show = styled_show.hide(axis="index")
+    except Exception:
+        try:
+            styled_show = styled_show.hide_index()
+        except Exception:
+            pass
+    try:
+        styled_show = styled_show.set_table_attributes("class='finance-table'")
+    except Exception:
+        pass
+    st.markdown(styled_show.to_html(), unsafe_allow_html=True)
+    # Copy / export helpers for Excel (only the New prices)
+    try:
+        if "Lead Price (New)" in show.columns:
+            export_cols = [c for c in ["Ticker", "Exp", "Strike", "Option", "Lead Price (New)"] if c in show.columns]
+            export_df = show[export_cols].copy()
+
+            # Quick copy: one value per line (paste into Excel column)
+
+            # Quick copy: tab-separated table (paste into Excel with columns)
+    except Exception:
+        pass
 
 def safe_reverse_ledger_transaction(transaction_id):
     res = supabase.table("transactions").select("*").eq("id", transaction_id).execute()
@@ -3348,11 +4209,15 @@ def ledger_page(active_user):
         return row.get("type") or "Step"
 
     def _reverse_transaction_row(row: dict):
-        """Best-effort rollback of portfolio state for a transaction row."""
-        tid = row.get("id")
+        """Best-effort rollback of portfolio state for a transaction row.
+
+        NOTE: This is intentionally conservative. We only touch portfolio tables when we can
+        confidently identify the impacted record(s).
+        """
         ttype = str(row.get("type", "")).upper()
-        desc = str(row.get("description", ""))
+        desc = str(row.get("description", "") or "")
         rel = str(row.get("related_symbol", "") or "").upper()
+        user_id = row.get("user_id")
 
         # 1) Assignment expire: restore option statuses via OID list (most reliable)
         if "OPTION_EXPIRE" in ttype:
@@ -3364,39 +4229,150 @@ def ledger_page(active_user):
                     pass
             return
 
-        # 2) Stock/LEAP trades: reverse asset quantity
+        # 2) Stock / LEAP trades: reverse asset quantity (+ cost basis for BUY when possible)
         if ttype.startswith("TRADE_"):
             try:
                 parts = desc.split()
-                action = parts[0]
+                if len(parts) < 3:
+                    return
+                action = str(parts[0] or "").upper()
                 qty = float(parts[1])
-                ticker = rel or str(parts[2]).upper()
+                ticker = (rel or str(parts[2] or "")).upper().strip()
+                if not ticker or qty <= 0:
+                    return
 
-                asset_type = ttype.replace("TRADE_", "")
-                q = supabase.table("assets").select("*").eq("user_id", row["user_id"]).eq("ticker", ticker)
-                if "LEAP" in asset_type:
-                    # try to parse expiration/strike from description
-                    exp = None
-                    strike = None
-                    mexp = re.search(r"(\d{4}-[A-Za-z]{3}-\d{2})", desc)
-                    if mexp:
-                        exp = mexp.group(1)
-                    mstr = re.search(r"\$(\d+(?:\.\d+)?)", desc)
-                    if mstr:
-                        strike = float(mstr.group(1))
-                    q = q.like("type", "LEAP%")
+                asset_type = ttype.replace("TRADE_", "").strip()
+
+                # Base query for this ticker (we'll do strict matching first, then a tolerant fallback)
+                # NOTE: avoid PostgREST .or_ quirks by querying ticker and symbol separately.
+                def _asset_candidates_for_ticker(_uid, _tk):
+                    cands = []
+                    try:
+                        r1 = supabase.table('assets').select('*').eq('user_id', _uid).eq('ticker', _tk).execute()
+                        cands.extend(list(r1.data or []))
+                    except Exception:
+                        pass
+                    try:
+                        r2 = supabase.table('assets').select('*').eq('user_id', _uid).eq('symbol', _tk).execute()
+                        for rr in (r2.data or []):
+                            if not any(str(x.get('id')) == str(rr.get('id')) for x in cands):
+                                cands.append(rr)
+                    except Exception:
+                        pass
+                    return cands
+                exp_iso = None
+                strike = None
+
+                if "LEAP" in asset_type or "LONG" in asset_type:
+                    # Parse expiry in either ISO (YYYY-MM-DD) or display (YYYY-Mon-DD)
+                    m_iso = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", desc)
+                    if m_iso:
+                        exp_iso = m_iso.group(1)
+                    else:
+                        m_mon = re.search(r"\b(\d{4}-[A-Za-z]{3}-\d{2})\b", desc)
+                        if m_mon:
+                            try:
+                                exp_iso = datetime.strptime(m_mon.group(1), "%Y-%b-%d").date().isoformat()
+                            except Exception:
+                                exp_iso = None
+
+                    # Strike = first $number in description (this is how trade_entry writes it)
+                    m_str = re.search(r"\$(\d+(?:\.\d+)?)", desc)
+                    if m_str:
+                        try:
+                            strike = float(m_str.group(1))
+                        except Exception:
+                            strike = None
+
+                    # ---- Strict match first ----
+                    strict_rows = [r for r in _asset_candidates_for_ticker(user_id, ticker) if str(r.get('type','')).upper().strip() == asset_type]
+                    # Filter strict_rows in Python to avoid numeric/date typing mismatches
+                    candidates = list(strict_rows or [])
+                    if exp_iso:
+                        candidates = [r for r in candidates if str(r.get("expiration") or "")[:10] == exp_iso]
                     if strike is not None:
-                        q = q.eq("strike_price", strike)
-                    if exp:
-                        q = q.eq("expiration", exp)
+                        def _strike_ok(r):
+                            try:
+                                return abs(float(r.get("strike_price") or 0.0) - float(strike)) < 1e-4
+                            except Exception:
+                                return False
+                        candidates = [r for r in candidates if _strike_ok(r)]
+
+                    # ---- Fallback (tolerant) ----
+                    # Sometimes the description parsing or DB typing (numeric scale) causes eq() to miss.
+                    # We pull all LEAP rows for this ticker and filter in Python with a small tolerance.
+                    if not candidates:
+                        all_rows = [r for r in _asset_candidates_for_ticker(user_id, ticker) if str(r.get('type','')).upper().startswith('LEAP_')]
+
+                        def _row_match(r):
+                            if str(r.get("type", "")).upper() != asset_type:
+                                return False
+                            if exp_iso:
+                                exp_db = str(r.get("expiration") or "")
+                                if exp_db[:10] != exp_iso:
+                                    return False
+                            if strike is not None:
+                                try:
+                                    return abs(float(r.get("strike_price") or 0.0) - strike) < 1e-4
+                                except Exception:
+                                    return False
+                            return True
+
+                        filtered = [r for r in all_rows if _row_match(r)]
+                        candidates = filtered or []
+
                 else:
-                    q = q.eq("type", "STOCK")
-                res = q.execute()
-                if res.data:
-                    aid = res.data[0]["id"]
-                    curr = float(res.data[0].get("quantity") or 0)
-                    new_q = curr - qty if action.upper() == "BUY" else curr + qty
-                    supabase.table("assets").update({"quantity": new_q}).eq("id", aid).execute()
+                    candidates = [r for r in _asset_candidates_for_ticker(user_id, ticker) if str(r.get('type','')).upper().strip() == 'STOCK']
+
+                if not candidates:
+                    return
+
+                # If multiple candidates, pick the one with the largest quantity
+                a = sorted(
+                    candidates,
+                    key=lambda r: float(r.get("quantity") or 0.0),
+                    reverse=True
+                )[0]
+                aid = a.get("id")
+                curr_qty = float(a.get("quantity") or 0.0)
+                curr_cost = float(a.get("cost_basis") or 0.0)
+
+                # Reverse quantity change
+                new_qty = (curr_qty - qty) if action == "BUY" else (curr_qty + qty)
+
+                # If position is fully removed, delete the row (safer than leaving qty=0)
+                if new_qty <= 0:
+                    try:
+                        supabase.table("assets").delete().eq("id", aid).execute()
+                    except Exception:
+                        # Fallback: set to 0 if delete is blocked by RLS
+                        try:
+                            supabase.table("assets").update({"quantity": 0}).eq("id", aid).execute()
+                        except Exception:
+                            pass
+                    return
+
+                upd = {"quantity": new_qty}
+
+                # If we are deleting a BUY, try to back out its contribution to avg cost basis.
+                if action == "BUY":
+                    try:
+                        # price from "@ $X.XX"
+                        m_price = re.search(r"@\s*\$(\d+(?:\.\d+)?)", desc)
+                        price = float(m_price.group(1)) if m_price else None
+                        m_fees = re.search(r"\(Fees:\s*\$(\d+(?:\.\d+)?)\)", desc, flags=re.I)
+                        fees = float(m_fees.group(1)) if m_fees else 0.0
+                        if price is not None:
+                            mult = 100.0 if ("LEAP" in asset_type or "LONG" in asset_type) else 1.0
+                            current_val = curr_qty * curr_cost
+                            remove_val = (qty * price * mult + fees) / mult
+                            new_cost = (current_val - remove_val) / new_qty if new_qty else 0.0
+                            if new_cost >= 0:
+                                upd["cost_basis"] = new_cost
+                    except Exception:
+                        pass
+
+                supabase.table("assets").update(upd).eq("id", aid).execute()
             except Exception:
                 pass
             return
@@ -3406,25 +4382,68 @@ def ledger_page(active_user):
             try:
                 # desc: "Sell 2 NVDA 2026-Jan-16 $450 CALL ..."
                 parts = desc.split()
+                if len(parts) < 3:
+                    return
                 side = parts[0].upper()
                 qty = int(float(parts[1]))
                 ticker = str(parts[2]).upper()
-                # parse exp
+
+                # parse exp (YYYY-Mon-DD)
                 exp = None
                 mexp = re.search(r"(\d{4}-[A-Za-z]{3}-\d{2})", desc)
                 if mexp:
                     exp = datetime.strptime(mexp.group(1), "%Y-%b-%d").date().isoformat()
+
                 # parse strike
                 mstr = re.search(r"\$(\d+(?:\.\d+)?)", desc)
                 strike = float(mstr.group(1)) if mstr else None
-                right = "CALL" if "CALL" in desc.upper() else ("PUT" if "PUT" in desc.upper() else None)
 
+                right = "CALL" if "CALL" in desc.upper() else ("PUT" if "PUT" in desc.upper() else None)
                 if not (ticker and exp and strike is not None and right):
                     return
 
                 if side == "SELL":
                     # Reverse an open: remove contracts from open options
-                    res = supabase.table("options").select("*").eq("user_id", row["user_id"]).eq("symbol", ticker).eq("strike_price", strike).eq("expiration_date", exp).eq("type", right).eq("status", "open").order("open_date", desc=True).execute()
+                    # Pull candidate open options and filter strike in Python (tolerant to numeric typing/scale)
+                    res = supabase.table("options").select("*")\
+                        .eq("user_id", user_id).eq("symbol", ticker)\
+                        .eq("expiration_date", exp).eq("type", right).eq("status", "open")\
+                        .order("open_date", desc=True).execute()
+                    # Filter by strike with tolerance to avoid Postgres numeric/float mismatch
+                    cand = []
+                    for opt in (res.data or []):
+                        try:
+                            if strike is None:
+                                continue
+                            if abs(float(opt.get("strike_price") or 0.0) - float(strike)) < 1e-4:
+                                cand.append(opt)
+                        except Exception:
+                            continue
+                    # Fallback: if nothing matched, use unfiltered results (best effort)
+                    if not cand:
+                        cand = list(res.data or [])
+                    remaining = qty
+                    if cand:
+                        for opt in cand:
+                            if remaining <= 0:
+                                break
+                            avail = int(opt.get("contracts") or opt.get("quantity") or 0)
+                            if avail <= remaining:
+                                # Close fully
+                                try:
+                                    supabase.table("options").update({"status": "closed", "contracts": 0}).eq("id", opt["id"]).execute()
+                                except Exception:
+                                    try:
+                                        supabase.table("options").update({"status": "closed"}).eq("id", opt["id"]).execute()
+                                    except Exception:
+                                        pass
+                                remaining -= avail
+                            else:
+                                try:
+                                    supabase.table("options").update({"contracts": avail - remaining}).eq("id", opt["id"]).execute()
+                                except Exception:
+                                    pass
+                                remaining = 0
                     remaining = qty
                     if res.data:
                         for opt in res.data:
@@ -3440,7 +4459,7 @@ def ledger_page(active_user):
                 else:
                     # Reverse a close: reopen contracts as a new open option (best effort)
                     payload = {
-                        "user_id": row["user_id"],
+                        "user_id": user_id,
                         "ticker": ticker,
                         "symbol": ticker,
                         "strike_price": strike,
@@ -3457,6 +4476,7 @@ def ledger_page(active_user):
             except Exception:
                 pass
             return
+
 
     def _delete_group(gdf: pd.DataFrame, group_label: str):
         # Roll back portfolio impact first (reverse chronological)
@@ -4019,43 +5039,92 @@ def bulk_entries_page(active_user):
 
 
     # Build contract label maps for selecting specific existing contracts
+    # For Shorts: show UNIQUE contracts (symbol + expiry + strike + type), combining contracts across lots.
     short_opt_map = {}
     short_opt_labels = []
+
+    short_agg = {}  # (sym, exp, strike, typ) -> aggregate dict
     for o in open_shorts:
         try:
-            sym = str(o.get("symbol") or "").upper()
+            sym = str(o.get("symbol") or "").upper().strip()
             exp = str(o.get("expiration_date") or "")[:10]
             strike = float(o.get("strike_price") or 0)
-            typ = str(o.get("type") or "").upper()
+            typ = str(o.get("type") or "").upper().strip()
             contracts = int(o.get("contracts") or 0)
             oid = o.get("id")
-            if not sym or not exp or not typ or oid is None:
+
+            if not sym or not exp or not typ or contracts <= 0:
                 continue
-            lbl = f"{sym} {exp} {strike:g} {typ}  ({contracts}c)"
-            short_opt_map[lbl] = o
+
+            k = (sym, exp, strike, typ)
+            if k not in short_agg:
+                short_agg[k] = {
+                    "id": oid,  # representative
+                    "ids": [oid] if oid is not None else [],
+                    "symbol": sym,
+                    "expiration_date": exp,
+                    "strike_price": strike,
+                    "type": typ,
+                    "contracts": 0,
+                }
+            short_agg[k]["contracts"] += contracts
+            if oid is not None and oid not in short_agg[k]["ids"]:
+                short_agg[k]["ids"].append(oid)
+        except Exception:
+            continue
+
+    for (sym, exp, strike, typ), agg in short_agg.items():
+        try:
+            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(agg.get('contracts') or 0)} | {typ}"
+            short_opt_map[lbl] = agg
             short_opt_labels.append(lbl)
         except Exception:
             continue
-    short_opt_labels = sorted(short_opt_labels)
 
+    short_opt_labels = sorted(short_opt_labels)
     leap_opt_map = {}
     leap_opt_labels = []
+
+    leap_agg = {}  # (sym, exp, strike, typ) -> aggregate dict
     for o in leap_open:
         try:
-            sym = str(o.get("symbol") or "").upper()
+            sym = str(o.get("symbol") or "").upper().strip()
             exp = str(o.get("expiration_date") or "")[:10]
             strike = float(o.get("strike_price") or 0)
-            typ = str(o.get("type") or "").upper()
+            typ = str(o.get("type") or "").upper().strip()
             contracts = int(o.get("contracts") or 0)
             oid = o.get("id")
-            if not sym or not exp or not typ or oid is None:
+
+            if not sym or not exp or not typ or contracts <= 0:
                 continue
-            lbl = f"{sym} {exp} {strike:g} {typ}  ({contracts}c)"
-            leap_opt_map[lbl] = o
+
+            k = (sym, exp, strike, typ)
+            if k not in leap_agg:
+                leap_agg[k] = {
+                    "id": oid,  # representative
+                    "ids": [oid] if oid is not None else [],
+                    "symbol": sym,
+                    "expiration_date": exp,
+                    "strike_price": strike,
+                    "type": typ,
+                    "contracts": 0,
+                }
+            leap_agg[k]["contracts"] += contracts
+            if oid is not None and oid not in leap_agg[k]["ids"]:
+                leap_agg[k]["ids"].append(oid)
+        except Exception:
+            continue
+
+    for (sym, exp, strike, typ), agg in leap_agg.items():
+        try:
+            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(agg.get('contracts') or 0)} | {typ}"
+            leap_opt_map[lbl] = agg
             leap_opt_labels.append(lbl)
         except Exception:
             continue
+
     leap_opt_labels = sorted(leap_opt_labels)
+
 
     st.subheader("Transactions")
     rows_out = []
@@ -4111,58 +5180,111 @@ def bulk_entries_page(active_user):
                 ctr_s = int(selected_contract.get("contracts") or 0)
                 st.caption(f"Selected: **{ticker}** • **{exp_s}** • **{strike_s:g}** • **{typ_s}** • **{ctr_s} contracts**")
 
-            # Row 3: Qty / Price / Fees (wider and clearer)
-            r3 = st.columns([1.2, 1.2, 1.0])
-            qty_default = 100 if asset == "Stock" else 1
-            max_qty = int(selected_contract.get("contracts") or 1) if selected_contract is not None else None
-            qty = r3[0].number_input("Qty/Contracts", min_value=1, max_value=max_qty, step=1, value=min(qty_default, max_qty) if max_qty else qty_default, key=f"bulk_qty_{rid}")
-
-            def_price = 0.0
-            if ticker and asset == "Stock":
-                try:
-                    def_price = float(get_current_price(ticker) or 0.0)
-                except Exception:
-                    def_price = 0.0
-            price = r3[1].number_input("Price/Premium", step=0.01, value=float(def_price), key=f"bulk_price_{rid}")
-            fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}")
+                        # Flags for special layouts
+            is_short_sto = (asset == "Shorts" and action == "Sell to Open")
+            is_short_roll = (asset == "Shorts" and action == "Roll" and selected_contract is not None)
 
             opt_type = ""
             exp_dt = None
             strike = 0.0
             selected_option_id = None
             btc_price = 0.0
+            price = 0.0
             new_strike = 0.0
             new_prem = 0.0
             new_exp = nf
             notes = ""
 
+            # If a contract is selected, pull its details
             if selected_contract is not None:
                 selected_option_id = selected_contract.get("id")
-            
-            if asset in ["LEAP", "Shorts"] and ticker:
-                c2 = st.columns([1.1, 1.3, 1.1, 3.5])  # widen Notes
-                type_idx = 0
-                if selected_contract is not None and str(selected_contract.get("type") or "").upper() == "PUT":
-                    type_idx = 1
-                opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}")
-                if selected_contract is not None:
-                    try:
-                        exp_default = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
-                    except Exception:
-                        exp_default = (dec_third if asset == "LEAP" else nf)
-                else:
-                    exp_default = (dec_third if asset == "LEAP" else nf)
-                exp_dt = c2[1].date_input("Exp", value=exp_default, key=f"bulk_exp_{rid}")
-                strike_def = float(selected_contract.get("strike_price") or 0.0) if selected_contract is not None else 0.0
-                strike = c2[2].number_input("Strike", step=0.5, value=strike_def, key=f"bulk_strike_{rid}")
-                notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}")
+                try:
+                    opt_type = str(selected_contract.get("type") or "").upper().strip()
+                except Exception:
+                    opt_type = ""
+                try:
+                    exp_dt = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
+                except Exception:
+                    exp_dt = (dec_third if asset == "LEAP" else nf)
+                try:
+                    strike = float(selected_contract.get("strike_price") or 0.0)
+                except Exception:
+                    strike = 0.0
 
-                if action == "Roll":
-                    c3 = st.columns([1.1, 1.1, 1.1, 3.7])  # widen New Exp picker
-                    btc_price = c3[0].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}")
-                    new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}")
-                    new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}")
-                    new_exp = c3[3].date_input("New Exp", value=nf, key=f"bulk_new_exp_{rid}")
+            # Layout rules:
+            # - Shorts Sell to Open: Date, Ticker, Type, Strike, Expiry, Qty, Premium, Fees
+            # - Shorts Roll: dropdown already shows ticker/date/strike/type/contracts. Then show Qty (default contracts), BTC, New Strike, New Expiry, New Premium, Fees.
+            if is_short_sto:
+                c2 = st.columns([1.1, 1.1, 1.1, 3.7])
+                type_idx = 0
+                if str(opt_type or "").upper() == "PUT":
+                    type_idx = 1
+                opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}_sto")
+                exp_default = (dec_third if asset == "LEAP" else nf)
+                exp_dt = c2[1].date_input("Expiry", value=exp_default, key=f"bulk_exp_{rid}_sto")
+                strike = c2[2].number_input("Strike", step=0.5, value=float(strike or 0.0), key=f"bulk_strike_{rid}_sto")
+                notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}_sto")
+
+                r3 = st.columns([1.2, 1.2, 1.0])
+                qty = r3[0].number_input("Qty", min_value=1, step=1, value=1, key=f"bulk_qty_{rid}_sto")
+                price = r3[1].number_input("Premium", step=0.01, value=0.0, key=f"bulk_price_{rid}_sto")
+                fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}_sto")
+
+            elif is_short_roll:
+                max_qty = int(selected_contract.get("contracts") or 1)
+                r3 = st.columns([1.1, 1.1, 1.1, 1.1, 1.1])
+                qty = r3[0].number_input("Qty", min_value=1, max_value=max_qty, step=1, value=max_qty, key=f"bulk_qty_{rid}_roll")
+                btc_price = r3[1].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}_roll")
+                new_strike = r3[2].number_input("New Strike", step=0.5, value=float(strike or 0.0), key=f"bulk_new_strike_{rid}_roll")
+                new_exp = r3[3].date_input("New Expiry", value=nf, key=f"bulk_new_exp_{rid}_roll")
+                new_prem = r3[4].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_roll")
+                price = new_prem
+
+                fees = st.number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}_roll")
+                notes = st.text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}_roll")
+
+            else:
+                # Default layout (existing behavior)
+                r3 = st.columns([1.2, 1.2, 1.0])
+                qty_default = 100 if asset == "Stock" else 1
+                max_qty = int(selected_contract.get("contracts") or 1) if selected_contract is not None else None
+                qty = r3[0].number_input("Qty/Contracts", min_value=1, max_value=max_qty, step=1, value=min(qty_default, max_qty) if max_qty else qty_default, key=f"bulk_qty_{rid}")
+
+                def_price = 0.0
+                if ticker and asset == "Stock":
+                    try:
+                        def_price = float(get_current_price(ticker) or 0.0)
+                    except Exception:
+                        def_price = 0.0
+                price = r3[1].number_input("Price/Premium", step=0.01, value=float(def_price), key=f"bulk_price_{rid}")
+                fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}")
+
+                if asset in ["LEAP", "Shorts"] and ticker:
+                    c2 = st.columns([1.1, 1.3, 1.1, 3.5])
+                    type_idx = 0
+                    if selected_contract is not None and str(selected_contract.get("type") or "").upper() == "PUT":
+                        type_idx = 1
+                    opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}")
+                    if selected_contract is not None:
+                        try:
+                            exp_default = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
+                        except Exception:
+                            exp_default = (dec_third if asset == "LEAP" else nf)
+                    else:
+                        exp_default = (dec_third if asset == "LEAP" else nf)
+                    exp_dt = c2[1].date_input("Exp", value=exp_default, key=f"bulk_exp_{rid}")
+                    strike_def = float(selected_contract.get("strike_price") or 0.0) if selected_contract is not None else 0.0
+                    strike = c2[2].number_input("Strike", step=0.5, value=strike_def, key=f"bulk_strike_{rid}")
+                    notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}")
+
+                    if action == "Roll":
+                        c3 = st.columns([1.1, 1.1, 1.1, 3.7])
+                        btc_price = c3[0].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}_defroll")
+                        new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}_defroll")
+                        new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_defroll")
+                        new_exp = c3[3].date_input("New Exp", value=nf, key=f"bulk_new_exp_{rid}_defroll")
+            if selected_contract is not None:
+                selected_option_id = selected_contract.get("id")
 
             # Net cash
             if action == "Roll":
@@ -4201,7 +5323,7 @@ def bulk_entries_page(active_user):
     st.subheader("Review & Submit")
     import pandas as pd
     sdf = pd.DataFrame(rows_out)
-    st.dataframe(sdf, use_container_width=True)
+    st.table(sdf, use_container_width=True)
     total_cash = float(sdf["Net Cash Change"].sum()) if not sdf.empty else 0.0
     st.metric("Total Net Cash Change", f"${total_cash:,.2f}")
 
