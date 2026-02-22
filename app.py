@@ -1317,9 +1317,9 @@ def get_open_short_call_contracts(user_id, symbol):
 def dashboard_page(active_user, view: str = "summary"):
     uid = _active_user_id(active_user)
     if view == "holdings":
-        st.header("📦 Holdings")
+        st.header("Holdings")
     else:
-        st.header("🧾 Option Details")
+        st.header("Executive Dashboard")
 
     # Delegated mode diagnostics: if key tables are unreadable, the dashboard will show zeros.
     try:
@@ -1898,63 +1898,85 @@ def dashboard_page(active_user, view: str = "summary"):
         except Exception:
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
-        # Render (format matches the provided mock)
+        # Render (polished UI)
         st.subheader("Win/Loss Weeks")
-        c1, c2, c3 = st.columns([1.35, 1, 1])
+
+        win_rate = (win_ct / total_ct) if total_ct else 0.0
+
+        c1, c2 = st.columns([1.25, 1])
 
         with c1:
-            # Pie chart (Altair) - avoids matplotlib dependency on Streamlit Cloud
+            # Donut chart (Altair) with readable labels
             try:
-                import altair as alt
                 pie_df = pd.DataFrame({
                     "Outcome": ["Wins", "Losses"],
-                    "Weeks": [int(win_ct), int(loss_ct)]
+                    "Weeks": [int(win_ct), int(loss_ct)],
                 })
-                # If empty, show neutral values
+
                 if int(pie_df["Weeks"].sum()) == 0:
                     pie_df["Weeks"] = [1, 1]
 
                 pie_df["Pct"] = pie_df["Weeks"] / pie_df["Weeks"].sum()
-                pie_df["Label"] = pie_df.apply(lambda r: f"{r['Pct']*100:.0f}% {r['Outcome']}", axis=1)
+                pie_df["Label"] = pie_df.apply(lambda r: f"{r['Outcome']}  {r['Pct']*100:.0f}%", axis=1)
 
-                base = alt.Chart(pie_df).encode(
-                    theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
-                    color=alt.Color(field="Outcome", type="nominal"),
-                    tooltip=[alt.Tooltip("Outcome:N"), alt.Tooltip("Weeks:Q"), alt.Tooltip("Pct:Q", format=".0%")]
+                arc = (
+                    alt.Chart(pie_df)
+                    .mark_arc(innerRadius=75, cornerRadius=8)
+                    .encode(
+                        theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
+                        color=alt.Color(
+                            field="Outcome",
+                            type="nominal",
+                            scale=alt.Scale(scheme="tableau10"),
+                            legend=alt.Legend(orient="bottom", title=None),
+                        ),
+                        tooltip=[
+                            alt.Tooltip("Outcome:N"),
+                            alt.Tooltip("Weeks:Q"),
+                            alt.Tooltip("Pct:Q", format=".0%"),
+                        ],
+                    )
+                    .properties(height=260)
                 )
 
-                pie = base.mark_arc()
-                # Add labels in the center of each arc
-                text = base.mark_text(radius=90, size=16, fontWeight="bold", color="white").encode(
-                    text=alt.Text(field="Label", type="nominal")
+                labels = (
+                    alt.Chart(pie_df)
+                    .mark_text(
+                        radius=120,
+                        size=13,
+                        fontWeight="bold",
+                        color="black",
+                        stroke="white",
+                        strokeWidth=4,
+                    )
+                    .encode(text="Label:N", theta=alt.Theta(field="Weeks", type="quantitative", stack=True))
                 )
-                st.altair_chart((pie + text), use_container_width=True)
+
+                center = (
+                    alt.Chart(pd.DataFrame({"t": [0]}))
+                    .mark_text(size=22, fontWeight="bold", color="black")
+                    .encode(text=alt.value(f"{win_rate*100:.0f}% Win Rate"))
+                )
+
+                st.altair_chart(arc + labels + center, use_container_width=True)
             except Exception:
-                # Fallback: simple metrics if chart can't render
                 st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
 
-        def _panel(title: str, weeks: int, avg_pct: float):
-            sign = "+" if avg_pct >= 0 else ""
-            st.markdown(
-                f"""
-    <div style="padding: 6px 4px;">
-      <div style="font-size: 64px; font-weight: 900; text-decoration: underline; margin-bottom: 12px;">{title}</div>
-      <div style="font-size: 60px; font-weight: 900; line-height: 1.05;">{weeks} Weeks</div>
-      <div style="font-size: 58px; font-weight: 900; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
-    </div>
-    """,
-                unsafe_allow_html=True,
-            )
-
         with c2:
-            _panel("Wins", win_ct, win_avg)
+            # Clean KPI grid
+            k1, k2 = st.columns(2)
+            with k1:
+                st.metric("Winning weeks", f"{win_ct}")
+                st.metric("Avg win return", f"{win_avg*100:.2f}%")
+            with k2:
+                st.metric("Losing weeks", f"{loss_ct}")
+                st.metric("Avg loss return", f"{loss_avg*100:.2f}%")
 
-        with c3:
-            _panel("Losses", loss_ct, loss_avg)
+            st.divider()
+            st.metric("Total weeks measured", f"{total_ct}")
 
         if _wk_stats_note:
             st.caption(_wk_stats_note)
-
         # --- Total Profit & Analysis (moved from Option Details) ---
         st.subheader("Total Profit & Analysis")
         try:
@@ -2799,7 +2821,7 @@ def dashboard_page(active_user, view: str = "summary"):
 
 def option_details_page(active_user):
     uid = _active_user_id(active_user)
-    st.header("📊 Executive Dashboard")
+    st.header("Option Details & Actions")
     
 
     _price_refresh_controls(active_user, 'Option Details', force_leap_mid=False)
