@@ -207,6 +207,56 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+
+# --- UI: Hide sidebar + Sticky top navigation ---
+st.markdown(
+    """
+    <style>
+      /* Hide Streamlit's default sidebar completely */
+      section[data-testid="stSidebar"] {display: none !important;}
+      /* Remove the blank sidebar gap */
+      div[data-testid="stSidebarNav"] {display: none !important;}
+      /* Make the top nav sticky */
+      .topnav-wrap {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background: rgba(255,255,255,0.90);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
+        padding: 0.75rem 0.75rem 0.6rem 0.75rem;
+        margin: -1rem -1rem 1rem -1rem; /* stretch full width */
+      }
+      .topnav-title {
+        font-size: 1.35rem;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        margin: 0;
+        line-height: 1.2;
+      }
+      .topnav-sub {
+        font-size: 0.9rem;
+        opacity: 0.75;
+        margin-top: 0.15rem;
+      }
+      /* Button styling */
+      .stButton>button {
+        border-radius: 999px;
+        padding: 0.4rem 0.9rem;
+        font-weight: 600;
+      }
+      /* Compact buttons in nav row */
+      .topnav .stButton>button {
+        padding: 0.35rem 0.8rem;
+      }
+      /* Reduce top padding of main block a bit */
+      .block-container {padding-top: 1.25rem;}
+    </style>
+    """
+    , unsafe_allow_html=True
+)
+
 st.markdown("""
     <style>
     .stDataFrame { border: 1px solid #f0f2f6; }
@@ -716,11 +766,46 @@ if 'user' not in st.session_state: st.session_state.user = None
 if 'delete_confirm_id' not in st.session_state: st.session_state.delete_confirm_id = None
 
 def handle_auth():
-    st.sidebar.title("🔐 Access Portal")
-    if not supabase: 
+    """Authenticate user without using the sidebar UI."""
+    if not supabase:
         st.warning("⚠️ Database not connected.")
         return False
 
+    if st.session_state.user:
+        return True
+
+    st.title("🔐 Access Portal")
+    st.caption("Sign in to access your dashboards.")
+
+    tabs = st.tabs(["Login", "Register"])
+    with tabs[0]:
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_pass")
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            if st.button("Sign In", type="primary"):
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    st.session_state.user = res.user
+                    st.session_state.access_token = getattr(getattr(res, "session", None), "access_token", "") or ""
+                    ensure_supabase_auth()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
+        with c2:
+            st.info("Tip: If you recently changed your password, use the new password when signing in.")
+
+    with tabs[1]:
+        new_email = st.text_input("Email", key="reg_email")
+        new_pass = st.text_input("Password", type="password", key="reg_pass")
+        if st.button("Create Account"):
+            try:
+                supabase.auth.sign_up({"email": new_email, "password": new_pass})
+                st.success("Account created! You can now log in.")
+            except Exception as e:
+                st.error(f"Signup failed: {e}")
+
+    return False
     if st.session_state.user:
         st.sidebar.success(f"User: {st.session_state.user.email}")
         if st.sidebar.button("Logout"):
@@ -5474,6 +5559,81 @@ def settings_page(user):
                 st.session_state.confirm_reset = False; st.success("Account reset."); st.rerun()
             if c2.button("Cancel"): st.session_state.confirm_reset = False; st.rerun()
 
+
+def _top_nav(user, active_user):
+    """Sticky top navigation. Returns selected page name."""
+    if "page" not in st.session_state:
+        st.session_state.page = "Dashboard"
+
+    # Left: Title / Right: user actions
+    st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
+    header_cols = st.columns([2.4, 1.6])
+
+    with header_cols[0]:
+        st.markdown('<div class="topnav">', unsafe_allow_html=True)
+        st.markdown('<div class="topnav-title">Options Dashboard</div>', unsafe_allow_html=True)
+        email = (getattr(st.session_state.get("user", None), "email", "") or "").strip()
+        sub = f"Signed in as {email}" if email else "Signed in"
+        st.markdown(f'<div class="topnav-sub">{sub}</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with header_cols[1]:
+        # Quick actions row
+        a1, a2 = st.columns([1, 1])
+        with a1:
+            if st.button("Logout", key="topnav_logout"):
+                try:
+                    supabase.auth.sign_out()
+                except Exception:
+                    pass
+                st.session_state.user = None
+                st.session_state.access_token = ""
+                st.session_state.page = "Dashboard"
+                st.rerun()
+        with a2:
+            # Show active account label if delegated
+            try:
+                acct_label = _active_account_label(active_user)
+            except Exception:
+                acct_label = "My Account"
+            st.caption(acct_label)
+
+    st.markdown("<hr style='margin:0.65rem 0 0.25rem 0; opacity:0.25;'/>", unsafe_allow_html=True)
+
+    # Menu buttons
+    pages = [
+        "Dashboard",
+        "Holdings",
+        "Option Details",
+        "Update LEAP Prices",
+        "Weekly Snapshot",
+        "Cash Management",
+        "Enter Trade",
+        "Ledger",
+        "Import Data",
+        "Bulk Entries",
+        "Profile",
+        "Community",
+        "Settings",
+    ]
+
+    # Wrap buttons across rows (responsive-ish)
+    # We'll do 6 per row for good density.
+    per_row = 6
+    for r in range(0, len(pages), per_row):
+        cols = st.columns(per_row)
+        for i, p in enumerate(pages[r:r+per_row]):
+            with cols[i]:
+                # Highlight current page by using primary button
+                btn_type = "primary" if st.session_state.page == p else "secondary"
+                if st.button(p, key=f"nav_{p}"):
+                    st.session_state.page = p
+                    st.rerun()
+
+    st.markdown("</div>", unsafe_allow_html=True)
+    return st.session_state.page
+
+
 def main():
     # page config already set at top
     
@@ -5481,7 +5641,7 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Profile", "Community", "Settings"])
+    page = _top_nav(user, active_user)
     user = st.session_state.user
     active_user = _set_active_account(user)
     if page == "Dashboard": dashboard_page(active_user, view="summary")
