@@ -609,25 +609,35 @@ def account_sharing_page(user):
 
         st.divider()
 
-        st.subheader("Password")
-        st.caption("Send yourself a password reset email link.")
-        reset_email = getattr(user, "email", "") or ""
-        reset_email = st.text_input("Email", value=reset_email, disabled=bool(reset_email), key="profile_reset_email")
-        if st.button("Send password reset email", key="profile_reset_btn"):
-            try:
-                email_clean = (reset_email or "").strip().lower()
-                if not email_clean or "@" not in email_clean:
-                    st.error("Please enter a valid email address.")
-                else:
-                    # Supabase will email a reset link. Ensure your Supabase Auth settings include the correct redirect URL(s).
-                    try:
-                        supabase.auth.reset_password_for_email(email_clean)
-                    except TypeError:
-                        # Older/newer client signatures sometimes require an options dict
-                        supabase.auth.reset_password_for_email(email_clean, {"redirectTo": None})
-                    st.success("If an account exists for that email, a reset link has been sent.")
-            except Exception as e:
-                st.error(f"Could not send reset email: {e}")
+
+st.subheader("Change Password")
+st.caption("Enter your current password, then choose a new one.")
+
+with st.form("change_password_form", clear_on_submit=True):
+    current_pw = st.text_input("Current password", type="password")
+    new_pw1 = st.text_input("New password", type="password")
+    new_pw2 = st.text_input("Confirm new password", type="password")
+    do_change = st.form_submit_button("Update password", type="primary")
+
+if do_change:
+    try:
+        email_for_pw = (getattr(user, "email", "") or "").strip().lower()
+        if not email_for_pw or "@" not in email_for_pw:
+            st.error("Couldn't determine your account email. Please log out and log back in.")
+        elif not current_pw or not new_pw1 or not new_pw2:
+            st.error("Please fill in all password fields.")
+        elif new_pw1 != new_pw2:
+            st.error("New password entries don't match.")
+        elif len(new_pw1) < 8:
+            st.error("New password must be at least 8 characters.")
+        else:
+            # Verify current password by re-authenticating.
+            supabase.auth.sign_in_with_password({"email": email_for_pw, "password": current_pw})
+            # Update password for the currently authenticated user.
+            supabase.auth.update_user({"password": new_pw1})
+            st.success("Password updated. Please use the new password next time you log in.")
+    except Exception as e:
+        st.error(f"Could not update password: {e}")
 
     st.divider()
 
