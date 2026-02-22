@@ -107,6 +107,53 @@ def apply_global_ui_theme():
         font-weight: 650;
       }
 
+    
+      /* ---- Wealthsimple-like HTML tabs (no radios) ---- */
+      .wsnav-row{
+        display:flex;
+        align-items:flex-end;
+        gap: 1.5rem;
+        padding-bottom: 0.55rem;
+      }
+      .wsnav-logo{
+        font-weight: 800;
+        font-size: 2.15rem;
+        line-height: 1;
+        letter-spacing: -0.04em;
+        user-select:none;
+      }
+      .wsnav-tabs{
+        display:flex;
+        flex-wrap:nowrap;
+        gap: 2.0rem;
+        overflow-x:auto;
+        overflow-y:hidden;
+        scrollbar-width:none;
+      }
+      .wsnav-tabs::-webkit-scrollbar{ display:none; }
+      .wsnav-tab{
+        text-decoration:none !important;
+        font-size: 1.25rem;
+        font-weight: 650;
+        color: rgba(49, 51, 63, 0.65);
+        padding-bottom: 0.35rem;
+        border-bottom: 3px solid transparent;
+        white-space:nowrap;
+      }
+      .wsnav-tab:hover{
+        color: rgba(49, 51, 63, 0.90);
+      }
+      .wsnav-tab.active{
+        color: rgba(17, 17, 17, 0.98) !important;
+        border-bottom-color: rgba(17, 17, 17, 0.98);
+      }
+      /* Keep top nav sticky always */
+      .topnav-wrap{
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+      }
+
     </style>
 
 </style>
@@ -5641,47 +5688,59 @@ def settings_page(user):
 
 def _top_nav(user, active_user):
     """Sticky top navigation. Returns selected page name."""
-    if "page" not in st.session_state:
-        st.session_state.page = "Dashboard"
-
     pages = [
-        "Dashboard",
-        "Holdings",
-        "Option Details",
-        "Update LEAP Prices",
-        "Weekly Snapshot",
-        "Cash Management",
-        "Enter Trade",
-        "Ledger",
-        "Import Data",
-        "Bulk Entries",
-        "Profile",
-        "Community",
-        "Settings",
+        ("Dashboard", "Dashboard"),
+        ("Holdings", "Holdings"),
+        ("Option Details", "Option Details"),
+        ("Update LEAP Prices", "Update LEAP Prices"),
+        ("Weekly Snapshot", "Weekly Snapshot"),
+        ("Cash Management", "Cash Management"),
+        ("Enter Trade", "Enter Trade"),
+        ("Ledger", "Ledger"),
+        ("Import Data", "Import Data"),
+        ("Bulk Entries", "Bulk Entries"),
+        ("Profile", "Profile"),
+        ("Community", "Community"),
+        ("Settings", "Settings"),
     ]
 
-    st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
+    # Determine selected page from URL query params (so we can use clean <a href> tabs)
+    try:
+        qp = st.query_params
+        sel = qp.get("page", None)
+        if isinstance(sel, list):
+            sel = sel[0] if sel else None
+    except Exception:
+        # Backward compatibility with older Streamlit
+        sel = st.experimental_get_query_params().get("page", [None])[0]
 
-    # Wealthsimple-like: logo + tabs + actions on one line
-    c_logo, c_menu, c_actions = st.columns([0.8, 5.8, 1.8], vertical_alignment="bottom")
+    if not sel:
+        sel = st.session_state.get("page", "Dashboard")
+
+    # Normalize to a valid page
+    valid = {k for _, k in pages}
+    if sel not in valid:
+        sel = "Dashboard"
+
+    st.session_state.page = sel
+
+    # Build tabs HTML
+    tabs_html = []
+    for label, key in pages:
+        cls = "wsnav-tab active" if key == sel else "wsnav-tab"
+        tabs_html.append(f'<a class="{cls}" href="?page={key.replace(" ", "%20")}">{label}</a>')
+    tabs_html = "".join(tabs_html)
+
+    st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
+    c_logo, c_tabs, c_actions = st.columns([0.6, 6.2, 1.6], vertical_alignment="bottom")
 
     with c_logo:
         st.markdown('<div class="wsnav-logo">W</div>', unsafe_allow_html=True)
 
-    with c_menu:
-        st.markdown('<div class="wsnav-menu">', unsafe_allow_html=True)
-        sel = st.radio(
-            "Navigation",
-            pages,
-            index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
-            horizontal=True,
-            label_visibility="collapsed",
-            key="topnav_radio",
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+    with c_tabs:
+        st.markdown(f'<div class="wsnav-tabs">{tabs_html}</div>', unsafe_allow_html=True)
 
     with c_actions:
-        st.markdown('<div class="wsnav-actions">', unsafe_allow_html=True)
         if st.button("Logout", key="topnav_logout"):
             try:
                 supabase.auth.sign_out()
@@ -5689,23 +5748,21 @@ def _top_nav(user, active_user):
                 pass
             st.session_state.user = None
             st.session_state.access_token = ""
+            # clear query param
+            try:
+                st.query_params.clear()
+            except Exception:
+                st.experimental_set_query_params()
             st.session_state.page = "Dashboard"
             st.rerun()
-        # Active account label (delegation)
         try:
             acct_label = _active_account_label(active_user)
         except Exception:
             acct_label = "My Account"
         st.caption(acct_label)
-        st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
-
-    if sel != st.session_state.page:
-        st.session_state.page = sel
-        st.rerun()
-
-    return st.session_state.page
+    return sel
 
 
 def main():
