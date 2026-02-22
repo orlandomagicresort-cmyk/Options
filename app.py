@@ -185,6 +185,89 @@ def apply_global_ui_theme():
         height: 0 !important;
       }
 
+    
+      /* ---- Wealthsimple-inspired two-level top navigation ---- */
+      .topnav-wrap{
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+        background: rgba(255,255,255,0.96);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
+        padding: 0.85rem 1rem 0.65rem 1rem;
+        margin: -1rem -1rem 1rem -1rem;
+      }
+      .wsnav-logo{
+        font-weight: 800;
+        font-size: 2.15rem;
+        line-height: 1;
+        letter-spacing: -0.04em;
+        user-select:none;
+      }
+      .wsnav-primary .stRadio [role="radiogroup"],
+      .wsnav-secondary .stRadio [role="radiogroup"]{
+        display:flex !important;
+        flex-wrap:nowrap !important;
+        overflow-x:auto !important;
+        overflow-y:hidden !important;
+        scrollbar-width:none;
+      }
+      .wsnav-primary .stRadio [role="radiogroup"]::-webkit-scrollbar,
+      .wsnav-secondary .stRadio [role="radiogroup"]::-webkit-scrollbar{ display:none; }
+
+      .wsnav-primary .stRadio [role="radiogroup"]{ gap: 2.0rem !important; }
+      .wsnav-secondary .stRadio [role="radiogroup"]{ gap: 1.4rem !important; margin-top: 0.25rem !important; }
+
+      .wsnav-primary label[data-baseweb="radio"],
+      .wsnav-secondary label[data-baseweb="radio"]{
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
+        margin: 0 !important;
+      }
+      .wsnav-primary label[data-baseweb="radio"] > div,
+      .wsnav-secondary label[data-baseweb="radio"] > div{
+        padding: 0 0 0.35rem 0 !important;
+        border-bottom: 3px solid transparent !important;
+        display: inline-flex !important;
+        align-items: flex-end !important;
+      }
+      .wsnav-primary label[data-baseweb="radio"] span{
+        font-size: 1.25rem;
+        font-weight: 650;
+        color: rgba(49, 51, 63, 0.65);
+      }
+      .wsnav-secondary label[data-baseweb="radio"] span{
+        font-size: 1.05rem;
+        font-weight: 650;
+        color: rgba(49, 51, 63, 0.62);
+      }
+      .wsnav-primary label[data-baseweb="radio"]:hover span,
+      .wsnav-secondary label[data-baseweb="radio"]:hover span{
+        color: rgba(49, 51, 63, 0.90);
+      }
+      .wsnav-primary input[type="radio"]:checked + div,
+      .wsnav-secondary input[type="radio"]:checked + div{
+        border-bottom-color: rgba(17, 17, 17, 0.98) !important;
+      }
+      .wsnav-primary input[type="radio"]:checked + div span,
+      .wsnav-secondary input[type="radio"]:checked + div span{
+        color: rgba(17, 17, 17, 0.98) !important;
+      }
+      .wsnav-primary label[data-baseweb="radio"] input,
+      .wsnav-secondary label[data-baseweb="radio"] input{
+        position:absolute !important;
+        opacity:0 !important;
+        width:0 !important;
+        height:0 !important;
+      }
+      .wsnav-actions .stSelectbox > div{ min-width: 220px; }
+      .wsnav-actions .stButton>button{
+        border-radius: 999px;
+        padding: 0.35rem 0.85rem;
+        font-weight: 650;
+      }
+
     </style>
 
 </style>
@@ -619,21 +702,27 @@ def _get_accessible_accounts(user):
     return out
 
 def _set_active_account(user):
-    """Render account selector + set active user context."""
+    """Resolve the active account context (no UI). Selection is controlled by top navigation."""
     _ensure_user_preferences_row(user)
     _activate_pending_invites(user)
 
     accts = _get_accessible_accounts(user)
+    if not accts:
+        st.session_state["active_account_label"] = "My Account"
+        st.session_state["active_user_id"] = user.id
+        st.session_state["active_role"] = "editor"
+        st.session_state["read_only"] = False
+        st.session_state["active_account_display_name"] = None
+        return SimpleNamespace(id=user.id, email=getattr(user, "email", ""))
+
     labels = [a["label"] for a in accts]
     cur = st.session_state.get("active_account_label") or labels[0]
     if cur not in labels:
         cur = labels[0]
+        st.session_state["active_account_label"] = cur
 
-    sel = st.sidebar.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
-    st.session_state["active_account_label"] = sel
-    chosen = next(a for a in accts if a["label"] == sel)
+    chosen = next(a for a in accts if a["label"] == cur)
 
-    # Try to resolve the chosen account's display name (used for masking / UI)
     chosen_display = None
     try:
         prefs = supabase.table("user_preferences").select("display_name").eq("user_id", chosen["owner_user_id"]).limit(1).execute().data or []
@@ -643,11 +732,10 @@ def _set_active_account(user):
         chosen_display = None
     st.session_state["active_account_display_name"] = chosen_display
 
-    st.session_state["active_user_id"] = chosen["owner_user_id"] = chosen["owner_user_id"]
+    st.session_state["active_user_id"] = chosen["owner_user_id"]
     st.session_state["active_role"] = chosen["role"]
     st.session_state["read_only"] = (chosen["owner_user_id"] != user.id and chosen["role"] != "editor")
 
-    # Provide a lightweight user-like object for downstream code
     return SimpleNamespace(id=chosen["owner_user_id"], email=(st.session_state.get("active_account_display_name") or getattr(user, "email", "")))
 
 def _require_editor():
@@ -5718,45 +5806,70 @@ def settings_page(user):
 
 
 def _top_nav(user, active_user):
-    """Sticky top navigation. Returns selected page name."""
+    """Sticky top navigation with two-level menus (Wealthsimple-inspired)."""
+    if "nav_section" not in st.session_state:
+        st.session_state.nav_section = "Home"
     if "page" not in st.session_state:
         st.session_state.page = "Dashboard"
 
-    pages = [
-        "Dashboard",
-        "Holdings",
-        "Option Details",
-        "Update LEAP Prices",
-        "Weekly Snapshot",
-        "Cash Management",
-        "Enter Trade",
-        "Ledger",
-        "Import Data",
-        "Bulk Entries",
-        "Profile",
-        "Community",
-        "Settings",
-    ]
+    NAV = {
+        "Home": ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices"],
+        "Activity": ["Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger"],
+        "Maintenance": ["Import Data", "Bulk Entries", "Profile", "Settings"],
+        "Community": ["Community"],
+    }
+
+    # Keep section consistent with current page
+    for sec_name, pages in NAV.items():
+        if st.session_state.page in pages:
+            st.session_state.nav_section = sec_name
+            break
 
     st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
-    c_logo, c_tabs, c_actions = st.columns([0.6, 6.4, 1.6], vertical_alignment="bottom")
+
+    c_logo, c_primary, c_actions = st.columns([0.6, 6.7, 2.1], vertical_alignment="bottom")
 
     with c_logo:
         st.markdown('<div class="wsnav-logo">W</div>', unsafe_allow_html=True)
 
-    with c_tabs:
-        st.markdown('<div class="wsnav-menu">', unsafe_allow_html=True)
-        sel = st.radio(
-            "Navigation",
-            pages,
-            index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
+    with c_primary:
+        st.markdown('<div class="wsnav-primary">', unsafe_allow_html=True)
+        sec = st.radio(
+            "Primary navigation",
+            list(NAV.keys()),
+            index=list(NAV.keys()).index(st.session_state.nav_section),
             horizontal=True,
             label_visibility="collapsed",
-            key="topnav_radio",
+            key="ws_primary_nav",
         )
         st.markdown("</div>", unsafe_allow_html=True)
 
     with c_actions:
+        st.markdown('<div class="wsnav-actions">', unsafe_allow_html=True)
+
+        # Account selector (controls active account context)
+        try:
+            accts = _get_accessible_accounts(user)
+            labels = [a["label"] for a in accts] if accts else ["My Account"]
+        except Exception:
+            labels = ["My Account"]
+
+        cur = st.session_state.get("active_account_label") or (labels[0] if labels else "My Account")
+        if cur not in labels and labels:
+            cur = labels[0]
+            st.session_state["active_account_label"] = cur
+
+        sel_acct = st.selectbox(
+            "Account",
+            labels,
+            index=labels.index(cur) if cur in labels else 0,
+            label_visibility="collapsed",
+            key="ws_account_select",
+        )
+        if sel_acct != st.session_state.get("active_account_label"):
+            st.session_state["active_account_label"] = sel_acct
+            st.rerun()
+
         if st.button("Logout", key="topnav_logout"):
             try:
                 supabase.auth.sign_out()
@@ -5765,21 +5878,36 @@ def _top_nav(user, active_user):
             st.session_state.user = None
             st.session_state.access_token = ""
             st.session_state.page = "Dashboard"
+            st.session_state.nav_section = "Home"
             st.rerun()
-        try:
-            acct_label = _active_account_label(active_user)
-        except Exception:
-            acct_label = "My Account"
-        st.caption(acct_label)
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Secondary row
+    st.markdown('<div class="wsnav-secondary">', unsafe_allow_html=True)
+    sec_pages = NAV.get(sec, ["Dashboard"])
+    sub = st.radio(
+        "Secondary navigation",
+        sec_pages,
+        index=sec_pages.index(st.session_state.page) if st.session_state.page in sec_pages else 0,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="ws_secondary_nav",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-    if sel != st.session_state.page:
-        st.session_state.page = sel
+    if sec != st.session_state.nav_section:
+        st.session_state.nav_section = sec
+        st.session_state.page = NAV[sec][0]
+        st.rerun()
+
+    if sub != st.session_state.page:
+        st.session_state.page = sub
         st.rerun()
 
     return st.session_state.page
-
 
 def main():
     # page config already set at top
