@@ -590,7 +590,6 @@ def community_page(user):
     
 def account_sharing_page(user):
     uid = _active_user_id(user)
-    _price_refresh_controls(user, "Profile", force_leap_mid=False)
     st.header("👤 Profile")
 
     # Preferences
@@ -608,6 +607,37 @@ def account_sharing_page(user):
         st.success("Saved.")
 
         st.divider()
+
+st.subheader("Change Password")
+st.caption("For security, enter your current password and choose a new one.")
+
+with st.form("change_password_form"):
+    email_for_pw = (getattr(user, "email", "") or "").strip().lower()
+    cur_pw = st.text_input("Current password", type="password")
+    new_pw1 = st.text_input("New password", type="password")
+    new_pw2 = st.text_input("Confirm new password", type="password")
+    submitted_pw = st.form_submit_button("Update password", type="primary")
+
+if submitted_pw:
+    try:
+        if not email_for_pw or "@" not in email_for_pw:
+            st.error("Couldn't determine your account email. Please log out and log back in.")
+        elif not cur_pw or not new_pw1 or not new_pw2:
+            st.error("Please fill in all password fields.")
+        elif new_pw1 != new_pw2:
+            st.error("New password entries don't match.")
+        else:
+            # Re-authenticate with current password, then update to the new password
+            auth_res = supabase.auth.sign_in_with_password({"email": email_for_pw, "password": cur_pw})
+            # Ensure auth context is refreshed for subsequent calls
+            st.session_state.user = getattr(auth_res, "user", None) or st.session_state.user
+            st.session_state.access_token = getattr(getattr(auth_res, "session", None), "access_token", "") or st.session_state.get("access_token", "")
+            ensure_supabase_auth()
+
+            supabase.auth.update_user({"password": new_pw1})
+            st.success("Password updated successfully.")
+    except Exception as e:
+        st.error(f"Could not update password: {e}")
 
 
     # If your Supabase schema includes account_access.owner_email, you can backfill it for existing grants
@@ -674,40 +704,6 @@ def account_sharing_page(user):
     else:
         st.info("No delegates yet.")
 
-    st.divider()
-    st.subheader("Change Password")
-    st.caption("Enter your current password, then choose a new one.")
-
-    # Password changes apply to the currently logged-in auth user (not the delegated/active account).
-    auth_user = st.session_state.get("user", None) or user
-    auth_email_default = (getattr(auth_user, "email", "") or "").strip().lower()
-
-    with st.form("change_password_form", clear_on_submit=True):
-        email_for_pw = st.text_input("Account email", value=auth_email_default, disabled=bool(auth_email_default))
-        current_pw = st.text_input("Current password", type="password")
-        new_pw1 = st.text_input("New password", type="password")
-        new_pw2 = st.text_input("Confirm new password", type="password")
-        do_change = st.form_submit_button("Update password", type="primary")
-
-    if do_change:
-        try:
-            email_clean = (email_for_pw or "").strip().lower()
-            if not email_clean or "@" not in email_clean:
-                st.error("Please enter a valid account email address.")
-            elif not current_pw or not new_pw1 or not new_pw2:
-                st.error("Please fill in all password fields.")
-            elif new_pw1 != new_pw2:
-                st.error("New password entries don't match.")
-            elif len(new_pw1) < 8:
-                st.error("New password must be at least 8 characters.")
-            else:
-                # Verify current password by re-authenticating.
-                supabase.auth.sign_in_with_password({"email": email_clean, "password": current_pw})
-                # Update password for the currently authenticated user.
-                supabase.auth.update_user({"password": new_pw1})
-                st.success("Password updated. Please use the new password next time you log in.")
-        except Exception as e:
-            st.error(f"Could not update password: {e}")
 
 # --------------------------------------------------------------------------------
 # 3. AUTHENTICATION & SESSION
@@ -1370,7 +1366,6 @@ def dashboard_page(active_user, view: str = "summary"):
         pass
 
 
-    _price_refresh_controls(active_user, 'Dashboard', force_leap_mid=False)
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
     fx = float(get_usd_to_cad_rate() or 1.0)
@@ -2848,7 +2843,6 @@ def option_details_page(active_user):
     st.header("Option Details & Actions")
     
 
-    _price_refresh_controls(active_user, 'Option Details', force_leap_mid=False)
 
         # --- Top Controls ---
     # Currency toggle removed; Option Details displays values in USD.
@@ -3937,7 +3931,6 @@ def pricing_page(active_user):
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
 
 
-    _price_refresh_controls(active_user, 'Update LEAP Prices', force_leap_mid=True)
 
     assets, _ = get_portfolio_data(uid)
     if assets.empty:
@@ -5013,441 +5006,6 @@ def _bulk_expire_option(option_id: int):
 
 
 
-def bulk_entries_page(active_user):
-    uid = _active_user_id(active_user)
-    st.header("🧾 Bulk Entries")
-    st.caption("Add transactions one line at a time. Fields appear based on Asset + Action. Review, then submit as a batch.")
-
-    today = datetime.now().date()
-    nf = _next_friday(today)
-    dec_third = _third_friday_next_december(today)
-
-    if "bulk_tx_rows" not in st.session_state:
-        st.session_state["bulk_tx_rows"] = []
-
-    def _add_row():
-        st.session_state["bulk_tx_rows"].append({"id": str(uuid.uuid4())})
-
-    def _remove_row(i: int):
-        try:
-            st.session_state["bulk_tx_rows"].pop(i)
-        except Exception:
-            pass
-
-    top_cols = st.columns([1, 1, 3])
-    if top_cols[0].button("➕ Add Transaction", type="primary"):
-        _add_row()
-        st.rerun()
-    if top_cols[1].button("🧹 Clear All"):
-        st.session_state["bulk_tx_rows"] = []
-        st.rerun()
-
-    if not st.session_state["bulk_tx_rows"]:
-        st.info("Click **Add Transaction** to start.")
-        return
-
-    # Dropdown sources
-    stock_owned = _fetch_stock_tickers(active_user) if "supabase" in globals() else []
-    holdings_symbols = get_distinct_holdings(uid)
-
-    open_shorts = _fetch_open_shorts(active_user)
-    short_symbols = sorted({str(r.get("symbol") or "").upper() for r in open_shorts if str(r.get("symbol") or "")})
-
-    # LEAP Shorts (longer dated options in options table: >= 90 days out)
-    leap_symbols_open = []
-    try:
-        leap_cut = (today + timedelta(days=90)).isoformat()
-        leap_open = supabase.table("options").select("*").eq("user_id", uid).eq("status", "open").gte("expiration_date", leap_cut).execute().data or []
-        leap_symbols_open = sorted({str(r.get("symbol") or "").upper() for r in leap_open if str(r.get("symbol") or "")})
-    except Exception:
-        leap_open = []
-        leap_symbols_open = []
-
-
-    # Build contract label maps for selecting specific existing contracts
-    # For Shorts: show UNIQUE contracts (symbol + expiry + strike + type), combining contracts across lots.
-    short_opt_map = {}
-    short_opt_labels = []
-
-    short_agg = {}  # (sym, exp, strike, typ) -> aggregate dict
-    for o in open_shorts:
-        try:
-            sym = str(o.get("symbol") or "").upper().strip()
-            exp = str(o.get("expiration_date") or "")[:10]
-            strike = float(o.get("strike_price") or 0)
-            typ = str(o.get("type") or "").upper().strip()
-            contracts = int(o.get("contracts") or 0)
-            oid = o.get("id")
-
-            if not sym or not exp or not typ or contracts <= 0:
-                continue
-
-            k = (sym, exp, strike, typ)
-            if k not in short_agg:
-                short_agg[k] = {
-                    "id": oid,  # representative
-                    "ids": [oid] if oid is not None else [],
-                    "symbol": sym,
-                    "expiration_date": exp,
-                    "strike_price": strike,
-                    "type": typ,
-                    "contracts": 0,
-                }
-            short_agg[k]["contracts"] += contracts
-            if oid is not None and oid not in short_agg[k]["ids"]:
-                short_agg[k]["ids"].append(oid)
-        except Exception:
-            continue
-
-    for (sym, exp, strike, typ), agg in short_agg.items():
-        try:
-            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(agg.get('contracts') or 0)} | {typ}"
-            short_opt_map[lbl] = agg
-            short_opt_labels.append(lbl)
-        except Exception:
-            continue
-
-    short_opt_labels = sorted(short_opt_labels)
-    leap_opt_map = {}
-    leap_opt_labels = []
-
-    leap_agg = {}  # (sym, exp, strike, typ) -> aggregate dict
-    for o in leap_open:
-        try:
-            sym = str(o.get("symbol") or "").upper().strip()
-            exp = str(o.get("expiration_date") or "")[:10]
-            strike = float(o.get("strike_price") or 0)
-            typ = str(o.get("type") or "").upper().strip()
-            contracts = int(o.get("contracts") or 0)
-            oid = o.get("id")
-
-            if not sym or not exp or not typ or contracts <= 0:
-                continue
-
-            k = (sym, exp, strike, typ)
-            if k not in leap_agg:
-                leap_agg[k] = {
-                    "id": oid,  # representative
-                    "ids": [oid] if oid is not None else [],
-                    "symbol": sym,
-                    "expiration_date": exp,
-                    "strike_price": strike,
-                    "type": typ,
-                    "contracts": 0,
-                }
-            leap_agg[k]["contracts"] += contracts
-            if oid is not None and oid not in leap_agg[k]["ids"]:
-                leap_agg[k]["ids"].append(oid)
-        except Exception:
-            continue
-
-    for (sym, exp, strike, typ), agg in leap_agg.items():
-        try:
-            lbl = f"{sym} | {datetime.fromisoformat(exp).strftime('%d-%b-%Y') if exp else exp} | Strike: ${strike:,.2f} | Contracts: {int(agg.get('contracts') or 0)} | {typ}"
-            leap_opt_map[lbl] = agg
-            leap_opt_labels.append(lbl)
-        except Exception:
-            continue
-
-    leap_opt_labels = sorted(leap_opt_labels)
-
-
-    st.subheader("Transactions")
-    rows_out = []
-
-    for idx, row in enumerate(list(st.session_state["bulk_tx_rows"])):
-        rid = row.get("id") or str(uuid.uuid4())
-        with st.container(border=True):
-            # Row 1: Asset / Action / Date / Delete
-            r1 = st.columns([1.2, 1.8, 1.4, 0.6])
-            asset = r1[0].selectbox("Asset", ["Stock", "LEAP", "Shorts"], key=f"bulk_asset_{rid}")
-            if asset == "Stock":
-                actions = ["Buy", "Sell"]
-            elif asset == "LEAP":
-                actions = ["Sell to Open", "Buy to Close", "Roll", "Expire", "Assign"]
-            else:
-                actions = ["Sell to Open", "Buy to Close", "Roll", "Expire", "Assign"]
-            action = r1[1].selectbox("Action", actions, key=f"bulk_action_{rid}")
-            d = r1[2].date_input("Date", value=today, key=f"bulk_date_{rid}")
-            if r1[3].button("🗑️ Delete", key=f"bulk_del_{rid}"):
-                _remove_row(idx)
-                st.rerun()
-
-            # Row 2: Contract / Ticker (full width)
-            selected_contract = None
-            selected_option_id = None
-            ticker = ""
-
-            if asset == "Stock" and action == "Sell" and stock_owned:
-                ticker = st.selectbox("Ticker", stock_owned, key=f"bulk_ticker_{rid}")
-            elif asset == "Stock":
-                ticker = st.text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
-            elif asset == "Shorts" and action == "Sell to Open" and holdings_symbols:
-                ticker = st.selectbox("Ticker", holdings_symbols, key=f"bulk_ticker_{rid}")
-            elif asset == "LEAP" and action == "Sell to Open" and holdings_symbols:
-                ticker = st.selectbox("Ticker", holdings_symbols, key=f"bulk_ticker_{rid}")
-            else:
-                if asset == "Shorts" and action in ["Buy to Close", "Roll", "Expire", "Assign"] and short_opt_labels:
-                    lbl = st.selectbox("Contract (Ticker • Exp • Strike • Type • Open Contracts)", short_opt_labels, key=f"bulk_contract_{rid}")
-                    selected_contract = short_opt_map.get(lbl)
-                elif asset == "LEAP" and action in ["Buy to Close", "Roll", "Expire", "Assign"] and leap_opt_labels:
-                    lbl = st.selectbox("Contract (Ticker • Exp • Strike • Type • Open Contracts)", leap_opt_labels, key=f"bulk_contract_{rid}")
-                    selected_contract = leap_opt_map.get(lbl)
-                else:
-                    ticker = st.text_input("Ticker", value="", key=f"bulk_ticker_{rid}").upper().strip()
-
-            if selected_contract is not None:
-                selected_option_id = selected_contract.get("id")
-                ticker = str(selected_contract.get("symbol") or "").upper().strip()
-                # Show full contract details beneath the dropdown (so nothing is hidden)
-                exp_s = str(selected_contract.get("expiration_date") or "")[:10]
-                strike_s = float(selected_contract.get("strike_price") or 0)
-                typ_s = str(selected_contract.get("type") or "").upper()
-                ctr_s = int(selected_contract.get("contracts") or 0)
-                st.caption(f"Selected: **{ticker}** • **{exp_s}** • **{strike_s:g}** • **{typ_s}** • **{ctr_s} contracts**")
-
-                        # Flags for special layouts
-            is_short_sto = (asset == "Shorts" and action == "Sell to Open")
-            is_short_roll = (asset == "Shorts" and action == "Roll" and selected_contract is not None)
-
-            opt_type = ""
-            exp_dt = None
-            strike = 0.0
-            selected_option_id = None
-            btc_price = 0.0
-            price = 0.0
-            new_strike = 0.0
-            new_prem = 0.0
-            new_exp = nf
-            notes = ""
-
-            # If a contract is selected, pull its details
-            if selected_contract is not None:
-                selected_option_id = selected_contract.get("id")
-                try:
-                    opt_type = str(selected_contract.get("type") or "").upper().strip()
-                except Exception:
-                    opt_type = ""
-                try:
-                    exp_dt = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
-                except Exception:
-                    exp_dt = (dec_third if asset == "LEAP" else nf)
-                try:
-                    strike = float(selected_contract.get("strike_price") or 0.0)
-                except Exception:
-                    strike = 0.0
-
-            # Layout rules:
-            # - Shorts Sell to Open: Date, Ticker, Type, Strike, Expiry, Qty, Premium, Fees
-            # - Shorts Roll: dropdown already shows ticker/date/strike/type/contracts. Then show Qty (default contracts), BTC, New Strike, New Expiry, New Premium, Fees.
-            if is_short_sto:
-                c2 = st.columns([1.1, 1.1, 1.1, 3.7])
-                type_idx = 0
-                if str(opt_type or "").upper() == "PUT":
-                    type_idx = 1
-                opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}_sto")
-                exp_default = (dec_third if asset == "LEAP" else nf)
-                exp_dt = c2[1].date_input("Expiry", value=exp_default, key=f"bulk_exp_{rid}_sto")
-                strike = c2[2].number_input("Strike", step=0.5, value=float(strike or 0.0), key=f"bulk_strike_{rid}_sto")
-                notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}_sto")
-
-                r3 = st.columns([1.2, 1.2, 1.0])
-                qty = r3[0].number_input("Qty", min_value=1, step=1, value=1, key=f"bulk_qty_{rid}_sto")
-                price = r3[1].number_input("Premium", step=0.01, value=0.0, key=f"bulk_price_{rid}_sto")
-                fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}_sto")
-
-            elif is_short_roll:
-                max_qty = int(selected_contract.get("contracts") or 1)
-                r3 = st.columns([1.1, 1.1, 1.1, 1.1, 1.1])
-                qty = r3[0].number_input("Qty", min_value=1, max_value=max_qty, step=1, value=max_qty, key=f"bulk_qty_{rid}_roll")
-                btc_price = r3[1].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}_roll")
-                new_strike = r3[2].number_input("New Strike", step=0.5, value=float(strike or 0.0), key=f"bulk_new_strike_{rid}_roll")
-                new_exp = r3[3].date_input("New Expiry", value=nf, key=f"bulk_new_exp_{rid}_roll")
-                new_prem = r3[4].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_roll")
-                price = new_prem
-
-                fees = st.number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}_roll")
-                notes = st.text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}_roll")
-
-            else:
-                # Default layout (existing behavior)
-                r3 = st.columns([1.2, 1.2, 1.0])
-                qty_default = 100 if asset == "Stock" else 1
-                max_qty = int(selected_contract.get("contracts") or 1) if selected_contract is not None else None
-                qty = r3[0].number_input("Qty/Contracts", min_value=1, max_value=max_qty, step=1, value=min(qty_default, max_qty) if max_qty else qty_default, key=f"bulk_qty_{rid}")
-
-                def_price = 0.0
-                if ticker and asset == "Stock":
-                    try:
-                        def_price = float(get_current_price(ticker) or 0.0)
-                    except Exception:
-                        def_price = 0.0
-                price = r3[1].number_input("Price/Premium", step=0.01, value=float(def_price), key=f"bulk_price_{rid}")
-                fees = r3[2].number_input("Fees", step=0.01, value=0.0, key=f"bulk_fees_{rid}")
-
-                if asset in ["LEAP", "Shorts"] and ticker:
-                    c2 = st.columns([1.1, 1.3, 1.1, 3.5])
-                    type_idx = 0
-                    if selected_contract is not None and str(selected_contract.get("type") or "").upper() == "PUT":
-                        type_idx = 1
-                    opt_type = c2[0].selectbox("Type", ["CALL", "PUT"], index=type_idx, key=f"bulk_type_{rid}")
-                    if selected_contract is not None:
-                        try:
-                            exp_default = date.fromisoformat(str(selected_contract.get("expiration_date") or "")[:10])
-                        except Exception:
-                            exp_default = (dec_third if asset == "LEAP" else nf)
-                    else:
-                        exp_default = (dec_third if asset == "LEAP" else nf)
-                    exp_dt = c2[1].date_input("Exp", value=exp_default, key=f"bulk_exp_{rid}")
-                    strike_def = float(selected_contract.get("strike_price") or 0.0) if selected_contract is not None else 0.0
-                    strike = c2[2].number_input("Strike", step=0.5, value=strike_def, key=f"bulk_strike_{rid}")
-                    notes = c2[3].text_input("Notes (optional)", value="", key=f"bulk_notes_{rid}")
-
-                    if action == "Roll":
-                        c3 = st.columns([1.1, 1.1, 1.1, 3.7])
-                        btc_price = c3[0].number_input("BTC Price", step=0.01, value=0.0, key=f"bulk_btc_{rid}_defroll")
-                        new_strike = c3[1].number_input("New Strike", step=0.5, value=float(strike), key=f"bulk_new_strike_{rid}_defroll")
-                        new_prem = c3[2].number_input("New Premium", step=0.01, value=0.0, key=f"bulk_new_prem_{rid}_defroll")
-                        new_exp = c3[3].date_input("New Exp", value=nf, key=f"bulk_new_exp_{rid}_defroll")
-            if selected_contract is not None:
-                selected_option_id = selected_contract.get("id")
-
-            # Net cash
-            if action == "Roll":
-                net = (float(new_prem or 0) - float(btc_price or 0)) * float(qty or 0) * 100.0 - float(fees or 0)
-            else:
-                net = _bulk_net_cash_change(
-                    "Stock" if asset == "Stock" else asset,
-                    ("Sell" if ("Sell" in action) else "Buy"),
-                    qty,
-                    price,
-                    fees
-                )
-            st.write(f"**Net Cash Change:** {'+' if net>=0 else ''}${net:,.2f}")
-
-            rows_out.append({
-                "Asset": asset,
-                "Action": action,
-                "Date": d.isoformat(),
-                "Ticker": ticker,
-                "Qty": qty,
-                "Price/Premium": price,
-                "Fees": fees,
-                "Type": opt_type,
-                "Exp": exp_dt.isoformat() if exp_dt else "",
-                "Strike": strike if exp_dt else "",
-                "Option ID": selected_option_id if selected_contract is not None else "",
-                "BTC Price": btc_price if action == "Roll" else "",
-                "New Strike": new_strike if action == "Roll" else "",
-                "New Premium": new_prem if action == "Roll" else "",
-                "New Exp": new_exp.isoformat() if action == "Roll" else "",
-                "Net Cash Change": net,
-                "Notes": notes,
-            })
-
-    st.divider()
-    st.subheader("Review & Submit")
-    import pandas as pd
-    sdf = pd.DataFrame(rows_out)
-    st.dataframe(sdf, use_container_width=True, hide_index=True)
-    total_cash = float(sdf["Net Cash Change"].sum()) if not sdf.empty else 0.0
-    st.metric("Total Net Cash Change", f"${total_cash:,.2f}")
-
-    if st.checkbox("I confirm these transactions are correct", key="bulk_confirm2"):
-        if st.button("✅ Submit All Transactions", type="primary"):
-            ok = 0
-            errors = []
-            for r in rows_out:
-                try:
-                    asset = r["Asset"]
-                    action = r["Action"]
-                    d = date.fromisoformat(r["Date"][:10])
-                    sym = str(r["Ticker"] or "").upper().strip()
-                    qty = int(float(r["Qty"] or 0))
-                    price = float(r["Price/Premium"] or 0)
-                    fees = float(r["Fees"] or 0)
-                    opt_type = str(r.get("Type") or "CALL").upper()
-                    option_id = r.get("Option ID")
-                    exp = r.get("Exp") or ""
-                    strike = float(r.get("Strike") or 0)
-                    exp_dt = date.fromisoformat(exp[:10]) if exp else (_third_friday_next_december(d) if asset == "LEAP" else _next_friday(d))
-
-                    if asset == "Stock":
-                        update_asset_position(uid, sym, float(qty), price, "Sell" if action == "Sell" else "Buy", d, "STOCK", fees=fees)
-                        ok += 1
-                        continue
-
-                    if asset in ["LEAP", "Shorts"]:
-                        if action == "Sell to Open":
-                            update_short_option_position(uid, sym, qty, price, "Sell", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None)
-                            ok += 1
-                        elif action == "Buy to Close":
-                            update_short_option_position(uid, sym, qty, price, "Buy", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None)
-                            ok += 1
-                        elif action == "Roll":
-                            txg = str(uuid.uuid4())
-                            btc_price = float(r.get("BTC Price") or 0)
-                            new_strike = float(r.get("New Strike") or strike)
-                            new_prem = float(r.get("New Premium") or 0)
-                            new_exp_s = str(r.get("New Exp") or "")
-                            new_exp_dt = date.fromisoformat(new_exp_s[:10]) if new_exp_s else _next_friday(d)
-                            # Apply fees to BTC leg only (avoid double charging)
-                            update_short_option_position(uid, sym, qty, btc_price, "Buy", d, opt_type, exp_dt, strike, fees=fees, linked_asset_id_override=None, txg=txg)
-                            update_short_option_position(uid, sym, qty, new_prem, "Sell", d, opt_type, new_exp_dt, new_strike, fees=0.0, linked_asset_id_override=None, txg=txg)
-                            ok += 1
-                        elif action == "Expire":
-                            if fees:
-                                log_transaction(uid, f"Expire {qty} {sym} {format_date_custom(_iso_date(exp_dt))} ${strike} {opt_type} (Fees)", -abs(float(fees)), "OPTION_FEES", sym, d, currency="USD")
-                            all_open = _fetch_open_shorts(active_user, sym)
-                            if option_id:
-                                open_rows = [o for o in all_open if str(o.get("id")) == str(option_id)]
-                            else:
-                                open_rows = [o for o in all_open if str(o.get("type","")).upper()==opt_type and float(o.get("strike_price") or 0)==strike and str(o.get("expiration_date") or "")[:10]==exp_dt.isoformat()]
-                            open_rows = sorted(open_rows, key=lambda x: (str(x.get("expiration_date") or ""), int(x.get("id") or 0)))
-                            remaining = qty
-                            for o in open_rows:
-                                if remaining<=0: break
-                                oc = int(o.get("contracts") or 0)
-                                if oc<=0: continue
-                                if oc<=remaining:
-                                    _bulk_expire_option(int(o["id"]))
-                                    remaining -= oc
-                                else:
-                                    supabase.table("options").update({"contracts": oc-remaining}).eq("id", o["id"]).execute()
-                                    clone = dict(o); clone.pop("id", None)
-                                    clone["contracts"]=remaining
-                                    clone["status"]="expired"
-                                    clone["closing_price"]=0.0
-                                    clone["closed_date"]=datetime.now().isoformat()
-                                    supabase.table("options").insert(clone).execute()
-                                    remaining=0
-                            ok += 1
-                        elif action == "Assign":
-                            all_open = _fetch_open_shorts(active_user, sym)
-                            if option_id:
-                                open_rows = [o for o in all_open if str(o.get("id")) == str(option_id)]
-                            else:
-                                open_rows = [o for o in all_open if str(o.get("type","")).upper()==opt_type and float(o.get("strike_price") or 0)==strike]
-                            open_rows = sorted(open_rows, key=lambda x: (str(x.get("expiration_date") or ""), int(x.get("id") or 0)))
-                            remaining = qty
-                            for o in open_rows:
-                                if remaining<=0: break
-                                oc = int(o.get("contracts") or 0)
-                                if oc<=0: continue
-                                take = min(remaining, oc)
-                                handle_assignment(uid, o["id"], sym, float(o.get("strike_price") or 0), str(o.get("type") or "").upper(), take)
-                                remaining -= take
-                            ok += 1
-                except Exception as e:
-                    errors.append(f"{r.get('Ticker', '')}: {e}")
-
-            if errors:
-                st.error("Some transactions failed:")
-                for e in errors[:20]:
-                    st.write("•", e)
-            st.success(f"Submitted {ok} transactions.")
-            st.session_state["bulk_tx_rows"] = []
-            st.rerun()
 
 
 def settings_page(user):
@@ -5481,7 +5039,7 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Profile", "Community", "Settings"])
+    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"])
     user = st.session_state.user
     active_user = _set_active_account(user)
     if page == "Dashboard": dashboard_page(active_user, view="summary")
@@ -5493,7 +5051,6 @@ def main():
     elif page == "Enter Trade": trade_entry_page(active_user)
     elif page == "Ledger": ledger_page(active_user)
     elif page == "Import Data": import_page(active_user)
-    elif page == "Bulk Entries": bulk_entries_page(active_user)
     elif page == "Profile": account_sharing_page(active_user)
     elif page == "Community": community_page(user)
     elif page == "Settings": settings_page(user)
