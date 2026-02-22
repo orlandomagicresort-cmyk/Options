@@ -30,7 +30,42 @@ def apply_global_ui_theme():
         .finance-table td.pl-pos { color: #0a7d22; font-weight: 700; }
         .finance-table td.pl-neg { color: #b00020; font-weight: 700; }
 
-        </style>
+        
+    <style>
+      /* --- Topnav menu: force single-line, scrollable --- */
+      .topnav-menu [role="radiogroup"]{
+        display:flex !important;
+        flex-wrap:nowrap !important;
+        gap:0.35rem !important;
+        overflow-x:auto !important;
+        overflow-y:hidden !important;
+        padding-bottom:0.15rem !important;
+        scrollbar-width:thin;
+      }
+      .topnav-menu [role="radiogroup"] > label{
+        margin:0 !important;
+        white-space:nowrap !important;
+      }
+      /* Make radio look like pills */
+      .topnav-menu label[data-baseweb="radio"]{
+        background: rgba(49, 51, 63, 0.06);
+        border: 1px solid rgba(49, 51, 63, 0.10);
+        border-radius: 999px;
+        padding: 0.25rem 0.65rem;
+      }
+      .topnav-menu label[data-baseweb="radio"] span{
+        font-weight: 650;
+      }
+      /* Selected state */
+      .topnav-menu input[type="radio"]:checked + div{
+        background: rgba(49, 51, 63, 0.10) !important;
+        border-radius: 999px !important;
+      }
+      /* Reduce default spacing around radio */
+      .topnav-menu .stRadio{margin-top:0.15rem;}
+    </style>
+
+</style>
         """,
         unsafe_allow_html=True,
     )
@@ -5600,7 +5635,7 @@ def _top_nav(user, active_user):
 
     st.markdown("<hr style='margin:0.65rem 0 0.25rem 0; opacity:0.25;'/>", unsafe_allow_html=True)
 
-    # Menu buttons
+    # Menu (single line)
     pages = [
         "Dashboard",
         "Holdings",
@@ -5617,18 +5652,21 @@ def _top_nav(user, active_user):
         "Settings",
     ]
 
-    # Wrap buttons across rows (responsive-ish)
-    # We'll do 6 per row for good density.
-    per_row = 6
-    for r in range(0, len(pages), per_row):
-        cols = st.columns(per_row)
-        for i, p in enumerate(pages[r:r+per_row]):
-            with cols[i]:
-                # Highlight current page by using primary button
-                btn_type = "primary" if st.session_state.page == p else "secondary"
-                if st.button(p, key=f"nav_{p}"):
-                    st.session_state.page = p
-                    st.rerun()
+    # Use a horizontal radio and force it into a single scrollable line via CSS.
+    st.markdown('<div class="topnav-menu">', unsafe_allow_html=True)
+    sel = st.radio(
+        "Navigation",
+        pages,
+        index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
+        horizontal=True,
+        label_visibility="collapsed",
+        key="topnav_radio",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    if sel != st.session_state.page:
+        st.session_state.page = sel
+        st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
     return st.session_state.page
