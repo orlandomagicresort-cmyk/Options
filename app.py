@@ -1,5 +1,17 @@
 import streamlit as st
 
+
+# --- Session state defaults ---
+def _init_session_state():
+    if "user" not in st.session_state:
+        st.session_state["user"] = None
+    if "access_token" not in st.session_state:
+        st.session_state["access_token"] = ""
+    if "active_account_label" not in st.session_state:
+        st.session_state["active_account_label"] = "My Account"
+
+_init_session_state()
+
 def apply_global_ui_theme():
     """
     Minimal global UI tweaks that respect Streamlit's theme (config.toml).
@@ -647,7 +659,9 @@ def handle_auth():
         st.warning("⚠️ Database not connected.")
         return False
 
-    if st.session_state.user:
+    if st.session_state.get("user"):
+        st.session_state.user = st.session_state.get("user")
+
         st.sidebar.success(f"User: {st.session_state.user.email}")
         if st.sidebar.button("Logout"):
             supabase.auth.sign_out()
