@@ -268,6 +268,41 @@ def apply_global_ui_theme():
         font-weight: 650;
       }
 
+    
+      /* --- Clean Wealthsimple-style tabs (no radios) --- */
+      .topnav-wrap{
+        position: sticky;
+        top: 0;
+        z-index: 1000;
+        background: rgba(255,255,255,0.96);
+        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
+        padding: 0.85rem 1rem 0.65rem 1rem;
+        margin: -1rem -1rem 1rem -1rem;
+      }
+      .wsnav-tabs, .wsnav-subtabs{
+        display:flex;
+        gap:2rem;
+        overflow-x:auto;
+        white-space:nowrap;
+      }
+      .wsnav-tab, .wsnav-subtab{
+        text-decoration:none !important;
+        font-weight:650;
+        color: rgba(49, 51, 63, 0.65);
+        padding-bottom:0.35rem;
+        border-bottom:3px solid transparent;
+      }
+      .wsnav-tab{ font-size:1.25rem; }
+      .wsnav-subtab{ font-size:1.05rem; margin-top:0.35rem; }
+
+      .wsnav-tab:hover, .wsnav-subtab:hover{
+        color: rgba(49, 51, 63, 0.90);
+      }
+      .wsnav-tab.active, .wsnav-subtab.active{
+        color: rgba(17,17,17,0.98) !important;
+        border-bottom-color: rgba(17,17,17,0.98);
+      }
+
     </style>
 
 </style>
@@ -5806,11 +5841,7 @@ def settings_page(user):
 
 
 def _top_nav(user, active_user):
-    """Sticky top navigation with two-level menus (Wealthsimple-inspired)."""
-    if "nav_section" not in st.session_state:
-        st.session_state.nav_section = "Home"
-    if "page" not in st.session_state:
-        st.session_state.page = "Dashboard"
+    """Sticky two-level navigation without radio buttons (Wealthsimple-style underline)."""
 
     NAV = {
         "Home": ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices"],
@@ -5819,50 +5850,63 @@ def _top_nav(user, active_user):
         "Community": ["Community"],
     }
 
-    # Keep section consistent with current page
-    for sec_name, pages in NAV.items():
-        if st.session_state.page in pages:
-            st.session_state.nav_section = sec_name
+    # Read page from query params (clean link navigation)
+    try:
+        qp = st.query_params
+        sel_page = qp.get("page", None)
+        if isinstance(sel_page, list):
+            sel_page = sel_page[0] if sel_page else None
+    except Exception:
+        sel_page = st.experimental_get_query_params().get("page", [None])[0]
+
+    if not sel_page:
+        sel_page = st.session_state.get("page", "Dashboard")
+
+    # Normalize page
+    all_pages = [p for v in NAV.values() for p in v]
+    if sel_page not in all_pages:
+        sel_page = "Dashboard"
+
+    st.session_state.page = sel_page
+
+    # Determine section
+    sel_section = "Home"
+    for sec, pages in NAV.items():
+        if sel_page in pages:
+            sel_section = sec
             break
 
     st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
 
-    c_logo, c_primary, c_actions = st.columns([0.6, 6.7, 2.1], vertical_alignment="bottom")
+    # PRIMARY NAV
+    primary_tabs = []
+    for sec in NAV.keys():
+        cls = "wsnav-tab active" if sec == sel_section else "wsnav-tab"
+        primary_tabs.append(f'<a class="{cls}" href="?page={NAV[sec][0]}">{sec}</a>')
+    primary_html = "".join(primary_tabs)
 
-    with c_logo:
-        st.markdown('<div class="wsnav-logo">W</div>', unsafe_allow_html=True)
+    # Account dropdown + logout
+    c_primary, c_account = st.columns([7, 3], vertical_alignment="bottom")
 
     with c_primary:
-        st.markdown('<div class="wsnav-primary">', unsafe_allow_html=True)
-        sec = st.radio(
-            "Primary navigation",
-            list(NAV.keys()),
-            index=list(NAV.keys()).index(st.session_state.nav_section),
-            horizontal=True,
-            label_visibility="collapsed",
-            key="ws_primary_nav",
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
+        st.markdown(f'<div class="wsnav-tabs">{primary_html}</div>', unsafe_allow_html=True)
 
-    with c_actions:
-        st.markdown('<div class="wsnav-actions">', unsafe_allow_html=True)
-
-        # Account selector (controls active account context)
+    with c_account:
         try:
             accts = _get_accessible_accounts(user)
             labels = [a["label"] for a in accts] if accts else ["My Account"]
         except Exception:
             labels = ["My Account"]
 
-        cur = st.session_state.get("active_account_label") or (labels[0] if labels else "My Account")
-        if cur not in labels and labels:
+        cur = st.session_state.get("active_account_label") or labels[0]
+        if cur not in labels:
             cur = labels[0]
             st.session_state["active_account_label"] = cur
 
         sel_acct = st.selectbox(
             "Account",
             labels,
-            index=labels.index(cur) if cur in labels else 0,
+            index=labels.index(cur),
             label_visibility="collapsed",
             key="ws_account_select",
         )
@@ -5877,37 +5921,21 @@ def _top_nav(user, active_user):
                 pass
             st.session_state.user = None
             st.session_state.access_token = ""
+            st.experimental_set_query_params()
             st.session_state.page = "Dashboard"
-            st.session_state.nav_section = "Home"
             st.rerun()
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    # SECONDARY NAV
+    secondary_tabs = []
+    for p in NAV[sel_section]:
+        cls = "wsnav-subtab active" if p == sel_page else "wsnav-subtab"
+        secondary_tabs.append(f'<a class="{cls}" href="?page={p}">{p}</a>')
+    secondary_html = "".join(secondary_tabs)
 
-    # Secondary row
-    st.markdown('<div class="wsnav-secondary">', unsafe_allow_html=True)
-    sec_pages = NAV.get(sec, ["Dashboard"])
-    sub = st.radio(
-        "Secondary navigation",
-        sec_pages,
-        index=sec_pages.index(st.session_state.page) if st.session_state.page in sec_pages else 0,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="ws_secondary_nav",
-    )
+    st.markdown(f'<div class="wsnav-subtabs">{secondary_html}</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    if sec != st.session_state.nav_section:
-        st.session_state.nav_section = sec
-        st.session_state.page = NAV[sec][0]
-        st.rerun()
-
-    if sub != st.session_state.page:
-        st.session_state.page = sub
-        st.rerun()
-
-    return st.session_state.page
+    return sel_page
 
 def main():
     # page config already set at top
