@@ -1897,30 +1897,35 @@ def dashboard_page(active_user):
     c1, c2, c3 = st.columns([1.35, 1, 1])
 
     with c1:
-        import matplotlib.pyplot as plt
-        fig, ax = plt.subplots()
+        # Pie chart (Altair) - avoids matplotlib dependency on Streamlit Cloud
+        try:
+            import altair as alt
+            pie_df = pd.DataFrame({
+                "Outcome": ["Wins", "Losses"],
+                "Weeks": [int(win_ct), int(loss_ct)]
+            })
+            # If empty, show neutral values
+            if int(pie_df["Weeks"].sum()) == 0:
+                pie_df["Weeks"] = [1, 1]
 
-        vals = [max(win_ct, 0), max(loss_ct, 0)]
-        labels = ["Wins", "Losses"]
-        # Avoid empty pie; keep proportions neutral if no data
-        if sum(vals) == 0:
-            vals = [1, 1]
+            pie_df["Pct"] = pie_df["Weeks"] / pie_df["Weeks"].sum()
+            pie_df["Label"] = pie_df.apply(lambda r: f"{r['Pct']*100:.0f}% {r['Outcome']}", axis=1)
 
-        _idx = {"i": 0}
-        def _autopct(pct):
-            i = _idx["i"]
-            _idx["i"] += 1
-            lab = labels[i] if i < len(labels) else ""
-            return f"{pct:.0f}% {lab}"
+            base = alt.Chart(pie_df).encode(
+                theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
+                color=alt.Color(field="Outcome", type="nominal"),
+                tooltip=[alt.Tooltip("Outcome:N"), alt.Tooltip("Weeks:Q"), alt.Tooltip("Pct:Q", format=".0%")]
+            )
 
-        ax.pie(
-            vals,
-            autopct=_autopct,
-            startangle=90,
-            textprops={"fontsize": 14, "fontweight": "bold"},
-        )
-        ax.axis("equal")
-        st.pyplot(fig, clear_figure=True)
+            pie = base.mark_arc()
+            # Add labels in the center of each arc
+            text = base.mark_text(radius=90, size=16, fontWeight="bold", color="white").encode(
+                text=alt.Text(field="Label", type="nominal")
+            )
+            st.altair_chart((pie + text), use_container_width=True)
+        except Exception:
+            # Fallback: simple metrics if chart can't render
+            st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
 
     def _panel(title: str, weeks: int, avg_pct: float):
         sign = "+" if avg_pct >= 0 else ""
