@@ -1941,16 +1941,7 @@ def dashboard_page(active_user, view: str = "summary"):
 
                 labels = (
                     alt.Chart(pie_df)
-                    .mark_text(
-                        radius=170,
-                        size=14,
-                        fontWeight="bold",
-                        color="black",
-                        stroke="white",
-                        strokeWidth=4,
-                    )
-                    .encode(text="Label:N", theta=alt.Theta(field="Weeks", type="quantitative", stack=True))
-                )
+                    
 
                 center = (
                     alt.Chart(pd.DataFrame({"t": [0]}))
