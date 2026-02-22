@@ -220,12 +220,15 @@ st.set_page_config(
 )
 
 
-# --- App Logo ---
-col_logo, col_title = st.columns([1, 8])
-with col_logo:
-    st.image('logo.png', width=80)
-with col_title:
-    pass
+
+
+# --- Sidebar Branding ---
+with st.sidebar:
+    col_logo, col_title = st.columns([1, 3])
+    with col_logo:
+        st.image("logo.png", width=45)
+    with col_title:
+        st.markdown("### Stock Portfolio")
 
 st.markdown("""
     <style>
