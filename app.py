@@ -32,37 +32,81 @@ def apply_global_ui_theme():
 
         
     <style>
-      /* --- Topnav menu: force single-line, scrollable --- */
-      .topnav-menu [role="radiogroup"]{
+      
+      /* --- Topnav menu: Wealthsimple-like tabs --- */
+      .topnav-wrap {
+        position: sticky;
+        top: 0;
+        z-index: 999;
+        background: rgba(255,255,255,0.96);
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
+        padding: 0.85rem 1rem 0.0rem 1rem;
+        margin: -1rem -1rem 1rem -1rem; /* stretch full width */
+      }
+      .wsnav-row{
+        display:flex;
+        align-items:flex-end;
+        gap: 1.25rem;
+        padding-bottom: 0.55rem;
+      }
+      .wsnav-logo{
+        font-weight: 800;
+        font-size: 2.15rem;
+        line-height: 1;
+        letter-spacing: -0.04em;
+        margin-right: 0.25rem;
+        user-select:none;
+      }
+      .wsnav-menu .stRadio [role="radiogroup"]{
         display:flex !important;
         flex-wrap:nowrap !important;
-        gap:0.35rem !important;
+        gap:1.65rem !important;
         overflow-x:auto !important;
         overflow-y:hidden !important;
-        padding-bottom:0.15rem !important;
-        scrollbar-width:thin;
+        padding: 0.15rem 0 0.10rem 0 !important;
+        margin: 0 !important;
+        scrollbar-width: none; /* Firefox */
       }
-      .topnav-menu [role="radiogroup"] > label{
+      .wsnav-menu .stRadio [role="radiogroup"]::-webkit-scrollbar{
+        display:none;
+      }
+      .wsnav-menu .stRadio [role="radiogroup"] > label{
         margin:0 !important;
         white-space:nowrap !important;
       }
-      /* Make radio look like pills */
-      .topnav-menu label[data-baseweb="radio"]{
-        background: rgba(49, 51, 63, 0.06);
-        border: 1px solid rgba(49, 51, 63, 0.10);
-        border-radius: 999px;
-        padding: 0.25rem 0.65rem;
+      /* Remove the default radio visuals and make it look like text tabs */
+      .wsnav-menu label[data-baseweb="radio"]{
+        background: transparent !important;
+        border: none !important;
+        padding: 0 !important;
       }
-      .topnav-menu label[data-baseweb="radio"] span{
+      .wsnav-menu label[data-baseweb="radio"] > div{
+        padding: 0 !important;
+      }
+      .wsnav-menu label[data-baseweb="radio"] span{
+        font-size: 1.25rem;
+        font-weight: 650;
+        color: rgba(49, 51, 63, 0.65);
+      }
+      .wsnav-menu label[data-baseweb="radio"]:hover span{
+        color: rgba(49, 51, 63, 0.90);
+      }
+      /* Underline active tab */
+      .wsnav-menu input[type="radio"]:checked + div span{
+        color: rgba(17, 17, 17, 0.98) !important;
+      }
+      .wsnav-menu input[type="radio"]:checked + div{
+        border-bottom: 3px solid rgba(17, 17, 17, 0.98) !important;
+        padding-bottom: 0.35rem !important;
+      }
+      /* Keep actions aligned nicely */
+      .wsnav-actions .stButton>button{
+        border-radius: 999px;
+        padding: 0.35rem 0.85rem;
         font-weight: 650;
       }
-      /* Selected state */
-      .topnav-menu input[type="radio"]:checked + div{
-        background: rgba(49, 51, 63, 0.10) !important;
-        border-radius: 999px !important;
-      }
-      /* Reduce default spacing around radio */
-      .topnav-menu .stRadio{margin-top:0.15rem;}
+
     </style>
 
 </style>
@@ -5600,42 +5644,6 @@ def _top_nav(user, active_user):
     if "page" not in st.session_state:
         st.session_state.page = "Dashboard"
 
-    # Left: Title / Right: user actions
-    st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
-    header_cols = st.columns([2.4, 1.6])
-
-    with header_cols[0]:
-        st.markdown('<div class="topnav">', unsafe_allow_html=True)
-        st.markdown('<div class="topnav-title">Options Dashboard</div>', unsafe_allow_html=True)
-        email = (getattr(st.session_state.get("user", None), "email", "") or "").strip()
-        sub = f"Signed in as {email}" if email else "Signed in"
-        st.markdown(f'<div class="topnav-sub">{sub}</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    with header_cols[1]:
-        # Quick actions row
-        a1, a2 = st.columns([1, 1])
-        with a1:
-            if st.button("Logout", key="topnav_logout"):
-                try:
-                    supabase.auth.sign_out()
-                except Exception:
-                    pass
-                st.session_state.user = None
-                st.session_state.access_token = ""
-                st.session_state.page = "Dashboard"
-                st.rerun()
-        with a2:
-            # Show active account label if delegated
-            try:
-                acct_label = _active_account_label(active_user)
-            except Exception:
-                acct_label = "My Account"
-            st.caption(acct_label)
-
-    st.markdown("<hr style='margin:0.65rem 0 0.25rem 0; opacity:0.25;'/>", unsafe_allow_html=True)
-
-    # Menu (single line)
     pages = [
         "Dashboard",
         "Holdings",
@@ -5652,23 +5660,51 @@ def _top_nav(user, active_user):
         "Settings",
     ]
 
-    # Use a horizontal radio and force it into a single scrollable line via CSS.
-    st.markdown('<div class="topnav-menu">', unsafe_allow_html=True)
-    sel = st.radio(
-        "Navigation",
-        pages,
-        index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
-        horizontal=True,
-        label_visibility="collapsed",
-        key="topnav_radio",
-    )
+    st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
+
+    # Wealthsimple-like: logo + tabs + actions on one line
+    c_logo, c_menu, c_actions = st.columns([0.8, 5.8, 1.8], vertical_alignment="bottom")
+
+    with c_logo:
+        st.markdown('<div class="wsnav-logo">W</div>', unsafe_allow_html=True)
+
+    with c_menu:
+        st.markdown('<div class="wsnav-menu">', unsafe_allow_html=True)
+        sel = st.radio(
+            "Navigation",
+            pages,
+            index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="topnav_radio",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    with c_actions:
+        st.markdown('<div class="wsnav-actions">', unsafe_allow_html=True)
+        if st.button("Logout", key="topnav_logout"):
+            try:
+                supabase.auth.sign_out()
+            except Exception:
+                pass
+            st.session_state.user = None
+            st.session_state.access_token = ""
+            st.session_state.page = "Dashboard"
+            st.rerun()
+        # Active account label (delegation)
+        try:
+            acct_label = _active_account_label(active_user)
+        except Exception:
+            acct_label = "My Account"
+        st.caption(acct_label)
+        st.markdown("</div>", unsafe_allow_html=True)
+
     st.markdown("</div>", unsafe_allow_html=True)
 
     if sel != st.session_state.page:
         st.session_state.page = sel
         st.rerun()
 
-    st.markdown("</div>", unsafe_allow_html=True)
     return st.session_state.page
 
 
