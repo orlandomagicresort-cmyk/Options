@@ -224,11 +224,8 @@ st.set_page_config(
 
 # --- Sidebar Branding ---
 with st.sidebar:
-    col_logo, col_title = st.columns([1, 3])
-    with col_logo:
-        st.image("logo.png", width=45)
-    with col_title:
-        st.markdown("### Stock Portfolio")
+    st.image("logo.png", width=70)
+
 
 st.markdown("""
     <style>
