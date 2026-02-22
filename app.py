@@ -607,109 +607,39 @@ def account_sharing_page(user):
         st.success("Saved.")
 
         st.divider()
+    st.divider()
+    st.subheader("Change Password")
+    st.caption("For security, enter your current password and choose a new one.")
 
-st.subheader("Change Password")
-st.caption("For security, enter your current password and choose a new one.")
+    # Password changes apply to the currently logged-in auth user
+    auth_user = st.session_state.get("user", None) or user
+    auth_email_default = (getattr(auth_user, "email", "") or "").strip().lower()
 
-with st.form("change_password_form"):
-    email_for_pw = (getattr(user, "email", "") or "").strip().lower()
-    cur_pw = st.text_input("Current password", type="password")
-    new_pw1 = st.text_input("New password", type="password")
-    new_pw2 = st.text_input("Confirm new password", type="password")
-    submitted_pw = st.form_submit_button("Update password", type="primary")
+    with st.form("change_password_form", clear_on_submit=True):
+        email_for_pw = st.text_input("Account email", value=auth_email_default, disabled=bool(auth_email_default))
+        current_pw = st.text_input("Current password", type="password")
+        new_pw1 = st.text_input("New password", type="password")
+        new_pw2 = st.text_input("Confirm new password", type="password")
+        do_change = st.form_submit_button("Update password", type="primary")
 
-if submitted_pw:
-    try:
-        if not email_for_pw or "@" not in email_for_pw:
-            st.error("Couldn't determine your account email. Please log out and log back in.")
-        elif not cur_pw or not new_pw1 or not new_pw2:
-            st.error("Please fill in all password fields.")
-        elif new_pw1 != new_pw2:
-            st.error("New password entries don't match.")
-        else:
-            # Re-authenticate with current password, then update to the new password
-            auth_res = supabase.auth.sign_in_with_password({"email": email_for_pw, "password": cur_pw})
-            # Ensure auth context is refreshed for subsequent calls
-            st.session_state.user = getattr(auth_res, "user", None) or st.session_state.user
-            st.session_state.access_token = getattr(getattr(auth_res, "session", None), "access_token", "") or st.session_state.get("access_token", "")
-            ensure_supabase_auth()
+    if do_change:
+        try:
+            email_clean = (email_for_pw or "").strip().lower()
+            if not email_clean or "@" not in email_clean:
+                st.error("Please enter a valid account email address.")
+            elif not current_pw or not new_pw1 or not new_pw2:
+                st.error("Please fill in all password fields.")
+            elif new_pw1 != new_pw2:
+                st.error("New password entries don't match.")
+            elif len(new_pw1) < 8:
+                st.error("New password must be at least 8 characters.")
+            else:
+                supabase.auth.sign_in_with_password({"email": email_clean, "password": current_pw})
+                supabase.auth.update_user({"password": new_pw1})
+                st.success("Password updated. Please use the new password next time you log in.")
+        except Exception as e:
+            st.error(f"Could not update password: {e}")
 
-            supabase.auth.update_user({"password": new_pw1})
-            st.success("Password updated successfully.")
-    except Exception as e:
-        st.error(f"Could not update password: {e}")
-
-
-    # If your Supabase schema includes account_access.owner_email, you can backfill it for existing grants
-    with st.expander("Admin: Fix delegated dropdown name", expanded=False):
-        st.caption("If delegated labels show as acct XXXXXXXX, your delegates can't read your display name due to Supabase RLS. Add a text column account_access.owner_email, then click below to populate it on all access rows you granted.")
-        if st.button("Backfill owner_email on my grants"):
-            try:
-                owner_email = (getattr(st.session_state.user, "email", None) or getattr(user, "email", None) or "").strip()
-                if not owner_email:
-                    st.error("Couldn't determine your email to backfill.")
-                else:
-                    try:
-                        supabase.table("account_access").update({"owner_email": owner_email}).eq("owner_user_id", uid).is_("owner_email", None).execute()
-                    except Exception:
-                        supabase.table("account_access").update({"owner_email": owner_email}).eq("owner_user_id", uid).execute()
-                    st.success("Backfill complete. Delegates should refresh the page.")
-            except Exception:
-                st.error("Backfill failed. Make sure account_access.owner_email exists in Supabase.")
-
-    st.subheader("Grant Access")
-    st.caption("Grant another user Viewer (read-only) or Editor access to your account via their email.")
-
-    with st.form("grant_access_form", clear_on_submit=True):
-        email = st.text_input("Delegate email")
-        role = st.selectbox("Role", ["viewer", "editor"], index=0)
-        submitted = st.form_submit_button("Grant Access", type="primary")
-    if submitted:
-        _require_editor()  # owner only, but keep consistent
-        email_clean = (email or "").strip().lower()
-        if not email_clean or "@" not in email_clean:
-            st.error("Please enter a valid email.")
-        else:
-            try:
-                supabase.table("account_access").insert({
-                    "owner_user_id": uid,
-                    "owner_email": (getattr(user, "email", None) or None),
-                    "delegate_email": email_clean,
-                    "role": role,
-                    "status": "pending",
-                }).execute()
-                st.success("Access granted (pending). It will become active when that user logs in.")
-            except Exception as e:
-                st.error(f"Could not grant access: {e}")
-
-    st.subheader("Your Delegates")
-    try:
-        rows = supabase.table("account_access").select("*").eq("owner_user_id", uid).order("created_at", desc=True).execute().data or []
-    except Exception:
-        rows = []
-    if rows:
-        df = pd.DataFrame(rows)
-        df["delegate"] = df.get("delegate_email")
-        view_cols = [c for c in ["delegate","role","status","created_at"] if c in df.columns]
-        st.dataframe(df[view_cols], use_container_width=True, hide_index=True)
-        revoke_id = st.selectbox("Revoke access for", [""] + [str(r["id"]) for r in rows], format_func=lambda x: "" if x=="" else x, key="revoke_sel")
-        if revoke_id and st.button("Revoke Selected", type="secondary"):
-            _require_editor()
-            try:
-                supabase.table("account_access").update({"status":"revoked"}).eq("id", revoke_id).execute()
-                st.success("Revoked.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"Failed to revoke: {e}")
-    else:
-        st.info("No delegates yet.")
-
-
-# --------------------------------------------------------------------------------
-# 3. AUTHENTICATION & SESSION
-# --------------------------------------------------------------------------------
-if 'user' not in st.session_state: st.session_state.user = None
-if 'delete_confirm_id' not in st.session_state: st.session_state.delete_confirm_id = None
 
 def handle_auth():
     st.sidebar.title("🔐 Access Portal")
