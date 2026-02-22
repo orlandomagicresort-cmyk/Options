@@ -660,7 +660,7 @@ def account_sharing_page(user):
         df = pd.DataFrame(rows)
         df["delegate"] = df.get("delegate_email")
         view_cols = [c for c in ["delegate","role","status","created_at"] if c in df.columns]
-        st.table(df[view_cols], use_container_width=True)
+        st.dataframe(df[view_cols], use_container_width=True, hide_index=True)
         revoke_id = st.selectbox("Revoke access for", [""] + [str(r["id"]) for r in rows], format_func=lambda x: "" if x=="" else x, key="revoke_sel")
         if revoke_id and st.button("Revoke Selected", type="secondary"):
             _require_editor()
@@ -5314,7 +5314,7 @@ def bulk_entries_page(active_user):
     st.subheader("Review & Submit")
     import pandas as pd
     sdf = pd.DataFrame(rows_out)
-    st.table(sdf, use_container_width=True)
+    st.dataframe(sdf, use_container_width=True, hide_index=True)
     total_cash = float(sdf["Net Cash Change"].sum()) if not sdf.empty else 0.0
     st.metric("Total Net Cash Change", f"${total_cash:,.2f}")
 
