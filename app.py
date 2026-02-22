@@ -590,8 +590,8 @@ def community_page(user):
     
 def account_sharing_page(user):
     uid = _active_user_id(user)
-    _price_refresh_controls(user, "Account & Sharing", force_leap_mid=False)
-    st.header("👥 Account Access & Sharing")
+    _price_refresh_controls(user, "Profile", force_leap_mid=False)
+    st.header("👤 Profile")
 
     # Preferences
     try:
@@ -606,6 +606,28 @@ def account_sharing_page(user):
     if st.button("Save Preferences", type="primary"):
         _safe_upsert_preferences(uid, (disp.strip() if disp and disp.strip() else (getattr(user, "email", "") or None)), bool(share))
         st.success("Saved.")
+
+        st.divider()
+
+        st.subheader("Password")
+        st.caption("Send yourself a password reset email link.")
+        reset_email = getattr(user, "email", "") or ""
+        reset_email = st.text_input("Email", value=reset_email, disabled=bool(reset_email), key="profile_reset_email")
+        if st.button("Send password reset email", key="profile_reset_btn"):
+            try:
+                email_clean = (reset_email or "").strip().lower()
+                if not email_clean or "@" not in email_clean:
+                    st.error("Please enter a valid email address.")
+                else:
+                    # Supabase will email a reset link. Ensure your Supabase Auth settings include the correct redirect URL(s).
+                    try:
+                        supabase.auth.reset_password_for_email(email_clean)
+                    except TypeError:
+                        # Older/newer client signatures sometimes require an options dict
+                        supabase.auth.reset_password_for_email(email_clean, {"redirectTo": None})
+                    st.success("If an account exists for that email, a reset link has been sent.")
+            except Exception as e:
+                st.error(f"Could not send reset email: {e}")
 
     st.divider()
 
@@ -5446,7 +5468,7 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Account & Sharing", "Community", "Settings"])
+    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Profile", "Community", "Settings"])
     user = st.session_state.user
     active_user = _set_active_account(user)
     if page == "Dashboard": dashboard_page(active_user, view="summary")
@@ -5459,7 +5481,7 @@ def main():
     elif page == "Ledger": ledger_page(active_user)
     elif page == "Import Data": import_page(active_user)
     elif page == "Bulk Entries": bulk_entries_page(active_user)
-    elif page == "Account & Sharing": account_sharing_page(active_user)
+    elif page == "Profile": account_sharing_page(active_user)
     elif page == "Community": community_page(user)
     elif page == "Settings": settings_page(user)
 
