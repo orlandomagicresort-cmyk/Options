@@ -103,40 +103,6 @@ def apply_global_ui_theme():
       }
 
       /* Make tab headers sticky under the actionbar */
-      div[data-testid="stTabs"] div[role="tablist"]{
-        position: sticky;
-        top: 3.05rem; /* actionbar height */
-        z-index: 1100;
-        background: rgba(255,255,255,0.96);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(49, 51, 63, 0.10);
-        padding: 0.15rem 1rem 0.15rem 1rem;
-        margin: 0 -1rem 0.35rem -1rem;
-        gap: 1.8rem !important;
-        overflow-x: auto;
-        scrollbar-width: none;
-      }
-      div[data-testid="stTabs"] div[role="tablist"]::-webkit-scrollbar{ display:none; }
-
-      /* Tab buttons: text + underline (Wealthsimple-style) */
-      div[data-testid="stTabs"] button[role="tab"]{
-        border: none !important;
-        background: transparent !important;
-        padding: 0.35rem 0 !important;
-        margin: 0 !important;
-        color: rgba(49, 51, 63, 0.65) !important;
-        font-weight: 650 !important;
-        font-size: 1.25rem !important;
-      }
-      div[data-testid="stTabs"] button[role="tab"]:hover{
-        color: rgba(49, 51, 63, 0.92) !important;
-      }
-      /* Active tab underline */
-      div[data-testid="stTabs"] button[role="tab"][aria-selected="true"]{
-        color: rgba(17,17,17,0.98) !important;
-        border-bottom: 3px solid rgba(17,17,17,0.98) !important;
-      }
-
       /* Secondary nav: make it look like smaller underline tabs */
       .ws-subnav{
         position: sticky;
@@ -5832,16 +5798,44 @@ def _top_nav(user, active_user):
 
 
 def _render_with_tabs(user, active_user):
-    """Render the app using two-level navigation: primary st.tabs + secondary underline radio."""
-    # Action bar (account selector + logout)
+    """Render the app using two-level navigation (stable): primary + secondary underline radios."""
+
+    NAV = {
+        "Home": ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices"],
+        "Activity": ["Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger"],
+        "Maintenance": ["Import Data", "Bulk Entries", "Profile", "Settings"],
+        "Community": ["Community"],
+    }
+
+    # Initialize state
+    if "nav_section" not in st.session_state:
+        st.session_state.nav_section = "Home"
+    if "page" not in st.session_state:
+        st.session_state.page = "Dashboard"
+
+    # Keep nav_section consistent with page when possible
+    for sec, pages in NAV.items():
+        if st.session_state.page in pages:
+            st.session_state.nav_section = sec
+            break
+
+    # Action bar (sticky): primary nav + account + logout
     st.markdown('<div class="ws-actionbar">', unsafe_allow_html=True)
+    c_primary, c_actions = st.columns([7.2, 2.8], vertical_alignment="center")
 
-    _spacer, right = st.columns([7.2, 2.8], vertical_alignment="center")
-    with _spacer:
-        # Intentionally empty (keeps right actions aligned to the far right)
-        pass
+    with c_primary:
+        st.markdown('<div class="ws-primary">', unsafe_allow_html=True)
+        sec = st.radio(
+            "Primary navigation",
+            list(NAV.keys()),
+            index=list(NAV.keys()).index(st.session_state.nav_section),
+            horizontal=True,
+            label_visibility="collapsed",
+            key="ws_primary_nav",
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    with right:
+    with c_actions:
         try:
             accts = _get_accessible_accounts(user)
             labels = [a["label"] for a in accts] if accts else ["My Account"]
@@ -5860,9 +5854,8 @@ def _render_with_tabs(user, active_user):
             label_visibility="collapsed",
             key="ws_account_select",
         )
-        if sel_acct != st.session_state.get("active_account_label"):
-            st.session_state["active_account_label"] = sel_acct
-            st.rerun()
+        # No explicit st.rerun() here—widget change already reruns the app.
+        st.session_state["active_account_label"] = sel_acct
 
         if st.button("Logout", key="topnav_logout"):
             try:
@@ -5871,73 +5864,55 @@ def _render_with_tabs(user, active_user):
                 pass
             st.session_state.user = None
             st.session_state.access_token = ""
+            st.session_state.nav_section = "Home"
+            st.session_state.page = "Dashboard"
             st.rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
 
+    # Secondary nav (sticky under actionbar)
+    st.markdown('<div class="ws-subnav">', unsafe_allow_html=True)
+    sec_pages = NAV[sec]
+    cur_page = st.session_state.page if st.session_state.page in sec_pages else sec_pages[0]
+    page = st.radio(
+        "Secondary navigation",
+        sec_pages,
+        index=sec_pages.index(cur_page),
+        horizontal=True,
+        label_visibility="collapsed",
+        key=f"ws_subnav_{sec}",
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    # Primary tabs
-    t_home, t_activity, t_maint, t_comm = st.tabs(["Home", "Activity", "Maintenance", "Community"])
+    st.session_state.nav_section = sec
+    st.session_state.page = page
 
-    def _subnav(key, options):
-        # default based on current session_state.page
-        cur_page = st.session_state.get("page", options[0])
-        if cur_page not in options:
-            cur_page = options[0]
-        st.markdown('<div class="ws-subnav">', unsafe_allow_html=True)
-        sel = st.radio(
-            "Sub navigation",
-            options,
-            index=options.index(cur_page),
-            horizontal=True,
-            label_visibility="collapsed",
-            key=key,
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-        if sel != st.session_state.get("page"):
-            st.session_state.page = sel
-            st.rerun()
-        return sel
-
-    # HOME
-    with t_home:
-        page = _subnav("subnav_home", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices"])
-        if page == "Dashboard":
-            dashboard_page(active_user, view="summary")
-        elif page == "Holdings":
-            holdings_page(active_user)
-        elif page == "Option Details":
-            option_details_page(active_user)
-        elif page == "Update LEAP Prices":
-            leap_prices_page(active_user)
-
-    # ACTIVITY
-    with t_activity:
-        page = _subnav("subnav_activity", ["Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger"])
-        if page == "Weekly Snapshot":
-            weekly_snapshot_page(active_user)
-        elif page == "Cash Management":
-            cash_management_page(active_user)
-        elif page == "Enter Trade":
-            enter_trade_page(active_user)
-        elif page == "Ledger":
-            ledger_page(active_user)
-
-    # MAINTENANCE
-    with t_maint:
-        page = _subnav("subnav_maint", ["Import Data", "Bulk Entries", "Profile", "Settings"])
-        if page == "Import Data":
-            import_data_page(active_user)
-        elif page == "Bulk Entries":
-            bulk_entries_page(active_user)
-        elif page == "Profile":
-            account_sharing_page(active_user)
-        elif page == "Settings":
-            settings_page(active_user)
-
-    # COMMUNITY
-    with t_comm:
-        page = _subnav("subnav_comm", ["Community"])
+    # Route
+    if page == "Dashboard":
+        dashboard_page(active_user, view="summary")
+    elif page == "Holdings":
+        holdings_page(active_user)
+    elif page == "Option Details":
+        option_details_page(active_user)
+    elif page == "Update LEAP Prices":
+        leap_prices_page(active_user)
+    elif page == "Weekly Snapshot":
+        weekly_snapshot_page(active_user)
+    elif page == "Cash Management":
+        cash_management_page(active_user)
+    elif page == "Enter Trade":
+        enter_trade_page(active_user)
+    elif page == "Ledger":
+        ledger_page(active_user)
+    elif page == "Import Data":
+        import_data_page(active_user)
+    elif page == "Bulk Entries":
+        bulk_entries_page(active_user)
+    elif page == "Profile":
+        account_sharing_page(active_user)
+    elif page == "Settings":
+        settings_page(active_user)
+    elif page == "Community":
         community_page(active_user)
 
 
