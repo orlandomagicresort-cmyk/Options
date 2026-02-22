@@ -1,5 +1,4 @@
 import streamlit as st
-import urllib.parse
 
 def apply_global_ui_theme():
     """
@@ -31,139 +30,7 @@ def apply_global_ui_theme():
         .finance-table td.pl-pos { color: #0a7d22; font-weight: 700; }
         .finance-table td.pl-neg { color: #b00020; font-weight: 700; }
 
-        
-      /* --- Clean Wealthsimple-style tabs (no radios) --- */
-      .topnav-wrap{
-        position: sticky;
-        top: 0;
-        z-index: 1000;
-        background: rgba(255,255,255,0.96);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
-        padding: 0.85rem 1rem 0.65rem 1rem;
-        margin: -1rem -1rem 1rem -1rem;
-      }
-      .wsnav-tabs, .wsnav-subtabs{
-        display:flex;
-        gap:2rem;
-        overflow-x:auto;
-        overflow-y:hidden;
-        white-space:nowrap;
-        scrollbar-width:none;
-      }
-      .wsnav-tabs::-webkit-scrollbar, .wsnav-subtabs::-webkit-scrollbar{ display:none; }
-
-      .wsnav-tab, .wsnav-subtab{
-        display:inline-block;
-        text-decoration:none !important;
-        font-weight:650;
-        color: rgba(49, 51, 63, 0.65);
-        padding-bottom:0.35rem;
-        border-bottom:3px solid transparent;
-      }
-      .wsnav-tab{ font-size:1.25rem; }
-      .wsnav-subtab{ font-size:1.05rem; margin-top:0.35rem; }
-
-      .wsnav-tab:hover, .wsnav-subtab:hover{
-        color: rgba(49, 51, 63, 0.90);
-      }
-      .wsnav-tab.active, .wsnav-subtab.active{
-        color: rgba(17,17,17,0.98) !important;
-        border-bottom-color: rgba(17,17,17,0.98);
-      }
-      .wsnav-actions .stSelectbox > div{ min-width: 220px; }
-      .wsnav-actions .stButton>button{
-        border-radius: 999px;
-        padding: 0.35rem 0.85rem;
-        font-weight: 650;
-      }
-
-    
-      /* ================= Wealthsimple-inspired top navigation (Option A: st.tabs) ================= */
-      .ws-actionbar{
-        position: sticky;
-        top: 0;
-        z-index: 1200;
-        background: rgba(255,255,255,0.96);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
-        padding: 0.65rem 1rem 0.55rem 1rem;
-        margin: -1rem -1rem 0.35rem -1rem;
-      }
-      .ws-brand{
-        font-size: 1.25rem;
-        font-weight: 800;
-        letter-spacing: -0.02em;
-        line-height: 1.2;
-      }
-      .ws-muted{
-        font-size: 0.9rem;
-        opacity: 0.70;
-        margin-top: 0.10rem;
-      }
-
-      /* Make tab headers sticky under the actionbar */
-      /* Secondary nav: make it look like smaller underline tabs */
-      .ws-subnav{
-        position: sticky;
-        top: 6.35rem; /* actionbar + tablist */
-        z-index: 1050;
-        background: rgba(255,255,255,0.96);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(49, 51, 63, 0.10);
-        padding: 0.25rem 1rem 0.05rem 1rem;
-        margin: 0 -1rem 0.6rem -1rem;
-      }
-      .ws-subnav .stRadio [role="radiogroup"]{
-        display:flex !important;
-        flex-wrap:nowrap !important;
-        gap: 1.35rem !important;
-        overflow-x:auto !important;
-        scrollbar-width:none;
-      }
-      .ws-subnav .stRadio [role="radiogroup"]::-webkit-scrollbar{ display:none; }
-      .ws-subnav label[data-baseweb="radio"]{
-        background: transparent !important;
-        border: none !important;
-        padding: 0 !important;
-        margin: 0 !important;
-      }
-      .ws-subnav label[data-baseweb="radio"] > div{
-        padding: 0 0 0.25rem 0 !important;
-        border-bottom: 3px solid transparent !important;
-        display: inline-flex !important;
-        align-items: flex-end !important;
-      }
-      .ws-subnav label[data-baseweb="radio"] span{
-        font-size: 1.05rem !important;
-        font-weight: 650 !important;
-        color: rgba(49, 51, 63, 0.62) !important;
-      }
-      .ws-subnav label[data-baseweb="radio"]:hover span{
-        color: rgba(49, 51, 63, 0.90) !important;
-      }
-      .ws-subnav input[type="radio"]:checked + div{
-        border-bottom-color: rgba(17,17,17,0.98) !important;
-      }
-      .ws-subnav input[type="radio"]:checked + div span{
-        color: rgba(17,17,17,0.98) !important;
-      }
-      .ws-subnav label[data-baseweb="radio"] input{
-        position:absolute !important;
-        opacity:0 !important;
-        width:0 !important;
-        height:0 !important;
-      }
-
-      /* Align controls in actionbar */
-      .ws-actionbar .stSelectbox > div{ min-width: 240px; }
-      .ws-actionbar .stButton>button{
-        border-radius: 999px;
-        padding: 0.35rem 0.85rem;
-        font-weight: 650;
-      }
-
-    </style>
+        </style>
         """,
         unsafe_allow_html=True,
     )
@@ -338,56 +205,6 @@ st.set_page_config(
     page_title="Pro Options Tracker",
     layout="wide",
     initial_sidebar_state="expanded"
-)
-
-
-
-# --- UI: Hide sidebar + Sticky top navigation ---
-st.markdown(
-    """
-    <style>
-      /* Hide Streamlit's default sidebar completely */
-      section[data-testid="stSidebar"] {display: none !important;}
-      /* Remove the blank sidebar gap */
-      div[data-testid="stSidebarNav"] {display: none !important;}
-      /* Make the top nav sticky */
-      .topnav-wrap {
-        position: sticky;
-        top: 0;
-        z-index: 999;
-        background: rgba(255,255,255,0.90);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
-        padding: 0.75rem 0.75rem 0.6rem 0.75rem;
-        margin: -1rem -1rem 1rem -1rem; /* stretch full width */
-      }
-      .topnav-title {
-        font-size: 1.35rem;
-        font-weight: 700;
-        letter-spacing: -0.01em;
-        margin: 0;
-        line-height: 1.2;
-      }
-      .topnav-sub {
-        font-size: 0.9rem;
-        opacity: 0.75;
-        margin-top: 0.15rem;
-      }
-      /* Button styling */
-      .stButton>button {
-        border-radius: 999px;
-        padding: 0.4rem 0.9rem;
-        font-weight: 600;
-      }
-      /* Compact buttons in nav row */
-      .topnav .stButton>button {
-        padding: 0.35rem 0.8rem;
-      }
-      /* Reduce top padding of main block a bit */
-      .block-container {padding-top: 1.25rem;}
-    </style>
-    """
-    , unsafe_allow_html=True
 )
 
 st.markdown("""
@@ -899,46 +716,11 @@ if 'user' not in st.session_state: st.session_state.user = None
 if 'delete_confirm_id' not in st.session_state: st.session_state.delete_confirm_id = None
 
 def handle_auth():
-    """Authenticate user without using the sidebar UI."""
-    if not supabase:
+    st.sidebar.title("🔐 Access Portal")
+    if not supabase: 
         st.warning("⚠️ Database not connected.")
         return False
 
-    if st.session_state.user:
-        return True
-
-    st.title("🔐 Access Portal")
-    st.caption("Sign in to access your dashboards.")
-
-    tabs = st.tabs(["Login", "Register"])
-    with tabs[0]:
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_pass")
-        c1, c2 = st.columns([1, 2])
-        with c1:
-            if st.button("Sign In", type="primary"):
-                try:
-                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                    st.session_state.user = res.user
-                    st.session_state.access_token = getattr(getattr(res, "session", None), "access_token", "") or ""
-                    ensure_supabase_auth()
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Login failed: {e}")
-        with c2:
-            st.info("Tip: If you recently changed your password, use the new password when signing in.")
-
-    with tabs[1]:
-        new_email = st.text_input("Email", key="reg_email")
-        new_pass = st.text_input("Password", type="password", key="reg_pass")
-        if st.button("Create Account"):
-            try:
-                supabase.auth.sign_up({"email": new_email, "password": new_pass})
-                st.success("Account created! You can now log in.")
-            except Exception as e:
-                st.error(f"Signup failed: {e}")
-
-    return False
     if st.session_state.user:
         st.sidebar.success(f"User: {st.session_state.user.email}")
         if st.sidebar.button("Logout"):
@@ -5692,241 +5474,29 @@ def settings_page(user):
                 st.session_state.confirm_reset = False; st.success("Account reset."); st.rerun()
             if c2.button("Cancel"): st.session_state.confirm_reset = False; st.rerun()
 
-
-def _top_nav(user, active_user):
-    """Sticky two-level navigation (Wealthsimple-inspired), using clean HTML links (no radios)."""
-
-    NAV = {
-        "Home": ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices"],
-        "Activity": ["Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger"],
-        "Maintenance": ["Import Data", "Bulk Entries", "Profile", "Settings"],
-        "Community": ["Community"],
-    }
-
-    def _qp(val: str) -> str:
-        return urllib.parse.quote(str(val), safe="")
-
-    # Pull selected page from query params; fallback to session_state
-    sel_page = None
-    try:
-        qp = st.query_params
-        sel_page = qp.get("page", None)
-        if isinstance(sel_page, list):
-            sel_page = sel_page[0] if sel_page else None
-    except Exception:
-        sel_page = st.experimental_get_query_params().get("page", [None])[0]
-
-    if not sel_page:
-        sel_page = st.session_state.get("page", "Dashboard")
-
-    all_pages = [p for pages in NAV.values() for p in pages]
-    if sel_page not in all_pages:
-        sel_page = "Dashboard"
-    st.session_state.page = sel_page
-
-    # Determine active section
-    sel_section = "Home"
-    for sec, pages in NAV.items():
-        if sel_page in pages:
-            sel_section = sec
-            break
-
-    st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
-
-    # Primary row (sections) + account actions
-    primary_tabs = []
-    for sec in NAV.keys():
-        cls = "wsnav-tab active" if sec == sel_section else "wsnav-tab"
-        primary_tabs.append(f'<a class="{cls}" href="?page={_qp(NAV[sec][0])}">{sec}</a>')
-
-    c_primary, c_actions = st.columns([7.2, 2.8], vertical_alignment="bottom")
-    with c_primary:
-        st.markdown(f'<div class="wsnav-tabs">{"".join(primary_tabs)}</div>', unsafe_allow_html=True)
-
-    with c_actions:
-        st.markdown('<div class="wsnav-actions">', unsafe_allow_html=True)
-
-        # Account selector (drives active account context)
-        try:
-            accts = _get_accessible_accounts(user)
-            labels = [a["label"] for a in accts] if accts else ["My Account"]
-        except Exception:
-            labels = ["My Account"]
-
-        cur = st.session_state.get("active_account_label") or (labels[0] if labels else "My Account")
-        if labels and cur not in labels:
-            cur = labels[0]
-            st.session_state["active_account_label"] = cur
-
-        sel_acct = st.selectbox(
-            "Account",
-            labels,
-            index=labels.index(cur) if cur in labels else 0,
-            label_visibility="collapsed",
-            key="ws_account_select",
-        )
-        if sel_acct != st.session_state.get("active_account_label"):
-            st.session_state["active_account_label"] = sel_acct
-            st.rerun()
-
-        if st.button("Logout", key="topnav_logout"):
-            try:
-                supabase.auth.sign_out()
-            except Exception:
-                pass
-            st.session_state.user = None
-            st.session_state.access_token = ""
-            st.session_state.page = "Dashboard"
-            try:
-                st.query_params.clear()
-            except Exception:
-                st.experimental_set_query_params()
-            st.rerun()
-
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # Secondary row (pages in section)
-    secondary_tabs = []
-    for p in NAV[sel_section]:
-        cls = "wsnav-subtab active" if p == sel_page else "wsnav-subtab"
-        secondary_tabs.append(f'<a class="{cls}" href="?page={_qp(p)}">{p}</a>')
-
-    st.markdown(f'<div class="wsnav-subtabs">{"".join(secondary_tabs)}</div>', unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    return sel_page
-
-
-def _render_with_tabs(user, active_user):
-    """Render the app using two-level navigation (stable): primary + secondary underline radios."""
-
-    NAV = {
-        "Home": ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices"],
-        "Activity": ["Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger"],
-        "Maintenance": ["Import Data", "Bulk Entries", "Profile", "Settings"],
-        "Community": ["Community"],
-    }
-
-    # Initialize state
-    if "nav_section" not in st.session_state:
-        st.session_state.nav_section = "Home"
-    if "page" not in st.session_state:
-        st.session_state.page = "Dashboard"
-
-    # Keep nav_section consistent with page when possible
-    for sec, pages in NAV.items():
-        if st.session_state.page in pages:
-            st.session_state.nav_section = sec
-            break
-
-    # Action bar (sticky): primary nav + account + logout
-    st.markdown('<div class="ws-actionbar">', unsafe_allow_html=True)
-    c_primary, c_actions = st.columns([7.2, 2.8], vertical_alignment="center")
-
-    with c_primary:
-        st.markdown('<div class="ws-primary">', unsafe_allow_html=True)
-        sec = st.radio(
-            "Primary navigation",
-            list(NAV.keys()),
-            index=list(NAV.keys()).index(st.session_state.nav_section),
-            horizontal=True,
-            label_visibility="collapsed",
-            key="ws_primary_nav",
-        )
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    with c_actions:
-        try:
-            accts = _get_accessible_accounts(user)
-            labels = [a["label"] for a in accts] if accts else ["My Account"]
-        except Exception:
-            labels = ["My Account"]
-
-        cur = st.session_state.get("active_account_label") or (labels[0] if labels else "My Account")
-        if labels and cur not in labels:
-            cur = labels[0]
-            st.session_state["active_account_label"] = cur
-
-        sel_acct = st.selectbox(
-            "Account",
-            labels,
-            index=labels.index(cur) if cur in labels else 0,
-            label_visibility="collapsed",
-            key="ws_account_select",
-        )
-        # No explicit st.rerun() here—widget change already reruns the app.
-        st.session_state["active_account_label"] = sel_acct
-
-        if st.button("Logout", key="topnav_logout"):
-            try:
-                supabase.auth.sign_out()
-            except Exception:
-                pass
-            st.session_state.user = None
-            st.session_state.access_token = ""
-            st.session_state.nav_section = "Home"
-            st.session_state.page = "Dashboard"
-            st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    # Secondary nav (sticky under actionbar)
-    st.markdown('<div class="ws-subnav">', unsafe_allow_html=True)
-    sec_pages = NAV[sec]
-    cur_page = st.session_state.page if st.session_state.page in sec_pages else sec_pages[0]
-    page = st.radio(
-        "Secondary navigation",
-        sec_pages,
-        index=sec_pages.index(cur_page),
-        horizontal=True,
-        label_visibility="collapsed",
-        key=f"ws_subnav_{sec}",
-    )
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    st.session_state.nav_section = sec
-    st.session_state.page = page
-
-    # Route
-    if page == "Dashboard":
-        dashboard_page(active_user, view="summary")
-    elif page == "Holdings":
-        holdings_page(active_user)
-    elif page == "Option Details":
-        option_details_page(active_user)
-    elif page == "Update LEAP Prices":
-        leap_prices_page(active_user)
-    elif page == "Weekly Snapshot":
-        weekly_snapshot_page(active_user)
-    elif page == "Cash Management":
-        cash_management_page(active_user)
-    elif page == "Enter Trade":
-        enter_trade_page(active_user)
-    elif page == "Ledger":
-        ledger_page(active_user)
-    elif page == "Import Data":
-        import_data_page(active_user)
-    elif page == "Bulk Entries":
-        bulk_entries_page(active_user)
-    elif page == "Profile":
-        account_sharing_page(active_user)
-    elif page == "Settings":
-        settings_page(active_user)
-    elif page == "Community":
-        community_page(active_user)
-
-
-
 def main():
     # page config already set at top
     
     force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
+    st.sidebar.divider()
+    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Bulk Entries", "Profile", "Community", "Settings"])
     user = st.session_state.user
     active_user = _set_active_account(user)
-    _render_with_tabs(user, active_user)
-
+    if page == "Dashboard": dashboard_page(active_user, view="summary")
+    elif page == "Holdings": dashboard_page(active_user, view="holdings")
+    elif page == "Option Details": option_details_page(active_user)
+    elif page == "Update LEAP Prices": pricing_page(active_user)
+    elif page == "Weekly Snapshot": snapshot_page(active_user)
+    elif page == "Cash Management": cash_management_page(active_user)
+    elif page == "Enter Trade": trade_entry_page(active_user)
+    elif page == "Ledger": ledger_page(active_user)
+    elif page == "Import Data": import_page(active_user)
+    elif page == "Bulk Entries": bulk_entries_page(active_user)
+    elif page == "Profile": account_sharing_page(active_user)
+    elif page == "Community": community_page(user)
+    elif page == "Settings": settings_page(user)
 
 if __name__ == "__main__":
     main()
