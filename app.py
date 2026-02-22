@@ -1,4 +1,5 @@
 import streamlit as st
+import urllib.parse
 
 def apply_global_ui_theme():
     """
@@ -31,250 +32,13 @@ def apply_global_ui_theme():
         .finance-table td.pl-neg { color: #b00020; font-weight: 700; }
 
         
-    <style>
-      
-      /* --- Topnav menu: Wealthsimple-like tabs --- */
-      .topnav-wrap {
-        position: sticky;
-        top: 0;
-        z-index: 999;
-        background: rgba(255,255,255,0.96);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
-        padding: 0.85rem 1rem 0.0rem 1rem;
-        margin: -1rem -1rem 1rem -1rem; /* stretch full width */
-      }
-      .wsnav-row{
-        display:flex;
-        align-items:flex-end;
-        gap: 1.25rem;
-        padding-bottom: 0.55rem;
-      }
-      .wsnav-logo{
-        font-weight: 800;
-        font-size: 2.15rem;
-        line-height: 1;
-        letter-spacing: -0.04em;
-        margin-right: 0.25rem;
-        user-select:none;
-      }
-      .wsnav-menu .stRadio [role="radiogroup"]{
-        display:flex !important;
-        flex-wrap:nowrap !important;
-        gap:1.65rem !important;
-        overflow-x:auto !important;
-        overflow-y:hidden !important;
-        padding: 0.15rem 0 0.10rem 0 !important;
-        margin: 0 !important;
-        scrollbar-width: none; /* Firefox */
-      }
-      .wsnav-menu .stRadio [role="radiogroup"]::-webkit-scrollbar{
-        display:none;
-      }
-      .wsnav-menu .stRadio [role="radiogroup"] > label{
-        margin:0 !important;
-        white-space:nowrap !important;
-      }
-      /* Remove the default radio visuals and make it look like text tabs */
-      .wsnav-menu label[data-baseweb="radio"]{
-        background: transparent !important;
-        border: none !important;
-        padding: 0 !important;
-      }
-      .wsnav-menu label[data-baseweb="radio"] > div{
-        padding: 0 !important;
-      }
-      .wsnav-menu label[data-baseweb="radio"] span{
-        font-size: 1.25rem;
-        font-weight: 650;
-        color: rgba(49, 51, 63, 0.65);
-      }
-      .wsnav-menu label[data-baseweb="radio"]:hover span{
-        color: rgba(49, 51, 63, 0.90);
-      }
-      /* Underline active tab */
-      .wsnav-menu input[type="radio"]:checked + div span{
-        color: rgba(17, 17, 17, 0.98) !important;
-      }
-      .wsnav-menu input[type="radio"]:checked + div{
-        border-bottom: 3px solid rgba(17, 17, 17, 0.98) !important;
-        padding-bottom: 0.35rem !important;
-      }
-      /* Keep actions aligned nicely */
-      .wsnav-actions .stButton>button{
-        border-radius: 999px;
-        padding: 0.35rem 0.85rem;
-        font-weight: 650;
-      }
-
-    
-      /* ---- Wealthsimple-like HTML tabs (no radios) ---- */
-      .wsnav-row{
-        display:flex;
-        align-items:flex-end;
-        gap: 1.5rem;
-        padding-bottom: 0.55rem;
-      }
-      .wsnav-logo{
-        font-weight: 800;
-        font-size: 2.15rem;
-        line-height: 1;
-        letter-spacing: -0.04em;
-        user-select:none;
-      }
-      
-
-    
-      /* ---- Wealthsimple-like tabs (radio-based, no buttons) ---- */
-      .wsnav-logo{
-        font-weight: 800;
-        font-size: 2.15rem;
-        line-height: 1;
-        letter-spacing: -0.04em;
-        user-select:none;
-      }
-      .wsnav-menu .stRadio [role="radiogroup"]{
-        display:flex !important;
-        flex-wrap:nowrap !important;
-        gap: 2.0rem !important;
-        overflow-x:auto !important;
-        overflow-y:hidden !important;
-        padding: 0.1rem 0 0.15rem 0 !important;
-        margin: 0 !important;
-        scrollbar-width:none;
-      }
-      .wsnav-menu .stRadio [role="radiogroup"]::-webkit-scrollbar{ display:none; }
-      .wsnav-menu .stRadio [role="radiogroup"] > label{
-        margin: 0 !important;
-        white-space: nowrap !important;
-      }
-      /* Make each option look like a text tab */
-      .wsnav-menu label[data-baseweb="radio"]{
-        background: transparent !important;
-        border: none !important;
-        padding: 0 !important;
-      }
-      /* BaseWeb layout: label > input + div. We style the div as the tab */
-      .wsnav-menu label[data-baseweb="radio"] > div{
-        padding: 0 0 0.35rem 0 !important;
-        border-bottom: 3px solid transparent !important;
-        display: inline-flex !important;
-        align-items: flex-end !important;
-      }
-      /* Tab text */
-      .wsnav-menu label[data-baseweb="radio"] span{
-        font-size: 1.25rem;
-        font-weight: 650;
-        color: rgba(49, 51, 63, 0.65);
-      }
-      .wsnav-menu label[data-baseweb="radio"]:hover span{
-        color: rgba(49, 51, 63, 0.90);
-      }
-      /* Active underline + active text */
-      .wsnav-menu input[type="radio"]:checked + div{
-        border-bottom-color: rgba(17, 17, 17, 0.98) !important;
-      }
-      .wsnav-menu input[type="radio"]:checked + div span{
-        color: rgba(17, 17, 17, 0.98) !important;
-      }
-      /* Hide the default radio dot/circle */
-      .wsnav-menu label[data-baseweb="radio"] input{
-        position: absolute !important;
-        opacity: 0 !important;
-        width: 0 !important;
-        height: 0 !important;
-      }
-
-    
-      /* ---- Wealthsimple-inspired two-level top navigation ---- */
-      .topnav-wrap{
-        position: sticky;
-        top: 0;
-        z-index: 1000;
-        background: rgba(255,255,255,0.96);
-        backdrop-filter: blur(10px);
-        border-bottom: 1px solid rgba(49, 51, 63, 0.12);
-        padding: 0.85rem 1rem 0.65rem 1rem;
-        margin: -1rem -1rem 1rem -1rem;
-      }
-      .wsnav-logo{
-        font-weight: 800;
-        font-size: 2.15rem;
-        line-height: 1;
-        letter-spacing: -0.04em;
-        user-select:none;
-      }
-      .wsnav-primary .stRadio [role="radiogroup"],
-      .wsnav-secondary .stRadio [role="radiogroup"]{
-        display:flex !important;
-        flex-wrap:nowrap !important;
-        overflow-x:auto !important;
-        overflow-y:hidden !important;
-        scrollbar-width:none;
-      }
-      .wsnav-primary .stRadio [role="radiogroup"]::-webkit-scrollbar,
-      .wsnav-secondary .stRadio [role="radiogroup"]::-webkit-scrollbar{ display:none; }
-
-      .wsnav-primary .stRadio [role="radiogroup"]{ gap: 2.0rem !important; }
-      .wsnav-secondary .stRadio [role="radiogroup"]{ gap: 1.4rem !important; margin-top: 0.25rem !important; }
-
-      .wsnav-primary label[data-baseweb="radio"],
-      .wsnav-secondary label[data-baseweb="radio"]{
-        background: transparent !important;
-        border: none !important;
-        padding: 0 !important;
-        margin: 0 !important;
-      }
-      .wsnav-primary label[data-baseweb="radio"] > div,
-      .wsnav-secondary label[data-baseweb="radio"] > div{
-        padding: 0 0 0.35rem 0 !important;
-        border-bottom: 3px solid transparent !important;
-        display: inline-flex !important;
-        align-items: flex-end !important;
-      }
-      .wsnav-primary label[data-baseweb="radio"] span{
-        font-size: 1.25rem;
-        font-weight: 650;
-        color: rgba(49, 51, 63, 0.65);
-      }
-      .wsnav-secondary label[data-baseweb="radio"] span{
-        font-size: 1.05rem;
-        font-weight: 650;
-        color: rgba(49, 51, 63, 0.62);
-      }
-      .wsnav-primary label[data-baseweb="radio"]:hover span,
-      .wsnav-secondary label[data-baseweb="radio"]:hover span{
-        color: rgba(49, 51, 63, 0.90);
-      }
-      .wsnav-primary input[type="radio"]:checked + div,
-      .wsnav-secondary input[type="radio"]:checked + div{
-        border-bottom-color: rgba(17, 17, 17, 0.98) !important;
-      }
-      .wsnav-primary input[type="radio"]:checked + div span,
-      .wsnav-secondary input[type="radio"]:checked + div span{
-        color: rgba(17, 17, 17, 0.98) !important;
-      }
-      .wsnav-primary label[data-baseweb="radio"] input,
-      .wsnav-secondary label[data-baseweb="radio"] input{
-        position:absolute !important;
-        opacity:0 !important;
-        width:0 !important;
-        height:0 !important;
-      }
-      .wsnav-actions .stSelectbox > div{ min-width: 220px; }
-      .wsnav-actions .stButton>button{
-        border-radius: 999px;
-        padding: 0.35rem 0.85rem;
-        font-weight: 650;
-      }
-
-    
       /* --- Clean Wealthsimple-style tabs (no radios) --- */
       .topnav-wrap{
         position: sticky;
         top: 0;
         z-index: 1000;
         background: rgba(255,255,255,0.96);
+        backdrop-filter: blur(10px);
         border-bottom: 1px solid rgba(49, 51, 63, 0.12);
         padding: 0.85rem 1rem 0.65rem 1rem;
         margin: -1rem -1rem 1rem -1rem;
@@ -283,9 +47,14 @@ def apply_global_ui_theme():
         display:flex;
         gap:2rem;
         overflow-x:auto;
+        overflow-y:hidden;
         white-space:nowrap;
+        scrollbar-width:none;
       }
+      .wsnav-tabs::-webkit-scrollbar, .wsnav-subtabs::-webkit-scrollbar{ display:none; }
+
       .wsnav-tab, .wsnav-subtab{
+        display:inline-block;
         text-decoration:none !important;
         font-weight:650;
         color: rgba(49, 51, 63, 0.65);
@@ -302,10 +71,14 @@ def apply_global_ui_theme():
         color: rgba(17,17,17,0.98) !important;
         border-bottom-color: rgba(17,17,17,0.98);
       }
+      .wsnav-actions .stSelectbox > div{ min-width: 220px; }
+      .wsnav-actions .stButton>button{
+        border-radius: 999px;
+        padding: 0.35rem 0.85rem;
+        font-weight: 650;
+      }
 
     </style>
-
-</style>
         """,
         unsafe_allow_html=True,
     )
@@ -737,27 +510,21 @@ def _get_accessible_accounts(user):
     return out
 
 def _set_active_account(user):
-    """Resolve the active account context (no UI). Selection is controlled by top navigation."""
+    """Render account selector + set active user context."""
     _ensure_user_preferences_row(user)
     _activate_pending_invites(user)
 
     accts = _get_accessible_accounts(user)
-    if not accts:
-        st.session_state["active_account_label"] = "My Account"
-        st.session_state["active_user_id"] = user.id
-        st.session_state["active_role"] = "editor"
-        st.session_state["read_only"] = False
-        st.session_state["active_account_display_name"] = None
-        return SimpleNamespace(id=user.id, email=getattr(user, "email", ""))
-
     labels = [a["label"] for a in accts]
     cur = st.session_state.get("active_account_label") or labels[0]
     if cur not in labels:
         cur = labels[0]
-        st.session_state["active_account_label"] = cur
 
-    chosen = next(a for a in accts if a["label"] == cur)
+    sel = st.sidebar.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
+    st.session_state["active_account_label"] = sel
+    chosen = next(a for a in accts if a["label"] == sel)
 
+    # Try to resolve the chosen account's display name (used for masking / UI)
     chosen_display = None
     try:
         prefs = supabase.table("user_preferences").select("display_name").eq("user_id", chosen["owner_user_id"]).limit(1).execute().data or []
@@ -767,10 +534,11 @@ def _set_active_account(user):
         chosen_display = None
     st.session_state["active_account_display_name"] = chosen_display
 
-    st.session_state["active_user_id"] = chosen["owner_user_id"]
+    st.session_state["active_user_id"] = chosen["owner_user_id"] = chosen["owner_user_id"]
     st.session_state["active_role"] = chosen["role"]
     st.session_state["read_only"] = (chosen["owner_user_id"] != user.id and chosen["role"] != "editor")
 
+    # Provide a lightweight user-like object for downstream code
     return SimpleNamespace(id=chosen["owner_user_id"], email=(st.session_state.get("active_account_display_name") or getattr(user, "email", "")))
 
 def _require_editor():
@@ -5841,7 +5609,7 @@ def settings_page(user):
 
 
 def _top_nav(user, active_user):
-    """Sticky two-level navigation without radio buttons (Wealthsimple-style underline)."""
+    """Sticky two-level navigation (Wealthsimple-inspired), using clean HTML links (no radios)."""
 
     NAV = {
         "Home": ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices"],
@@ -5850,7 +5618,11 @@ def _top_nav(user, active_user):
         "Community": ["Community"],
     }
 
-    # Read page from query params (clean link navigation)
+    def _qp(val: str) -> str:
+        return urllib.parse.quote(str(val), safe="")
+
+    # Pull selected page from query params; fallback to session_state
+    sel_page = None
     try:
         qp = st.query_params
         sel_page = qp.get("page", None)
@@ -5862,14 +5634,12 @@ def _top_nav(user, active_user):
     if not sel_page:
         sel_page = st.session_state.get("page", "Dashboard")
 
-    # Normalize page
-    all_pages = [p for v in NAV.values() for p in v]
+    all_pages = [p for pages in NAV.values() for p in pages]
     if sel_page not in all_pages:
         sel_page = "Dashboard"
-
     st.session_state.page = sel_page
 
-    # Determine section
+    # Determine active section
     sel_section = "Home"
     for sec, pages in NAV.items():
         if sel_page in pages:
@@ -5878,35 +5648,35 @@ def _top_nav(user, active_user):
 
     st.markdown('<div class="topnav-wrap">', unsafe_allow_html=True)
 
-    # PRIMARY NAV
+    # Primary row (sections) + account actions
     primary_tabs = []
     for sec in NAV.keys():
         cls = "wsnav-tab active" if sec == sel_section else "wsnav-tab"
-        primary_tabs.append(f'<a class="{cls}" href="?page={NAV[sec][0]}">{sec}</a>')
-    primary_html = "".join(primary_tabs)
+        primary_tabs.append(f'<a class="{cls}" href="?page={_qp(NAV[sec][0])}">{sec}</a>')
 
-    # Account dropdown + logout
-    c_primary, c_account = st.columns([7, 3], vertical_alignment="bottom")
-
+    c_primary, c_actions = st.columns([7.2, 2.8], vertical_alignment="bottom")
     with c_primary:
-        st.markdown(f'<div class="wsnav-tabs">{primary_html}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="wsnav-tabs">{"".join(primary_tabs)}</div>', unsafe_allow_html=True)
 
-    with c_account:
+    with c_actions:
+        st.markdown('<div class="wsnav-actions">', unsafe_allow_html=True)
+
+        # Account selector (drives active account context)
         try:
             accts = _get_accessible_accounts(user)
             labels = [a["label"] for a in accts] if accts else ["My Account"]
         except Exception:
             labels = ["My Account"]
 
-        cur = st.session_state.get("active_account_label") or labels[0]
-        if cur not in labels:
+        cur = st.session_state.get("active_account_label") or (labels[0] if labels else "My Account")
+        if labels and cur not in labels:
             cur = labels[0]
             st.session_state["active_account_label"] = cur
 
         sel_acct = st.selectbox(
             "Account",
             labels,
-            index=labels.index(cur),
+            index=labels.index(cur) if cur in labels else 0,
             label_visibility="collapsed",
             key="ws_account_select",
         )
@@ -5921,18 +5691,22 @@ def _top_nav(user, active_user):
                 pass
             st.session_state.user = None
             st.session_state.access_token = ""
-            st.experimental_set_query_params()
             st.session_state.page = "Dashboard"
+            try:
+                st.query_params.clear()
+            except Exception:
+                st.experimental_set_query_params()
             st.rerun()
 
-    # SECONDARY NAV
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # Secondary row (pages in section)
     secondary_tabs = []
     for p in NAV[sel_section]:
         cls = "wsnav-subtab active" if p == sel_page else "wsnav-subtab"
-        secondary_tabs.append(f'<a class="{cls}" href="?page={p}">{p}</a>')
-    secondary_html = "".join(secondary_tabs)
+        secondary_tabs.append(f'<a class="{cls}" href="?page={_qp(p)}">{p}</a>')
 
-    st.markdown(f'<div class="wsnav-subtabs">{secondary_html}</div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="wsnav-subtabs">{"".join(secondary_tabs)}</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     return sel_page
@@ -5943,9 +5717,10 @@ def main():
     force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
+    st.sidebar.divider()
+    page = _top_nav(user, active_user)
     user = st.session_state.user
     active_user = _set_active_account(user)
-    page = _top_nav(user, active_user)
     if page == "Dashboard": dashboard_page(active_user, view="summary")
     elif page == "Holdings": dashboard_page(active_user, view="holdings")
     elif page == "Option Details": option_details_page(active_user)
