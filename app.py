@@ -219,6 +219,14 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+
+# --- App Logo ---
+col_logo, col_title = st.columns([1, 8])
+with col_logo:
+    st.image('logo.png', width=80)
+with col_title:
+    pass
+
 st.markdown("""
     <style>
     .stDataFrame { border: 1px solid #f0f2f6; }
@@ -654,7 +662,7 @@ def account_sharing_page(user):
 
 
 def handle_auth():
-    st.sidebar.title("🔐 Access Portal")
+    st.sidebar.title("🔐 Stock Portfolio")
     if not supabase: 
         st.warning("⚠️ Database not connected.")
         return False
