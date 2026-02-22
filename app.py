@@ -1939,8 +1939,6 @@ def dashboard_page(active_user, view: str = "summary"):
                     .properties(height=360)
                 )
 
-                labels = (
-                    alt.Chart(pie_df)
                     
 
                 center = (
@@ -1949,7 +1947,7 @@ def dashboard_page(active_user, view: str = "summary"):
                     .encode(text=alt.value(f"{win_rate*100:.0f}% Win Rate"))
                 )
 
-                st.altair_chart(arc + labels + center, use_container_width=True)
+                st.altair_chart(arc + center, use_container_width=True)
             except Exception:
                 st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
 
