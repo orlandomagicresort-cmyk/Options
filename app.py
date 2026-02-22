@@ -624,85 +624,98 @@ def account_sharing_page(user):
         st.divider()
 
 # Delegates / sharing
-st.divider()
-st.subheader("Delegates")
-st.caption("Grant someone view-only or write access to your portfolio. They will see it under their account selector as 'Delegated (...)'.")
+    st.divider()
+    st.subheader("Delegates")
+    st.caption("Grant someone view-only or write access to your portfolio. They will see it under their account selector as 'Delegated (...)'.")
 
-with st.form("add_delegate_form", clear_on_submit=True):
-    delegate_email = st.text_input("Delegate email", placeholder="name@example.com")
-    role = st.selectbox("Access level", ["viewer", "editor"], index=0,
-                        help="Viewer can view pages. Editor can add/modify trades and data.")
-    add_btn = st.form_submit_button("Add Delegate", type="primary")
+    with st.form("add_delegate_form", clear_on_submit=True):
+        delegate_email = st.text_input("Delegate email", placeholder="name@example.com")
+        role = st.selectbox(
+            "Access level",
+            ["viewer", "editor"],
+            index=0,
+            help="Viewer can view pages. Editor can add/modify trades and data.",
+        )
+        add_btn = st.form_submit_button("Add Delegate", type="primary")
 
-if add_btn:
-    try:
-        owner_email = (getattr(user, "email", "") or "").strip().lower()
-        em = (delegate_email or "").strip().lower()
-        if not em or "@" not in em:
-            st.error("Please enter a valid email address.")
-        elif em == owner_email:
-            st.error("You can't add yourself as a delegate.")
-        else:
-            existing = supabase.table("account_access").select("id,status,role")\
-                .eq("owner_user_id", str(uid))\
-                .eq("delegate_email", em)\
-                .in_("status", ["active","pending"])\
-                .execute().data or []
-            if existing:
-                st.warning("That delegate already has access (active or pending).")
-            else:
-                payload = {
-                    "owner_user_id": str(uid),
-                    "owner_email": owner_email,
-                    "delegate_email": em,
-                    "delegate_user_id": None,
-                    "role": role,
-                    "status": "pending",
-                    "created_at": datetime.utcnow().isoformat(),
-                }
-                supabase.table("account_access").insert(payload).execute()
-                st.success("Invite sent. They will get access after they log in with that email.")
-    except Exception as e:
-        st.error(f"Could not add delegate: {e}")
-
-try:
-    rows = supabase.table("account_access")\
-        .select("id, delegate_email, role, status, created_at")\
-        .eq("owner_user_id", str(uid))\
-        .order("created_at", desc=True)\
-        .execute().data or []
-except Exception:
-    rows = []
-
-if rows:
-    df = pd.DataFrame(rows)
-    df["delegate_email"] = df["delegate_email"].fillna("")
-    df["role"] = df["role"].fillna("viewer")
-    df["status"] = df["status"].fillna("")
-    view_cols = ["delegate_email", "role", "status", "created_at"]
-    st.dataframe(df[view_cols], use_container_width=True, hide_index=True)
-
-    st.caption("To remove access, revoke the delegate below.")
-    revoke_id = st.selectbox(
-        "Select delegate to revoke",
-        [r["id"] for r in rows],
-        format_func=lambda _id: next((r["delegate_email"] for r in rows if r["id"] == _id), str(_id)),
-    )
-    if st.button("Revoke Selected Delegate", type="secondary"):
+    if add_btn:
         try:
-            supabase.table("account_access").update({"status": "revoked"}).eq("id", revoke_id).execute()
-            st.success("Delegate revoked.")
-            st.rerun()
+            owner_email = (getattr(user, "email", "") or "").strip().lower()
+            em = (delegate_email or "").strip().lower()
+            if not em or "@" not in em:
+                st.error("Please enter a valid email address.")
+            elif em == owner_email:
+                st.error("You can't add yourself as a delegate.")
+            else:
+                existing = (
+                    supabase.table("account_access")
+                    .select("id,status,role")
+                    .eq("owner_user_id", str(uid))
+                    .eq("delegate_email", em)
+                    .in_("status", ["active", "pending"])
+                    .execute()
+                    .data
+                    or []
+                )
+                if existing:
+                    st.warning("That delegate already has access (active or pending).")
+                else:
+                    payload = {
+                        "owner_user_id": str(uid),
+                        "owner_email": owner_email,
+                        "delegate_email": em,
+                        "delegate_user_id": None,
+                        "role": role,
+                        "status": "pending",
+                        "created_at": datetime.utcnow().isoformat(),
+                    }
+                    supabase.table("account_access").insert(payload).execute()
+                    st.success("Invite sent. They will get access after they log in with that email.")
         except Exception as e:
-            st.error(f"Could not revoke delegate: {e}")
-else:
-    st.info("No delegates yet. Add one above to share access.")
+            st.error(f"Could not add delegate: {e}")
 
+    try:
+        rows = (
+            supabase.table("account_access")
+            .select("id, delegate_email, role, status, created_at")
+            .eq("owner_user_id", str(uid))
+            .order("created_at", desc=True)
+            .execute()
+            .data
+            or []
+        )
+    except Exception:
+        rows = []
+
+    if rows:
+        df = pd.DataFrame(rows)
+        df["delegate_email"] = df["delegate_email"].fillna("")
+        df["role"] = df["role"].fillna("viewer")
+        df["status"] = df["status"].fillna("")
+        view_cols = ["delegate_email", "role", "status", "created_at"]
+        st.dataframe(df[view_cols], use_container_width=True, hide_index=True)
+
+        st.caption("To remove access, revoke the delegate below.")
+        revoke_id = st.selectbox(
+            "Select delegate to revoke",
+            [r["id"] for r in rows],
+            format_func=lambda _id: next((r["delegate_email"] for r in rows if r["id"] == _id), str(_id)),
+        )
+        if st.button("Revoke Selected Delegate", type="secondary"):
+            try:
+                supabase.table("account_access").update({"status": "revoked"}).eq("id", revoke_id).execute()
+                st.success("Delegate revoked.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Could not revoke delegate: {e}")
+    else:
+        st.info("No delegates yet. Add one above to share access.")
+
+    # Change password (only on Profile page)
     st.divider()
     st.subheader("Change Password")
     st.caption("For security, enter your current password and choose a new one.")
 
-    # Password changes apply to the currently logged-in auth user
     auth_user = st.session_state.get("user", None) or user
     auth_email_default = (getattr(auth_user, "email", "") or "").strip().lower()
 
@@ -730,7 +743,6 @@ else:
                 st.success("Password updated. Please use the new password next time you log in.")
         except Exception as e:
             st.error(f"Could not update password: {e}")
-
 
 def handle_auth():
     # Sidebar header (centered logo + title)
