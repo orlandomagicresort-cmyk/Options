@@ -1319,7 +1319,7 @@ def dashboard_page(active_user, view: str = "summary"):
     if view == "holdings":
         st.header("📦 Holdings")
     else:
-        st.header("📊 Executive Dashboard")
+        st.header("🧾 Option Details")
 
     # Delegated mode diagnostics: if key tables are unreadable, the dashboard will show zeros.
     try:
@@ -1954,6 +1954,91 @@ def dashboard_page(active_user, view: str = "summary"):
 
         if _wk_stats_note:
             st.caption(_wk_stats_note)
+
+        # --- Total Profit & Analysis (moved from Option Details) ---
+        st.subheader("Total Profit & Analysis")
+        try:
+            net_invested_cad = float(get_net_invested_cad(uid) or 0.0)
+            current_val_cad = float(net_liq_cad or 0.0)
+
+            lifetime_pl_cad = current_val_cad - net_invested_cad
+            lifetime_pl_pct = (lifetime_pl_cad / net_invested_cad) if net_invested_cad > 0 else 0.0
+            cls_life = "pos-val" if lifetime_pl_cad >= 0 else "neg-val"
+
+            prof_html = "<table class='finance-table'><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>"
+            prof_html += f"<tr><td><strong>Net Invested Capital (CAD)</strong></td><td><strong>${net_invested_cad:,.2f}</strong></td></tr>"
+            prof_html += f"<tr><td><strong>Lifetime P/L (CAD)</strong></td><td class='{cls_life}'><strong>${lifetime_pl_cad:,.2f} ({lifetime_pl_pct*100:.2f}%)</strong></td></tr>"
+            prof_html += "<tr><td colspan='2' style='background-color:#f0f2f6; text-align:center; font-size:0.85em; font-weight:bold;'>YTD Snapshot Analysis</td></tr>"
+
+            baseline = get_baseline_snapshot(uid)
+            if baseline:
+                start_date_str = baseline.get("snapshot_date")
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date() if start_date_str else None
+
+                base_equity_usd = float(baseline.get("total_equity") or 0.0)
+                base_rate = float(baseline.get("exchange_rate", 1.0) or 1.0)
+
+                # Baseline value in CAD (baseline snapshot stores USD equity + an exchange_rate at snapshot time)
+                start_val_cad = base_equity_usd * base_rate
+
+                def _net_flows_cad(d0, d1):
+                    """Net DEPOSIT/WITHDRAWAL flows between (d0, d1], expressed in CAD."""
+                    try:
+                        tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+                            .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                        tx = pd.DataFrame(tx_res.data)
+                        if tx.empty or d0 is None:
+                            return 0.0
+
+                        tx = normalize_columns(tx)
+                        tx["transaction_date"] = pd.to_datetime(tx["transaction_date"], errors="coerce")
+                        tx = tx[tx["transaction_date"].notna()]
+
+                        mask = (tx["transaction_date"] > pd.to_datetime(d0)) & (tx["transaction_date"] <= pd.to_datetime(d1))
+                        tx = tx.loc[mask].copy()
+                        if tx.empty:
+                            return 0.0
+
+                        if "currency" not in tx.columns:
+                            return float(pd.to_numeric(tx.get("amount", 0), errors="coerce").fillna(0).sum())
+
+                        cad_sum = float(pd.to_numeric(tx.loc[tx["currency"].astype(str).str.upper() == "CAD", "amount"], errors="coerce").fillna(0).sum())
+                        if cad_sum != 0.0:
+                            return cad_sum
+
+                        # Fallback: convert USD flows to CAD using current fx
+                        usd_sum = float(pd.to_numeric(tx.loc[tx["currency"].astype(str).str.upper() == "USD", "amount"], errors="coerce").fillna(0).sum())
+                        fx_now = float(fx or get_usd_to_cad_rate() or 1.0)
+                        return usd_sum * fx_now
+                    except Exception:
+                        return 0.0
+
+                net_flows = _net_flows_cad(start_date, date.today())
+                invest_base = start_val_cad + net_flows  # value with 0% return after net contributions
+                profit_dollar = current_val_cad - invest_base
+                profit_pct = (profit_dollar / invest_base) if invest_base else 0.0
+
+                today = date.today()
+                days_passed = (today - start_date).days if start_date else 0
+                if days_passed < 1:
+                    days_passed = 1
+
+                annualized_return = ((1 + profit_pct) ** (365.0 / days_passed)) - 1 if profit_pct > -1 else 0.0
+                cls_ytd = "pos-val" if profit_dollar >= 0 else "neg-val"
+
+                prof_html += f"<tr><td>Baseline Date (Start)</td><td>{start_date_str}</td></tr>"
+                prof_html += f"<tr><td>Baseline Value (CAD)</td><td>${start_val_cad:,.2f}</td></tr>"
+                prof_html += f"<tr><td>Net Deposits/Withdrawals Since Baseline (CAD)</td><td>${net_flows:,.2f}</td></tr>"
+                prof_html += f"<tr><td>YTD Profit ($) (CAD)</td><td class='{cls_ytd}'>${profit_dollar:,.2f}</td></tr>"
+                prof_html += f"<tr><td>YTD Profit (%)</td><td class='{cls_ytd}'>{profit_pct*100:.2f}%</td></tr>"
+                prof_html += f"<tr><td>FY Forecast (Annualized)</td><td>{annualized_return*100:.2f}%</td></tr>"
+            else:
+                prof_html += "<tr><td colspan='2'>No baseline snapshot found. Please create one.</td></tr>"
+
+            prof_html += "</tbody></table>"
+            st.markdown(prof_html, unsafe_allow_html=True)
+        except Exception:
+            st.info("Total Profit & Analysis unavailable (an error occurred while computing).")
 
 
 
@@ -2719,21 +2804,13 @@ def option_details_page(active_user):
 
     _price_refresh_controls(active_user, 'Option Details', force_leap_mid=False)
 
-    # --- Top Controls ---
-    c_ctrl_1, c_ctrl_2, c_ctrl_3 = st.columns([2, 4, 1])
-    with c_ctrl_1:
-        selected_currency = st.radio("Currency", ["USD", "CAD"], horizontal=True, label_visibility="collapsed")
-    with c_ctrl_3:
-        if st.button("🔄 Refresh Prices"):
-            st.cache_data.clear()
-            st.rerun()
-
+        # --- Top Controls ---
+    # Currency toggle removed; Option Details displays values in USD.
+    selected_currency = "USD"
     rate_multiplier = 1.0
-    if selected_currency == "CAD":
-        rate_multiplier = get_usd_to_cad_rate()
-        st.caption(f"Exchange Rate: 1 USD = {rate_multiplier:.4f} CAD")
-    
+
     # --- Data Loading ---
+
     cash_usd = get_cash_balance(uid)
     assets, options = get_portfolio_data(uid)
     # Normalize asset types to avoid case mismatches (e.g., 'stock' vs 'STOCK')
@@ -2845,120 +2922,6 @@ def option_details_page(active_user):
             })
 
     net_liq_usd = cash_usd + stock_value_usd + leap_value_usd - itm_liability_usd
-    net_liq_disp = net_liq_usd * rate_multiplier
-
-    # --- Display Portfolio Value ---
-    st.subheader("Portfolio Value")
-    pv_rows = [
-        ("Cash Balance", f"${cash_usd * rate_multiplier:,.2f}"), 
-        ("Stock Equity", f"${stock_value_usd * rate_multiplier:,.2f}"), 
-        ("LEAP Equity", f"${leap_value_usd * rate_multiplier:,.2f}"), 
-        ("ITM Call Liability (Deducted)", f"-${itm_liability_usd * rate_multiplier:,.2f}")
-    ]
-    
-    pv_html = "<table class='finance-table'><thead><tr><th>Component</th><th>Amount</th></tr></thead><tbody>"
-    for label, val in pv_rows: pv_html += f"<tr><td>{label}</td><td>{val}</td></tr>"
-    pv_html += f"<tr class='total-row'><td>Total Portfolio Value</td><td>${net_liq_disp:,.2f}</td></tr></tbody></table>"
-    st.markdown(pv_html, unsafe_allow_html=True)
-
-    # --- Profit Analysis ---
-    st.subheader("Total Profit & Analysis")
-    baseline = get_baseline_snapshot(uid)
-    net_invested_cad = get_net_invested_cad(uid)
-    current_val_cad = net_liq_usd * get_usd_to_cad_rate()
-    lifetime_pl_cad = current_val_cad - net_invested_cad
-    lifetime_pl_pct = (lifetime_pl_cad / net_invested_cad) if net_invested_cad > 0 else 0
-    cls_life = "pos-val" if lifetime_pl_cad >= 0 else "neg-val"
-    
-    prof_html = "<table class='finance-table'><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>"
-    prof_html += f"<tr><td><strong>Net Invested Capital (CAD)</strong></td><td><strong>${net_invested_cad:,.2f}</strong></td></tr>"
-    prof_html += f"<tr><td><strong>Lifetime P/L (CAD)</strong></td><td class='{cls_life}'><strong>${lifetime_pl_cad:,.2f} ({lifetime_pl_pct*100:.2f}%)</strong></td></tr>"
-    prof_html += "<tr><td colspan='2' style='background-color:#f0f2f6; text-align:center; font-size:0.85em; font-weight:bold;'>YTD Snapshot Analysis</td></tr>"
-
-    if baseline:
-        start_date_str = baseline['snapshot_date']
-        start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        base_equity_usd = float(baseline['total_equity'])
-        base_rate = float(baseline.get('exchange_rate', 1.0) or 1.0)
-
-        # Baseline value (in selected currency)
-        start_val = base_equity_usd * base_rate if selected_currency == "CAD" else base_equity_usd
-
-        # Exclude deposits/withdrawals from profit/forecast (flow-adjusted)
-        # We treat net deposits as additional invested capital (not profit).
-        def _net_flows_selected(d0, d1):
-            """Net DEPOSIT/WITHDRAWAL flows between (d0, d1], expressed in the selected currency.
-
-            Currency note (important):
-            This app logs deposits/withdrawals in BOTH:
-              - USD (cash movement)
-              - CAD (CAD-equivalent 'basis') for the SAME cash event
-            If we add both, we double-count. So we:
-              1) Prefer transactions already recorded in the selected currency (USD or CAD)
-              2) Only if none exist in the selected currency, convert the other currency using the current FX rate
-                 (best-effort fallback when only one side exists).
-            """
-            try:
-                tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
-                    .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
-                tx = pd.DataFrame(tx_res.data)
-                if tx.empty:
-                    return 0.0
-
-                tx = normalize_columns(tx)
-                tx["transaction_date"] = pd.to_datetime(tx["transaction_date"], errors="coerce")
-                tx = tx[tx["transaction_date"].notna()]
-
-                mask = (tx["transaction_date"] > pd.to_datetime(d0)) & (tx["transaction_date"] <= pd.to_datetime(d1))
-                tx = tx.loc[mask].copy()
-                if tx.empty:
-                    return 0.0
-
-                if "currency" not in tx.columns:
-                    return float(tx["amount"].sum())
-
-                sel = str(selected_currency).upper().strip()
-                tx_sel = tx.loc[tx["currency"].astype(str).str.upper() == sel]
-                if not tx_sel.empty:
-                    return float(tx_sel["amount"].sum())
-
-                # Fallback: convert other currency to selected (when selected currency rows don't exist)
-                usd_sum = float(tx.loc[tx["currency"].astype(str).str.upper() == "USD", "amount"].sum())
-                cad_sum = float(tx.loc[tx["currency"].astype(str).str.upper() == "CAD", "amount"].sum())
-
-                fx_now = float(get_usd_to_cad_rate() or 1.0)
-                if sel == "CAD":
-                    return cad_sum + (usd_sum * fx_now)
-                # sel == USD
-                return usd_sum + (cad_sum / fx_now if fx_now else 0.0)
-            except Exception:
-                return 0.0
-
-        net_flows = _net_flows_selected(start_date, date.today())
-        invest_base = start_val + net_flows  # what you'd have with 0% return, after net contributions
-
-        profit_dollar = net_liq_disp - invest_base
-        profit_pct = (profit_dollar / invest_base) if invest_base != 0 else 0
-
-        today = date.today()
-        days_passed = (today - start_date).days
-        if days_passed < 1:
-            days_passed = 1
-
-        annualized_return = ((1 + profit_pct) ** (365.0 / days_passed)) - 1 if profit_pct > -1 else 0
-        cls_ytd = "pos-val" if profit_dollar >= 0 else "neg-val"
-
-        prof_html += f"<tr><td>Baseline Date (Start)</td><td>{start_date_str}</td></tr>"
-        prof_html += f"<tr><td>Baseline Value</td><td>${start_val:,.2f}</td></tr>"
-        prof_html += f"<tr><td>Net Deposits/Withdrawals Since Baseline</td><td>${net_flows:,.2f}</td></tr>"
-        prof_html += f"<tr><td>YTD Profit ($)</td><td class='{cls_ytd}'>${profit_dollar:,.2f}</td></tr>"
-        prof_html += f"<tr><td>YTD Profit (%)</td><td class='{cls_ytd}'>{profit_pct*100:.2f}%</td></tr>"
-        prof_html += f"<tr><td>FY Forecast (Annualized)</td><td>{annualized_return*100:.2f}%</td></tr>"
-    else: prof_html += "<tr><td colspan='2'>No baseline snapshot found. Please create one.</td></tr>"
-    prof_html += "</tbody></table>"
-    st.markdown(prof_html, unsafe_allow_html=True)
-    st.divider()
-
     # --- Assets Display ---
     if not assets.empty:
         disp_assets = assets.copy()
