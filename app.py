@@ -590,6 +590,7 @@ def community_page(user):
     
 def account_sharing_page(user):
     uid = _active_user_id(user)
+    _price_refresh_controls(user, "Profile", force_leap_mid=False)
     st.header("👤 Profile")
 
     # Preferences
@@ -608,37 +609,27 @@ def account_sharing_page(user):
 
         st.divider()
 
-st.subheader("Change Password")
-st.caption("For security, enter your current password and choose a new one.")
+        st.subheader("Password")
+        st.caption("Send yourself a password reset email link.")
+        reset_email = getattr(user, "email", "") or ""
+        reset_email = st.text_input("Email", value=reset_email, disabled=bool(reset_email), key="profile_reset_email")
+        if st.button("Send password reset email", key="profile_reset_btn"):
+            try:
+                email_clean = (reset_email or "").strip().lower()
+                if not email_clean or "@" not in email_clean:
+                    st.error("Please enter a valid email address.")
+                else:
+                    # Supabase will email a reset link. Ensure your Supabase Auth settings include the correct redirect URL(s).
+                    try:
+                        supabase.auth.reset_password_for_email(email_clean)
+                    except TypeError:
+                        # Older/newer client signatures sometimes require an options dict
+                        supabase.auth.reset_password_for_email(email_clean, {"redirectTo": None})
+                    st.success("If an account exists for that email, a reset link has been sent.")
+            except Exception as e:
+                st.error(f"Could not send reset email: {e}")
 
-with st.form("change_password_form"):
-    email_for_pw = (getattr(user, "email", "") or "").strip().lower()
-    cur_pw = st.text_input("Current password", type="password")
-    new_pw1 = st.text_input("New password", type="password")
-    new_pw2 = st.text_input("Confirm new password", type="password")
-    submitted_pw = st.form_submit_button("Update password", type="primary")
-
-if submitted_pw:
-    try:
-        if not email_for_pw or "@" not in email_for_pw:
-            st.error("Couldn't determine your account email. Please log out and log back in.")
-        elif not cur_pw or not new_pw1 or not new_pw2:
-            st.error("Please fill in all password fields.")
-        elif new_pw1 != new_pw2:
-            st.error("New password entries don't match.")
-        else:
-            # Re-authenticate with current password, then update to the new password
-            auth_res = supabase.auth.sign_in_with_password({"email": email_for_pw, "password": cur_pw})
-            # Ensure auth context is refreshed for subsequent calls
-            st.session_state.user = getattr(auth_res, "user", None) or st.session_state.user
-            st.session_state.access_token = getattr(getattr(auth_res, "session", None), "access_token", "") or st.session_state.get("access_token", "")
-            ensure_supabase_auth()
-
-            supabase.auth.update_user({"password": new_pw1})
-            st.success("Password updated successfully.")
-    except Exception as e:
-        st.error(f"Could not update password: {e}")
-
+    st.divider()
 
     # If your Supabase schema includes account_access.owner_email, you can backfill it for existing grants
     with st.expander("Admin: Fix delegated dropdown name", expanded=False):
@@ -1366,6 +1357,7 @@ def dashboard_page(active_user, view: str = "summary"):
         pass
 
 
+    _price_refresh_controls(active_user, 'Dashboard', force_leap_mid=False)
 
     # No currency selector; we show both USD and CAD in the summary + portfolio value table
     fx = float(get_usd_to_cad_rate() or 1.0)
@@ -2843,6 +2835,7 @@ def option_details_page(active_user):
     st.header("Option Details & Actions")
     
 
+    _price_refresh_controls(active_user, 'Option Details', force_leap_mid=False)
 
         # --- Top Controls ---
     # Currency toggle removed; Option Details displays values in USD.
@@ -3931,6 +3924,7 @@ def pricing_page(active_user):
     st.header("📈 Update LEAP Prices (Yahoo Mid)")
 
 
+    _price_refresh_controls(active_user, 'Update LEAP Prices', force_leap_mid=True)
 
     assets, _ = get_portfolio_data(uid)
     if assets.empty:
