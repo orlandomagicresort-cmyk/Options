@@ -1824,13 +1824,19 @@ def dashboard_page(active_user):
     try:
         hist_df = get_portfolio_history(uid)
         hist_df = normalize_columns(hist_df)
+
+        # Default empty state
+        _wk_stats_ready = False
+        win_ct = loss_ct = total_ct = 0
+        win_avg = loss_avg = 0.0
+
         if hist_df is not None and (not hist_df.empty) and "snapshot_date" in hist_df.columns and "total_equity" in hist_df.columns:
             hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
             hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
             hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
             hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
 
-            # Deposits/Withdrawals in USD for flow-normalized weekly returns
+            # Deposits/Withdrawals in USD for flow-normalized weekly returns (same logic as Weekly Snapshot page)
             tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
                 .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
             tx_df = pd.DataFrame(tx_res.data)
@@ -1867,43 +1873,50 @@ def dashboard_page(active_user):
 
                 win_ct = int(win_mask.sum())
                 loss_ct = int(loss_mask.sum())
+                total_ct = int(len(wk))
 
                 win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
                 loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
+                _wk_stats_ready = True
 
-                st.subheader("Win/Loss Weeks (Weekly Snapshots)")
-                c1, c2, c3 = st.columns([1.25, 1, 1])
+        # Render (always show the section, even if empty)
+        c1, c2, c3 = st.columns([1.35, 1, 1])
 
-                with c1:
-                    import matplotlib.pyplot as plt
-                    fig, ax = plt.subplots()
-                    ax.pie(
-                        [max(win_ct, 0), max(loss_ct, 0)],
-                        labels=["Wins", "Losses"],
-                        autopct="%1.0f%%",
-                        startangle=90,
-                    )
-                    ax.axis("equal")
-                    st.pyplot(fig, clear_figure=True)
+        with c1:
+            import matplotlib.pyplot as plt
+            fig, ax = plt.subplots()
+            # Avoid errors when no data
+            _pie_vals = [max(win_ct, 0), max(loss_ct, 0)]
+            if sum(_pie_vals) == 0:
+                _pie_vals = [1, 1]
+            ax.pie(_pie_vals, labels=["Wins", "Losses"], autopct="%1.0f%%", startangle=90)
+            ax.set_title("")  # remove default title
+            ax.axis("equal")
+            st.pyplot(fig, clear_figure=True)
 
-                def _big_stat(title: str, count: int, avg_pct: float):
-                    sign = "+" if avg_pct >= 0 else ""
-                    st.markdown(
-                        f"""
-<div style="padding-top: 10px;">
-  <div style="font-size: 56px; font-weight: 800; line-height: 1.05;">{count} {title}</div>
-  <div style="font-size: 46px; font-weight: 700; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
+        def _panel(title: str, weeks: int, avg_pct: float):
+            sign = "+" if avg_pct >= 0 else ""
+            st.markdown(
+                f"""
+<div style="padding: 6px 4px;">
+  <div style="font-size: 60px; font-weight: 900; text-decoration: underline; margin-bottom: 10px;">{title}</div>
+  <div style="font-size: 58px; font-weight: 900; line-height: 1.05;">{weeks} Weeks</div>
+  <div style="font-size: 56px; font-weight: 900; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
 </div>
 """,
-                        unsafe_allow_html=True,
-                    )
+                unsafe_allow_html=True,
+            )
 
-                with c2:
-                    _big_stat("Wins", win_ct, win_avg)
+        with c2:
+            _panel("Wins", win_ct, win_avg)
 
-                with c3:
-                    _big_stat("Losses", loss_ct, loss_avg)
+        with c3:
+            _panel("Losses", loss_ct, loss_avg)
+
+        if not _wk_stats_ready:
+            st.caption("No weekly snapshot history found yet. Create Weekly Snapshots to populate this section.")
     except Exception:
+        # Fail silently to avoid breaking dashboard
         pass
 
 
