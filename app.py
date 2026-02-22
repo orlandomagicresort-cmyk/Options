@@ -1824,7 +1824,7 @@ def dashboard_page(active_user):
     try:
         hist_df = get_portfolio_history(uid)
         hist_df = normalize_columns(hist_df)
-        if hist_df is not None and not hist_df.empty and "snapshot_date" in hist_df.columns and "total_equity" in hist_df.columns:
+        if hist_df is not None and (not hist_df.empty) and "snapshot_date" in hist_df.columns and "total_equity" in hist_df.columns:
             hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
             hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
             hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
@@ -1835,9 +1835,13 @@ def dashboard_page(active_user):
                 .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
             tx_df = pd.DataFrame(tx_res.data)
             if not tx_df.empty:
+                tx_df = normalize_columns(tx_df)
                 tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
                 tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
-                tx_df = tx_df[tx_df.get("currency") == "USD"]
+                if "currency" in tx_df.columns:
+                    tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+            else:
+                tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
 
             weekly_rows = []
             for i in range(1, len(hist_df)):
@@ -1854,38 +1858,51 @@ def dashboard_page(active_user):
                 base_capital = prev_eq + net_flow
                 weekly_profit = curr_eq - base_capital
                 weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
-
                 weekly_rows.append({"date": curr_date, "profit": weekly_profit, "ret": weekly_ret})
 
             if weekly_rows:
                 wk = pd.DataFrame(weekly_rows)
                 win_mask = wk["profit"] > 0
                 loss_mask = wk["profit"] < 0
+
                 win_ct = int(win_mask.sum())
                 loss_ct = int(loss_mask.sum())
-                total_ct = int(len(wk))
-
-                win_pct = (win_ct / total_ct) if total_ct else 0.0
-                loss_pct = (loss_ct / total_ct) if total_ct else 0.0
 
                 win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
                 loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
 
-                c1, c2, c3 = st.columns([1.2, 1, 1])
+                st.subheader("Win/Loss Weeks (Weekly Snapshots)")
+                c1, c2, c3 = st.columns([1.25, 1, 1])
+
                 with c1:
                     import matplotlib.pyplot as plt
                     fig, ax = plt.subplots()
-                    ax.pie([win_ct, loss_ct], labels=["Wins", "Losses"], autopct="%1.0f%%")
+                    ax.pie(
+                        [max(win_ct, 0), max(loss_ct, 0)],
+                        labels=["Wins", "Losses"],
+                        autopct="%1.0f%%",
+                        startangle=90,
+                    )
                     ax.axis("equal")
                     st.pyplot(fig, clear_figure=True)
 
+                def _big_stat(title: str, count: int, avg_pct: float):
+                    sign = "+" if avg_pct >= 0 else ""
+                    st.markdown(
+                        f"""
+<div style="padding-top: 10px;">
+  <div style="font-size: 56px; font-weight: 800; line-height: 1.05;">{count} {title}</div>
+  <div style="font-size: 46px; font-weight: 700; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
+</div>
+""",
+                        unsafe_allow_html=True,
+                    )
+
                 with c2:
-                    st.metric("Win weeks", f"{win_ct} / {total_ct}", f"{win_pct*100:,.1f}%")
-                    st.metric("Avg weekly % (wins)", f"{win_avg*100:,.2f}%")
+                    _big_stat("Wins", win_ct, win_avg)
 
                 with c3:
-                    st.metric("Loss weeks", f"{loss_ct} / {total_ct}", f"{loss_pct*100:,.1f}%")
-                    st.metric("Avg weekly % (losses)", f"{loss_avg*100:,.2f}%")
+                    _big_stat("Losses", loss_ct, loss_avg)
     except Exception:
         pass
 
