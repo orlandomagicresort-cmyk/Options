@@ -1821,103 +1821,129 @@ def dashboard_page(active_user):
     st.markdown(summ_html, unsafe_allow_html=True)
 
     # --- Win/Loss Weeks (from Weekly Snapshots) ---
+    # Always render the section; compute stats best-effort.
+    win_ct = 0
+    loss_ct = 0
+    total_ct = 0
+    win_avg = 0.0
+    loss_avg = 0.0
+    _wk_stats_note = None
+
     try:
         hist_df = get_portfolio_history(uid)
         hist_df = normalize_columns(hist_df)
 
-        # Default empty state
-        _wk_stats_ready = False
-        win_ct = loss_ct = total_ct = 0
-        win_avg = loss_avg = 0.0
-
-        if hist_df is not None and (not hist_df.empty) and "snapshot_date" in hist_df.columns and "total_equity" in hist_df.columns:
+        if hist_df is None or hist_df.empty:
+            _wk_stats_note = "No weekly snapshot history found yet. Create Weekly Snapshots to populate this section."
+        elif "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+            _wk_stats_note = "Weekly snapshot data is missing required fields."
+        else:
             hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
             hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
             hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
             hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
 
-            # Deposits/Withdrawals in USD for flow-normalized weekly returns (same logic as Weekly Snapshot page)
-            tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
-                .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
-            tx_df = pd.DataFrame(tx_res.data)
-            if not tx_df.empty:
-                tx_df = normalize_columns(tx_df)
-                tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
-                tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
-                if "currency" in tx_df.columns:
-                    tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+            if len(hist_df) < 2:
+                _wk_stats_note = "Need at least 2 Weekly Snapshots to calculate win/loss weeks."
             else:
-                tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
-
-            weekly_rows = []
-            for i in range(1, len(hist_df)):
-                prev_date = hist_df.iloc[i-1]["snapshot_date"]
-                prev_eq = float(hist_df.iloc[i-1]["total_equity"] or 0.0)
-                curr_date = hist_df.iloc[i]["snapshot_date"]
-                curr_eq = float(hist_df.iloc[i]["total_equity"] or 0.0)
-
-                net_flow = 0.0
+                # Deposits/Withdrawals in USD for flow-normalized weekly returns (same logic as Weekly Snapshot page)
+                tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+                    .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                tx_df = pd.DataFrame(tx_res.data)
                 if not tx_df.empty:
-                    mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
-                    net_flow = float(tx_df.loc[mask, "amount"].sum())
+                    tx_df = normalize_columns(tx_df)
+                    tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+                    tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
+                    if "currency" in tx_df.columns:
+                        tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+                else:
+                    tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
 
-                base_capital = prev_eq + net_flow
-                weekly_profit = curr_eq - base_capital
-                weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
-                weekly_rows.append({"date": curr_date, "profit": weekly_profit, "ret": weekly_ret})
+                weekly_rows = []
+                for i in range(1, len(hist_df)):
+                    prev_date = hist_df.iloc[i-1]["snapshot_date"]
+                    prev_eq = float(hist_df.iloc[i-1]["total_equity"] or 0.0)
+                    curr_date = hist_df.iloc[i]["snapshot_date"]
+                    curr_eq = float(hist_df.iloc[i]["total_equity"] or 0.0)
 
-            if weekly_rows:
-                wk = pd.DataFrame(weekly_rows)
-                win_mask = wk["profit"] > 0
-                loss_mask = wk["profit"] < 0
+                    net_flow = 0.0
+                    if not tx_df.empty:
+                        mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
+                        net_flow = float(tx_df.loc[mask, "amount"].sum())
 
-                win_ct = int(win_mask.sum())
-                loss_ct = int(loss_mask.sum())
-                total_ct = int(len(wk))
+                    base_capital = prev_eq + net_flow
+                    weekly_profit = curr_eq - base_capital
+                    weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
+                    weekly_rows.append({"date": curr_date, "profit": weekly_profit, "ret": weekly_ret})
 
-                win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
-                loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
-                _wk_stats_ready = True
+                if not weekly_rows:
+                    _wk_stats_note = "No weekly snapshot rows found to compute win/loss."
+                else:
+                    wk = pd.DataFrame(weekly_rows)
+                    win_mask = wk["profit"] > 0
+                    loss_mask = wk["profit"] < 0
 
-        # Render (always show the section, even if empty)
-        c1, c2, c3 = st.columns([1.35, 1, 1])
+                    win_ct = int(win_mask.sum())
+                    loss_ct = int(loss_mask.sum())
+                    total_ct = int(len(wk))
 
-        with c1:
-            import matplotlib.pyplot as plt
-            fig, ax = plt.subplots()
-            # Avoid errors when no data
-            _pie_vals = [max(win_ct, 0), max(loss_ct, 0)]
-            if sum(_pie_vals) == 0:
-                _pie_vals = [1, 1]
-            ax.pie(_pie_vals, labels=["Wins", "Losses"], autopct="%1.0f%%", startangle=90)
-            ax.set_title("")  # remove default title
-            ax.axis("equal")
-            st.pyplot(fig, clear_figure=True)
+                    win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
+                    loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
+    except Exception:
+        _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
-        def _panel(title: str, weeks: int, avg_pct: float):
-            sign = "+" if avg_pct >= 0 else ""
-            st.markdown(
-                f"""
+    # Render (format matches the provided mock)
+    st.subheader("Win/Loss Weeks")
+    c1, c2, c3 = st.columns([1.35, 1, 1])
+
+    with c1:
+        import matplotlib.pyplot as plt
+        fig, ax = plt.subplots()
+
+        vals = [max(win_ct, 0), max(loss_ct, 0)]
+        labels = ["Wins", "Losses"]
+        # Avoid empty pie; keep proportions neutral if no data
+        if sum(vals) == 0:
+            vals = [1, 1]
+
+        _idx = {"i": 0}
+        def _autopct(pct):
+            i = _idx["i"]
+            _idx["i"] += 1
+            lab = labels[i] if i < len(labels) else ""
+            return f"{pct:.0f}% {lab}"
+
+        ax.pie(
+            vals,
+            autopct=_autopct,
+            startangle=90,
+            textprops={"fontsize": 14, "fontweight": "bold"},
+        )
+        ax.axis("equal")
+        st.pyplot(fig, clear_figure=True)
+
+    def _panel(title: str, weeks: int, avg_pct: float):
+        sign = "+" if avg_pct >= 0 else ""
+        st.markdown(
+            f"""
 <div style="padding: 6px 4px;">
-  <div style="font-size: 60px; font-weight: 900; text-decoration: underline; margin-bottom: 10px;">{title}</div>
-  <div style="font-size: 58px; font-weight: 900; line-height: 1.05;">{weeks} Weeks</div>
-  <div style="font-size: 56px; font-weight: 900; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
+  <div style="font-size: 64px; font-weight: 900; text-decoration: underline; margin-bottom: 12px;">{title}</div>
+  <div style="font-size: 60px; font-weight: 900; line-height: 1.05;">{weeks} Weeks</div>
+  <div style="font-size: 58px; font-weight: 900; line-height: 1.05;">{sign}{avg_pct*100:.1f}%</div>
 </div>
 """,
-                unsafe_allow_html=True,
-            )
+            unsafe_allow_html=True,
+        )
 
-        with c2:
-            _panel("Wins", win_ct, win_avg)
+    with c2:
+        _panel("Wins", win_ct, win_avg)
 
-        with c3:
-            _panel("Losses", loss_ct, loss_avg)
+    with c3:
+        _panel("Losses", loss_ct, loss_avg)
 
-        if not _wk_stats_ready:
-            st.caption("No weekly snapshot history found yet. Create Weekly Snapshots to populate this section.")
-    except Exception:
-        # Fail silently to avoid breaking dashboard
-        pass
+    if _wk_stats_note:
+        st.caption(_wk_stats_note)
+
 
 
     # --------------------------------------------------------------------------------
