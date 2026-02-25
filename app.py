@@ -4383,6 +4383,40 @@ def ledger_page(active_user):
                     candidates = [r for r in _asset_candidates_for_ticker(user_id, ticker) if str(r.get('type','')).upper().strip() == 'STOCK']
 
                 if not candidates:
+                    # If the asset row was fully closed/deleted at the time of the SELL,
+                    # we won't find a candidate to restore. In that case, recreate a minimal
+                    # asset row so the subsequent BUY rollback can remove it (net to zero).
+                    if action == "SELL":
+                        try:
+                            payload = {
+                                "user_id": user_id,
+                                "ticker": ticker,
+                                "symbol": ticker,
+                                "type": asset_type,
+                                "quantity": float(qty),
+                                "cost_basis": 0.0,
+                            }
+                            if exp_iso:
+                                payload["expiration"] = exp_iso
+                                payload["expiration_date"] = exp_iso
+                            if strike is not None:
+                                payload["strike_price"] = float(strike)
+
+                            # Best-effort cost basis from description "@ $X.XX" (for LEAP assume multiplier 100)
+                            try:
+                                m_price = re.search(r"@\s*\$(\d+(?:\.\d+)?)", desc)
+                                price = float(m_price.group(1)) if m_price else None
+                                m_fees = re.search(r"\(Fees:\s*\$(\d+(?:\.\d+)?)\)", desc, flags=re.I)
+                                fees = float(m_fees.group(1)) if m_fees else 0.0
+                                if price is not None:
+                                    mult = 100.0 if ("LEAP" in asset_type or "LONG" in asset_type) else 1.0
+                                    payload["cost_basis"] = float(price) + (fees / max(float(qty) * mult, 1.0))
+                            except Exception:
+                                pass
+
+                            supabase.table("assets").insert(payload).execute()
+                        except Exception:
+                            pass
                     return
 
                 # If multiple candidates, pick the one with the largest quantity
