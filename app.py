@@ -4106,16 +4106,40 @@ def pricing_page(active_user):
         return [""] * len(row)
 
     styled_show = show.style.apply(_highlight_updated_rows, axis=1)
-    # Display formatting
+
+    # --- Display formatting (robust to blanks / strings) ---
+    # Pandas Styler can raise a TypeError when a column contains mixed types (e.g., numbers + ""/None).
+    # Coerce to numeric where it makes sense, then apply safe formatter functions.
+    for _col in ["Strike", "DB Price", "Yahoo Mid", "Lead Price (New)"]:
+        if _col in show.columns:
+            show[_col] = pd.to_numeric(show[_col], errors="coerce")
+
+    def _fmt_currency_2(x):
+        try:
+            if x is None or pd.isna(x):
+                return ""
+            return f"${float(x):,.2f}"
+        except Exception:
+            return "" if x is None else str(x)
+
+    def _fmt_num_3(x):
+        try:
+            if x is None or pd.isna(x):
+                return ""
+            return f"{float(x):,.3f}"
+        except Exception:
+            return "" if x is None else str(x)
+
     try:
-        styled_show = styled_show.format({
-            "Strike": "${:,.2f}",
-            "DB Price": "{:,.3f}",
-            "Yahoo Mid": "{:,.3f}",
-            "Lead Price (New)": "{:,.3f}",
+        styled_show = show.style.apply(_highlight_updated_rows, axis=1).format({
+            "Strike": _fmt_currency_2,
+            "DB Price": _fmt_num_3,
+            "Yahoo Mid": _fmt_num_3,
+            "Lead Price (New)": _fmt_num_3,
         })
     except Exception:
-        pass
+        # Fallback: still render without formatting if Styler formatting fails for any reason
+        styled_show = show.style.apply(_highlight_updated_rows, axis=1)
 
     try:
         styled_show = styled_show.hide(axis="columns", subset=["_updated"])
