@@ -2492,9 +2492,6 @@ def dashboard_page(active_user, view: str = "summary"):
     else:
         st.info("No Long Option Holdings.")
 
-    # Long option actions
-    _render_long_option_actions(active_user, leaps_df)
-
     # --- Short Options (Consolidated, USD) ---
     st.subheader("Short Options by Ticker (USD)")
     if grouped_options:
@@ -2880,546 +2877,6 @@ def dashboard_page(active_user, view: str = "summary"):
     except Exception as e:
         st.warning(f"P/L by Ticker unavailable: {e}")
 
-
-def _render_long_option_actions(active_user, leaps_df):
-    """Long option actions in Option Details."""
-    # --- Manage Long Options (LEAP) ---
-    if not leaps_df.empty:
-        # Build selector options for individual LEAP contracts
-        selector_options_long = {}
-        for _, r in leaps_df.iterrows():
-            sym = str(r.get('symbol', r.get('ticker', 'UNK'))).upper().strip()
-            exp = _iso_date(r.get('expiration', r.get('expiration_date', '')))
-            strike = float(r.get('strike_price', r.get('strike', 0)) or 0)
-            qty = int(float(r.get('quantity', 0) or 0))
-            a_type = str(r.get('type_norm', r.get('type', 'LEAP_CALL'))).upper().strip()
-            disp_type = a_type.replace("LEAP_", "").replace("LEAP", "").strip()
-            s_date = format_date_custom(exp)
-            label = f"{sym} {disp_type} ${strike:,.2f} ({s_date}) [Qty: {qty}]"
-            selector_options_long[label] = {
-                "symbol": sym,
-                "asset_type": a_type if a_type else "LEAP_CALL",
-                "expiration": exp,
-                "strike": strike,
-                "qty": qty
-            }
-    
-        with st.expander("⚡ Manage Long Contracts", expanded=False):
-            c_sel, c_act, c_btn = st.columns([3, 2, 1])
-            with c_sel:
-                selected_long = st.selectbox(
-                    "Select Long Contract to Manage",
-                    options=list(selector_options_long.keys()),
-                    key="long_man_sel"
-                )
-    
-            if selected_long:
-                sel = selector_options_long[selected_long]
-                total_avail = int(sel["qty"])
-    
-                with c_act:
-                    long_action = st.radio(
-                        "Action",
-                        ["Assign (Stock Trade)", "Expire (Close @ $0)", "Roll (Close & New)", "Buy-To-Close (Close Long)"],
-                        label_visibility="collapsed",
-                        key="long_action_choice"
-                    )
-    
-                qty_to_process = total_avail
-    
-                # Defaults
-                close_date = date.today()
-                close_price = 0.0
-                close_fees = 0.0
-    
-                if "Buy-To-Close" in long_action:
-                    st.markdown("---")
-                    st.caption("🧾 **Close Long Details**: Close the selected long option position.")
-                    b0, b1, b2, b3 = st.columns([1, 1, 1, 1])
-                    with b0:
-                        qty_to_process = st.number_input(
-                            "Contracts to Close",
-                            min_value=1,
-                            max_value=total_avail,
-                            value=total_avail,
-                            step=1,
-                            key=f"ltc_qty_{sel['symbol']}_{sel['asset_type']}_{sel['expiration']}_{sel['strike']}"
-                        )
-                    with b1:
-                        close_date = st.date_input(
-                            "Transaction Date",
-                            value=date.today(),
-                            key=f"ltc_date_{sel['symbol']}_{sel['asset_type']}_{sel['expiration']}_{sel['strike']}"
-                        )
-                    with b2:
-                        close_price = st.number_input(
-                            "Price to Close ($)",
-                            min_value=0.0,
-                            format="%.2f",
-                            step=0.01,
-                            key=f"ltc_price_{sel['symbol']}_{sel['asset_type']}_{sel['expiration']}_{sel['strike']}"
-                        )
-                    with b3:
-                        close_fees = st.number_input(
-                            "Fees ($)",
-                            min_value=0.0,
-                            format="%.2f",
-                            step=0.01,
-                            key=f"ltc_fees_{sel['symbol']}_{sel['asset_type']}_{sel['expiration']}_{sel['strike']}"
-                        )
-    
-                    calc_cash = float(close_price) * int(qty_to_process) * 100.0 - float(close_fees)
-                    st.write(f"**Net Cash Effect:** ${calc_cash:+,.2f}")
-    
-                if "Roll" in long_action:
-                    st.markdown("---")
-                    st.caption("🔄 **Roll Details**: Close the current long and open a new long contract.")
-                    roll_key = f"lroll_{sel['symbol']}_{sel['asset_type']}_{sel['expiration']}_{sel['strike']}"
-                    qty_to_process = st.number_input(
-                        "Contracts to Roll",
-                        min_value=1,
-                        max_value=total_avail,
-                        value=total_avail,
-                        step=1,
-                        key=f"{roll_key}_qty"
-                    )
-                    roll_date = st.date_input(
-                        "Roll Transaction Date",
-                        value=date.today(),
-                        key=f"{roll_key}_date"
-                    )
-    
-                    st.markdown("#### Step 1 — Close current long")
-                    r1, r2 = st.columns(2)
-                    with r1:
-                        roll_close_price = st.number_input(
-                            "Close Price ($)",
-                            min_value=0.0,
-                            format="%.2f",
-                            step=0.01,
-                            key=f"{roll_key}_close_price"
-                        )
-                    with r2:
-                        roll_close_fees = st.number_input(
-                            "Close Fees ($)",
-                            min_value=0.0,
-                            format="%.2f",
-                            step=0.01,
-                            key=f"{roll_key}_close_fees"
-                        )
-    
-                    st.markdown("#### Step 2 — Open new long")
-                    n1, n2, n3 = st.columns(3)
-                    with n1:
-                        new_strike = st.number_input(
-                            "New Strike ($)",
-                            value=float(sel["strike"]),
-                            format="%.2f",
-                            key=f"{roll_key}_new_strike"
-                        )
-                    with n2:
-                        def_date = _next_friday_local(date.today())
-                        new_exp = st.date_input(
-                            "New Expiration Date",
-                            value=def_date,
-                            key=f"{roll_key}_new_exp"
-                        )
-                    with n3:
-                        new_premium = st.number_input(
-                            "New Purchase Price ($)",
-                            min_value=0.0,
-                            format="%.2f",
-                            step=0.01,
-                            key=f"{roll_key}_new_price"
-                        )
-    
-                    new_fees = st.number_input(
-                        "New Option Fees ($)",
-                        min_value=0.0,
-                        format="%.2f",
-                        step=0.01,
-                        key=f"{roll_key}_new_fees"
-                    )
-    
-                    net_cash = (float(roll_close_price) * int(qty_to_process) * 100.0) - float(roll_close_fees) - (float(new_premium) * int(qty_to_process) * 100.0) - float(new_fees)
-                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
-    
-                with c_btn:
-                    st.write("")
-                    st.write("")
-                    if st.button("Process Action", type="primary", use_container_width=True, key="long_process_btn"):
-                        qty_safe = int(qty_to_process)
-                        txg = uuid.uuid4().hex[:12]
-    
-                        sym = sel["symbol"]
-                        exp_iso = sel["expiration"]
-                        strike = float(sel["strike"])
-                        a_type = sel["asset_type"]
-                        opt_kind = "CALL" if "CALL" in a_type else ("PUT" if "PUT" in a_type else "")
-    
-                        # 1) ASSIGN (exercise)
-                        if "Assign" in long_action:
-                            trade_date = date.today()
-                            # Close the option @ $0 (exercise)
-                            update_asset_position(uid, sym, qty_safe, 0.0, "Sell", trade_date, a_type, expiration=exp_iso, strike=strike, fees=0.0, txg=txg)
-    
-                            total_shares = qty_safe * 100
-                            if opt_kind == "CALL":
-                                update_asset_position(uid, sym, total_shares, strike, "Buy", trade_date, "STOCK", txg=txg)
-                                st.success(f"Exercised CALL. Bought {total_shares} shares @ ${strike:,.2f}.")
-                            elif opt_kind == "PUT":
-                                update_asset_position(uid, sym, total_shares, strike, "Sell", trade_date, "STOCK", txg=txg)
-                                st.success(f"Exercised PUT. Sold {total_shares} shares @ ${strike:,.2f}.")
-                            else:
-                                st.success("Long option closed for assignment.")
-                            st.cache_data.clear()
-                            st.rerun()
-    
-                        # 2) EXPIRE
-                        elif "Expire" in long_action:
-                            trade_date = date.today()
-                            update_asset_position(uid, sym, qty_safe, 0.0, "Sell", trade_date, a_type, expiration=exp_iso, strike=strike, fees=0.0, txg=txg)
-                            st.success("Long option expired/closed @ $0.00.")
-                            st.cache_data.clear()
-                            st.rerun()
-    
-                        # 3) BUY-TO-CLOSE (close long)
-                        elif "Buy-To-Close" in long_action:
-                            update_asset_position(uid, sym, qty_safe, float(close_price), "Sell", close_date, a_type, expiration=exp_iso, strike=strike, fees=float(close_fees), txg=txg)
-                            st.success("Long option closed.")
-                            st.cache_data.clear()
-                            st.rerun()
-    
-                        # 4) ROLL
-                        elif "Roll" in long_action:
-                            # Close current
-                            update_asset_position(uid, sym, qty_safe, float(roll_close_price), "Sell", roll_date, a_type, expiration=exp_iso, strike=strike, fees=float(roll_close_fees), txg=txg)
-                            # Open new
-                            update_asset_position(uid, sym, qty_safe, float(new_premium), "Buy", roll_date, a_type, expiration=new_exp.isoformat(), strike=float(new_strike), fees=float(new_fees), txg=txg)
-                            st.success("Rolled long position.")
-                            st.cache_data.clear()
-                            st.rerun()
-    
-    
-        # --- Short Options (Consolidated) ---
-        st.subheader(f"Short Option Liabilities ({selected_currency})")
-        
-        if grouped_options:
-            final_display_list = list(grouped_options.values())
-            final_display_list.sort(key=lambda x: x['symbol'])
-            
-            opt_html = "<table class='finance-table'><thead><tr>"
-            opt_html += "<th>Ticker</th><th>Type</th><th>Exp</th><th>Strike</th><th>Qty</th><th>Current Price</th><th>Liability</th><th>Collateral</th>"
-            opt_html += "</tr></thead><tbody>"
-            
-            selector_options = {} 
-            
-            for row in final_display_list:
-                s_strike = f"${row['strike'] * rate_multiplier:,.2f}"
-                s_price = f"${row['price']:,.2f}" if row['price'] > 0 else "<span style='opacity:0.5'>0.00</span>"
-                
-                liab_raw = row['liability'] * rate_multiplier
-                s_liab = f"${liab_raw:,.2f}"
-                if liab_raw > 0:
-                    s_liab = f"<span class='liability-alert'>{s_liab}</span>"
-                
-                has_collateral = len(row['linked_assets']) > 0
-                s_collateral = "Covered" if has_collateral else "<span style='color:#e67c73'>Unsecured</span>"
-                s_date = format_date_custom(row['expiration'])
-                
-                opt_html += f"<tr><td>{row['symbol']}</td><td>{row['type']}</td><td>{s_date}</td>"
-                opt_html += f"<td>{s_strike}</td><td>{row['qty']:g}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_collateral}</td></tr>"
-                
-                label = f"{row['symbol']} {row['type']} ${row['strike']} ({s_date}) [Qty: {row['qty']:g}]"
-                selector_options[label] = row
-    
-            opt_html += "</tbody></table>"
-            st.markdown(opt_html, unsafe_allow_html=True)
-    
-            with st.expander("⚡ Manage Active Contracts", expanded=True):
-                c_sel, c_act, c_btn = st.columns([3, 2, 1])
-                with c_sel:
-                    selected_label = st.selectbox("Select Contract to Manage", options=list(selector_options.keys()), key="opt_man_sel")
-                
-                if selected_label:
-                    sel_row = selector_options[selected_label]
-                    total_avail = int(sel_row['qty'])
-                    
-                    with c_act:
-                        action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Buy-To-Close (Close Short)"], label_visibility="collapsed")
-                    
-                    # --- ACTION INPUTS ---
-                    qty_to_process = total_avail
-    
-                    # --- BUY-TO-CLOSE INPUTS ---
-                    btc_close_date = date.today()
-                    btc_close_price = 0.0
-                    btc_close_fees = 0.0
-    
-                    if "Buy-To-Close" in action_choice:
-                        st.markdown("---")
-                        st.caption("🧾 **Buy-To-Close Details**: Buy back the selected short option to close it.")
-                        b_c0, b_c1, b_c2, b_c3 = st.columns([1, 1, 1, 1])
-                        with b_c0:
-                            qty_to_process = st.number_input(
-                                "Contracts to Close",
-                                min_value=1,
-                                max_value=total_avail,
-                                value=total_avail,
-                                step=1,
-                                key=f"btc_qty_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
-                            )
-                        with b_c1:
-                            btc_close_date = st.date_input(
-                                "Transaction Date",
-                                value=date.today(),
-                                key=f"btc_date_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
-                            )
-                        with b_c2:
-                            btc_close_price = st.number_input(
-                                "Premium to Buy Back ($)",
-                                min_value=0.0,
-                                format="%.2f",
-                                step=0.01,
-                                key=f"btc_prem_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
-                            )
-                        with b_c3:
-                            btc_close_fees = st.number_input(
-                                "Fees ($)",
-                                min_value=0.0,
-                                format="%.2f",
-                                step=0.01,
-                                key=f"btc_fees_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
-                            )
-    
-                        calc_btc = float(btc_close_price) * int(qty_to_process) * 100
-                        net_cash = -calc_btc - float(btc_close_fees)
-                        st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
-    
-                    if "Roll" in action_choice:
-                        st.markdown("---")
-                        st.caption("🔄 **Roll Details**: Split into Buy-To-Close (current) and Sell-To-Open (new).")
-    
-                        roll_key = f"roll_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
-                        qty_to_process = st.number_input(
-                            "Contracts to Roll",
-                            min_value=1,
-                            max_value=total_avail,
-                            value=total_avail,
-                            step=1,
-                            key=f"{roll_key}_qty"
-                        )
-    
-                        roll_date = st.date_input(
-                            "Roll Transaction Date",
-                            value=date.today(),
-                            key=f"{roll_key}_date"
-                        )
-    
-                        st.markdown("#### Step 1 — Buy-To-Close current contract")
-                        b1, b2 = st.columns(2)
-                        with b1:
-                            btc_price = st.number_input(
-                                "BTC Price ($)",
-                                min_value=0.0,
-                                format="%.2f",
-                                step=0.01,
-                                key=f"{roll_key}_btc_price"
-                            )
-                        with b2:
-                            roll_btc_fees = st.number_input(
-                                "BTC Fees ($)",
-                                min_value=0.0,
-                                format="%.2f",
-                                step=0.01,
-                                key=f"{roll_key}_btc_fees"
-                            )
-    
-                        st.markdown("#### Step 2 — Sell-To-Open new contract")
-                        s1, s2, s3 = st.columns(3)
-                        with s1:
-                            new_strike = st.number_input(
-                                "New Strike ($)",
-                                value=float(sel_row['strike']),
-                                format="%.2f",
-                                key=f"{roll_key}_new_strike"
-                            )
-                        with s2:
-                            def_date = _next_friday_local(date.today())
-                            new_exp = st.date_input(
-                                "New Expiration Date",
-                                value=def_date,
-                                key=f"{roll_key}_new_exp"
-                            )
-                        with s3:
-                            new_premium = st.number_input(
-                                "New Premium ($)",
-                                min_value=0.0,
-                                format="%.2f",
-                                step=0.01,
-                                key=f"{roll_key}_new_prem"
-                            )
-    
-                        new_fees = st.number_input(
-                            "New Option Fees ($)",
-                            min_value=0.0,
-                            format="%.2f",
-                            step=0.01,
-                            key=f"{roll_key}_new_fees"
-                        )
-    
-                        # Cash impact (fees reduce cash)
-                        calc_btc = float(btc_price) * int(qty_to_process) * 100
-                        calc_sto = float(new_premium) * int(qty_to_process) * 100
-                        net_cash = calc_sto - calc_btc - float(roll_btc_fees) - float(new_fees)
-                        st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
-    
-                    with c_btn:
-                        st.write("")
-                        st.write("") 
-                        if st.button("Process Action", type="primary", use_container_width=True):
-                            
-                            # 1. ASSIGNMENT
-                            if "Assignment" in action_choice:
-                                # Group id for this multi-step transaction (used by Ledger)
-                                txg = uuid.uuid4().hex[:12]
-    
-                                # Mark all constituent option rows as assigned
-                                option_ids = []
-                                for item in sel_row['constituents']:
-                                    option_ids.append(str(item['id']))
-                                    supabase.table("options").update({"status": "assigned"}).eq("id", item['id']).execute()
-    
-                                trade_date = date.today()
-                                total_shares = sel_row['qty'] * 100
-    
-                                # 1) Ledger: expire the option (cash impact $0), include option ids for reliable rollback
-                                formatted_exp = format_date_custom(_iso_date(sel_row['expiration']))
-                                expire_desc = f"Expire {sel_row['type']} {sel_row['symbol']} {formatted_exp} ${float(sel_row['strike'])} (Assigned) OID:{','.join(option_ids)}"
-                                log_transaction(uid, expire_desc, 0.0, "OPTION_EXPIRE", sel_row['symbol'], trade_date, currency="USD", txg=txg)
-    
-                                # 2) Stock trade (Buy shares for PUT assignment / Sell shares for CALL assignment)
-                                if sel_row['type'] == "PUT":
-                                    update_asset_position(uid, sel_row['symbol'], total_shares, sel_row['strike'], "Buy", trade_date, "STOCK", txg=txg)
-                                    st.success(f"Assigned on PUT. Bought {total_shares} shares.")
-                                elif sel_row['type'] == "CALL":
-                                    update_asset_position(uid, sel_row['symbol'], total_shares, sel_row['strike'], "Sell", trade_date, "STOCK", txg=txg)
-                                    st.success(f"Assigned on CALL. Sold {total_shares} shares.")
-    
-                                st.cache_data.clear()
-                                st.rerun()
-                                    
-                            # 2. EXPIRE
-                            elif "Expire" in action_choice:
-                                remaining_needed = qty_to_process
-                                for item in sel_row['constituents']:
-                                    if remaining_needed <= 0: break
-                                    row_qty = int(item['qty'])
-                                    
-                                    if row_qty <= remaining_needed:
-                                        supabase.table("options").update({
-                                            "status": "expired", 
-                                            "closing_price": 0.0,
-                                            "closed_date": datetime.now().isoformat()
-                                        }).eq("id", item['id']).execute()
-                                        remaining_needed -= row_qty
-                                    else:
-                                        # SPLIT
-                                        new_rem_qty = row_qty - remaining_needed
-                                        old_prem = item.get('premium_received') or item.get('cost_basis') or 0.0
-                                        
-                                        supabase.table("options").update({"quantity": new_rem_qty, "contracts": new_rem_qty}).eq("id", item['id']).execute()
-                                        
-                                        supabase.table("options").insert({
-                                            "user_id": uid, "symbol": sel_row['symbol'], "ticker": sel_row['symbol'], "type": sel_row['type'],
-                                            "strike_price": sel_row['strike'], "expiration_date": sel_row['expiration'], "quantity": remaining_needed, "contracts": remaining_needed,
-                                            "status": "expired", "cost_basis": item['cost_basis'], "premium_received": old_prem, "open_date": item['open_date'],
-                                            "closing_price": 0.0, "closed_date": datetime.now().isoformat()
-                                        }).execute()
-                                        remaining_needed = 0
-    
-                                st.success(f"Contracts expired/cancelled at $0.00.")
-                                st.cache_data.clear()
-                                st.rerun()
-    
-                            # 3. BUY-TO-CLOSE (BTC only; writes to ledger via update_short_option_position)
-                            elif "Buy-To-Close" in action_choice:
-                                qty_safe = int(qty_to_process)
-                                txg = uuid.uuid4().hex[:12]
-    
-                                update_short_option_position(
-                                    uid,
-                                    sel_row['symbol'],
-                                    qty_safe,
-                                    float(btc_close_price),
-                                    "Buy",
-                                    btc_close_date,
-                                    sel_row['type'],
-                                    sel_row['expiration'],
-                                    float(sel_row['strike']),
-                                    fees=float(btc_close_fees),
-                                    txg=txg
-                                )
-    
-                                st.success("Buy-To-Close recorded.")
-                                st.cache_data.clear()
-                                st.rerun()
-    
-                            # 3. ROLL (BTC then STO; both write to ledger via update_short_option_position)
-                            elif "Roll" in action_choice:
-                                qty_safe = int(qty_to_process)
-    
-                                # Inherit Linked Asset (for covered calls / linked collateral)
-                                inherited_link_id = None
-                                if 'linked_assets' in sel_row and sel_row['linked_assets']:
-                                    inherited_link_id = sel_row['linked_assets'][0]
-                                if not inherited_link_id:
-                                    for c in sel_row['constituents']:
-                                        if c.get('linked_asset_id'):
-                                            inherited_link_id = c['linked_asset_id']
-                                            break
-    
-                                txg = uuid.uuid4().hex[:12]
-    
-                                # A) BTC: Buy-to-close existing contract(s)
-                                update_short_option_position(
-                                    uid,
-                                    sel_row['symbol'],
-                                    qty_safe,
-                                    float(btc_price),
-                                    "Buy",
-                                    roll_date,
-                                    sel_row['type'],
-                                    sel_row['expiration'],
-                                    float(sel_row['strike']),
-                                    fees=float(roll_btc_fees),
-                                    txg=txg
-                                )
-    
-                                # B) STO: Sell-to-open new contract
-                                update_short_option_position(
-                                    uid,
-                                    sel_row['symbol'],
-                                    qty_safe,
-                                    float(new_premium),
-                                    "Sell",
-                                    roll_date,
-                                    sel_row['type'],
-                                    new_exp,
-                                    float(new_strike),
-                                    fees=float(new_fees),
-                                    linked_asset_id_override=inherited_link_id,
-                                    txg=txg
-                                )
-    
-                                net_cash = (float(new_premium) * qty_safe * 100) - (float(btc_price) * qty_safe * 100) - float(roll_btc_fees) - float(new_fees)
-                                st.success(f"Rolled {qty_safe} contracts. Net Cash: ${net_cash:+,.2f}")
-                                st.cache_data.clear()
-                                st.rerun()
-        else:
-            st.info("No Active Short Options.")
-
-
 def option_details_page(active_user):
     uid = _active_user_id(active_user)
     st.header("Option Details & Actions")
@@ -3621,9 +3078,323 @@ def option_details_page(active_user):
         st.markdown(leap_html, unsafe_allow_html=True)
     else: st.info("No Long Option Holdings.")
 
+    # --- Short Options (Consolidated) ---
+    st.subheader(f"Short Option Liabilities ({selected_currency})")
+    
+    if grouped_options:
+        final_display_list = list(grouped_options.values())
+        final_display_list.sort(key=lambda x: x['symbol'])
+        
+        opt_html = "<table class='finance-table'><thead><tr>"
+        opt_html += "<th>Ticker</th><th>Type</th><th>Exp</th><th>Strike</th><th>Qty</th><th>Current Price</th><th>Liability</th><th>Collateral</th>"
+        opt_html += "</tr></thead><tbody>"
+        
+        selector_options = {} 
+        
+        for row in final_display_list:
+            s_strike = f"${row['strike'] * rate_multiplier:,.2f}"
+            s_price = f"${row['price']:,.2f}" if row['price'] > 0 else "<span style='opacity:0.5'>0.00</span>"
+            
+            liab_raw = row['liability'] * rate_multiplier
+            s_liab = f"${liab_raw:,.2f}"
+            if liab_raw > 0:
+                s_liab = f"<span class='liability-alert'>{s_liab}</span>"
+            
+            has_collateral = len(row['linked_assets']) > 0
+            s_collateral = "Covered" if has_collateral else "<span style='color:#e67c73'>Unsecured</span>"
+            s_date = format_date_custom(row['expiration'])
+            
+            opt_html += f"<tr><td>{row['symbol']}</td><td>{row['type']}</td><td>{s_date}</td>"
+            opt_html += f"<td>{s_strike}</td><td>{row['qty']:g}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_collateral}</td></tr>"
+            
+            label = f"{row['symbol']} {row['type']} ${row['strike']} ({s_date}) [Qty: {row['qty']:g}]"
+            selector_options[label] = row
 
+        opt_html += "</tbody></table>"
+        st.markdown(opt_html, unsafe_allow_html=True)
 
+        with st.expander("⚡ Manage Active Contracts", expanded=True):
+            c_sel, c_act, c_btn = st.columns([3, 2, 1])
+            with c_sel:
+                selected_label = st.selectbox("Select Contract to Manage", options=list(selector_options.keys()), key="opt_man_sel")
+            
+            if selected_label:
+                sel_row = selector_options[selected_label]
+                total_avail = int(sel_row['qty'])
+                
+                with c_act:
+                    action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Buy-To-Close (Close Short)"], label_visibility="collapsed")
+                
+                # --- ACTION INPUTS ---
+                qty_to_process = total_avail
 
+                # --- BUY-TO-CLOSE INPUTS ---
+                btc_close_date = date.today()
+                btc_close_price = 0.0
+                btc_close_fees = 0.0
+
+                if "Buy-To-Close" in action_choice:
+                    st.markdown("---")
+                    st.caption("🧾 **Buy-To-Close Details**: Buy back the selected short option to close it.")
+                    b_c0, b_c1, b_c2, b_c3 = st.columns([1, 1, 1, 1])
+                    with b_c0:
+                        qty_to_process = st.number_input(
+                            "Contracts to Close",
+                            min_value=1,
+                            max_value=total_avail,
+                            value=total_avail,
+                            step=1,
+                            key=f"btc_qty_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+                    with b_c1:
+                        btc_close_date = st.date_input(
+                            "Transaction Date",
+                            value=date.today(),
+                            key=f"btc_date_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+                    with b_c2:
+                        btc_close_price = st.number_input(
+                            "Premium to Buy Back ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"btc_prem_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+                    with b_c3:
+                        btc_close_fees = st.number_input(
+                            "Fees ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"btc_fees_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                        )
+
+                    calc_btc = float(btc_close_price) * int(qty_to_process) * 100
+                    net_cash = -calc_btc - float(btc_close_fees)
+                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+
+                if "Roll" in action_choice:
+                    st.markdown("---")
+                    st.caption("🔄 **Roll Details**: Split into Buy-To-Close (current) and Sell-To-Open (new).")
+
+                    roll_key = f"roll_{sel_row['symbol']}_{sel_row['type']}_{sel_row['expiration']}_{sel_row['strike']}"
+                    qty_to_process = st.number_input(
+                        "Contracts to Roll",
+                        min_value=1,
+                        max_value=total_avail,
+                        value=total_avail,
+                        step=1,
+                        key=f"{roll_key}_qty"
+                    )
+
+                    roll_date = st.date_input(
+                        "Roll Transaction Date",
+                        value=date.today(),
+                        key=f"{roll_key}_date"
+                    )
+
+                    st.markdown("#### Step 1 — Buy-To-Close current contract")
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        btc_price = st.number_input(
+                            "BTC Price ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_btc_price"
+                        )
+                    with b2:
+                        roll_btc_fees = st.number_input(
+                            "BTC Fees ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_btc_fees"
+                        )
+
+                    st.markdown("#### Step 2 — Sell-To-Open new contract")
+                    s1, s2, s3 = st.columns(3)
+                    with s1:
+                        new_strike = st.number_input(
+                            "New Strike ($)",
+                            value=float(sel_row['strike']),
+                            format="%.2f",
+                            key=f"{roll_key}_new_strike"
+                        )
+                    with s2:
+                        def_date = _next_friday_local(date.today())
+                        new_exp = st.date_input(
+                            "New Expiration Date",
+                            value=def_date,
+                            key=f"{roll_key}_new_exp"
+                        )
+                    with s3:
+                        new_premium = st.number_input(
+                            "New Premium ($)",
+                            min_value=0.0,
+                            format="%.2f",
+                            step=0.01,
+                            key=f"{roll_key}_new_prem"
+                        )
+
+                    new_fees = st.number_input(
+                        "New Option Fees ($)",
+                        min_value=0.0,
+                        format="%.2f",
+                        step=0.01,
+                        key=f"{roll_key}_new_fees"
+                    )
+
+                    # Cash impact (fees reduce cash)
+                    calc_btc = float(btc_price) * int(qty_to_process) * 100
+                    calc_sto = float(new_premium) * int(qty_to_process) * 100
+                    net_cash = calc_sto - calc_btc - float(roll_btc_fees) - float(new_fees)
+                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+
+                with c_btn:
+                    st.write("")
+                    st.write("") 
+                    if st.button("Process Action", type="primary", use_container_width=True):
+                        
+                        # 1. ASSIGNMENT
+                        if "Assignment" in action_choice:
+                            # Group id for this multi-step transaction (used by Ledger)
+                            txg = uuid.uuid4().hex[:12]
+
+                            # Mark all constituent option rows as assigned
+                            option_ids = []
+                            for item in sel_row['constituents']:
+                                option_ids.append(str(item['id']))
+                                supabase.table("options").update({"status": "assigned"}).eq("id", item['id']).execute()
+
+                            trade_date = date.today()
+                            total_shares = sel_row['qty'] * 100
+
+                            # 1) Ledger: expire the option (cash impact $0), include option ids for reliable rollback
+                            formatted_exp = format_date_custom(_iso_date(sel_row['expiration']))
+                            expire_desc = f"Expire {sel_row['type']} {sel_row['symbol']} {formatted_exp} ${float(sel_row['strike'])} (Assigned) OID:{','.join(option_ids)}"
+                            log_transaction(uid, expire_desc, 0.0, "OPTION_EXPIRE", sel_row['symbol'], trade_date, currency="USD", txg=txg)
+
+                            # 2) Stock trade (Buy shares for PUT assignment / Sell shares for CALL assignment)
+                            if sel_row['type'] == "PUT":
+                                update_asset_position(uid, sel_row['symbol'], total_shares, sel_row['strike'], "Buy", trade_date, "STOCK", txg=txg)
+                                st.success(f"Assigned on PUT. Bought {total_shares} shares.")
+                            elif sel_row['type'] == "CALL":
+                                update_asset_position(uid, sel_row['symbol'], total_shares, sel_row['strike'], "Sell", trade_date, "STOCK", txg=txg)
+                                st.success(f"Assigned on CALL. Sold {total_shares} shares.")
+
+                            st.cache_data.clear()
+                            st.rerun()
+                                
+                        # 2. EXPIRE
+                        elif "Expire" in action_choice:
+                            remaining_needed = qty_to_process
+                            for item in sel_row['constituents']:
+                                if remaining_needed <= 0: break
+                                row_qty = int(item['qty'])
+                                
+                                if row_qty <= remaining_needed:
+                                    supabase.table("options").update({
+                                        "status": "expired", 
+                                        "closing_price": 0.0,
+                                        "closed_date": datetime.now().isoformat()
+                                    }).eq("id", item['id']).execute()
+                                    remaining_needed -= row_qty
+                                else:
+                                    # SPLIT
+                                    new_rem_qty = row_qty - remaining_needed
+                                    old_prem = item.get('premium_received') or item.get('cost_basis') or 0.0
+                                    
+                                    supabase.table("options").update({"quantity": new_rem_qty, "contracts": new_rem_qty}).eq("id", item['id']).execute()
+                                    
+                                    supabase.table("options").insert({
+                                        "user_id": uid, "symbol": sel_row['symbol'], "ticker": sel_row['symbol'], "type": sel_row['type'],
+                                        "strike_price": sel_row['strike'], "expiration_date": sel_row['expiration'], "quantity": remaining_needed, "contracts": remaining_needed,
+                                        "status": "expired", "cost_basis": item['cost_basis'], "premium_received": old_prem, "open_date": item['open_date'],
+                                        "closing_price": 0.0, "closed_date": datetime.now().isoformat()
+                                    }).execute()
+                                    remaining_needed = 0
+
+                            st.success(f"Contracts expired/cancelled at $0.00.")
+                            st.cache_data.clear()
+                            st.rerun()
+
+                        # 3. BUY-TO-CLOSE (BTC only; writes to ledger via update_short_option_position)
+                        elif "Buy-To-Close" in action_choice:
+                            qty_safe = int(qty_to_process)
+                            txg = uuid.uuid4().hex[:12]
+
+                            update_short_option_position(
+                                uid,
+                                sel_row['symbol'],
+                                qty_safe,
+                                float(btc_close_price),
+                                "Buy",
+                                btc_close_date,
+                                sel_row['type'],
+                                sel_row['expiration'],
+                                float(sel_row['strike']),
+                                fees=float(btc_close_fees),
+                                txg=txg
+                            )
+
+                            st.success("Buy-To-Close recorded.")
+                            st.cache_data.clear()
+                            st.rerun()
+
+                        # 3. ROLL (BTC then STO; both write to ledger via update_short_option_position)
+                        elif "Roll" in action_choice:
+                            qty_safe = int(qty_to_process)
+
+                            # Inherit Linked Asset (for covered calls / linked collateral)
+                            inherited_link_id = None
+                            if 'linked_assets' in sel_row and sel_row['linked_assets']:
+                                inherited_link_id = sel_row['linked_assets'][0]
+                            if not inherited_link_id:
+                                for c in sel_row['constituents']:
+                                    if c.get('linked_asset_id'):
+                                        inherited_link_id = c['linked_asset_id']
+                                        break
+
+                            txg = uuid.uuid4().hex[:12]
+
+                            # A) BTC: Buy-to-close existing contract(s)
+                            update_short_option_position(
+                                uid,
+                                sel_row['symbol'],
+                                qty_safe,
+                                float(btc_price),
+                                "Buy",
+                                roll_date,
+                                sel_row['type'],
+                                sel_row['expiration'],
+                                float(sel_row['strike']),
+                                fees=float(roll_btc_fees),
+                                txg=txg
+                            )
+
+                            # B) STO: Sell-to-open new contract
+                            update_short_option_position(
+                                uid,
+                                sel_row['symbol'],
+                                qty_safe,
+                                float(new_premium),
+                                "Sell",
+                                roll_date,
+                                sel_row['type'],
+                                new_exp,
+                                float(new_strike),
+                                fees=float(new_fees),
+                                linked_asset_id_override=inherited_link_id,
+                                txg=txg
+                            )
+
+                            net_cash = (float(new_premium) * qty_safe * 100) - (float(btc_price) * qty_safe * 100) - float(roll_btc_fees) - float(new_fees)
+                            st.success(f"Rolled {qty_safe} contracts. Net Cash: ${net_cash:+,.2f}")
+                            st.cache_data.clear()
+                            st.rerun()
+    else:
+        st.info("No Active Short Options.")
 
 def snapshot_page(user):
     st.header("📸 Weekly Snapshot & History")
