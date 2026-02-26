@@ -3440,9 +3440,10 @@ def option_details_page(active_user):
                     asset_type = f"LEAP {opt_t}".strip()
 
                 with c_act:
-                    long_action = st.radio(
+                    long_action = st.selectbox(
                         "Action",
-                        ["Exercise (Assign Equivalent)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
+                        ["Select action…", "Exercise (Assign Equivalent)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
+                        index=0,
                         key="long_opt_action",
                         label_visibility="collapsed"
                     )
@@ -3528,8 +3529,11 @@ def option_details_page(active_user):
                         new_open_price = st.number_input("Buy Price", min_value=0.0, value=0.0, step=0.01, key="lroll_opx")
                     new_open_fees = st.number_input("Open Fees (Buy)", min_value=0.0, value=0.0, step=0.01, key="lroll_ofee")
                 # --- Execute ---
-                needs_confirm = ('Exercise' in long_action) or ('Expire' in long_action)
-                confirm_ok = True
+                action_ready = long_action != "Select action…"
+                needs_confirm = action_ready and (('Exercise' in long_action) or ('Expire' in long_action))
+                confirm_ok = action_ready
+                if not action_ready:
+                    st.caption("Select an action to continue.")
                 if needs_confirm:
                     confirm_ok = st.checkbox('I understand this will update holdings and cannot be undone.', key='long_confirm')
 
