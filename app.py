@@ -3442,98 +3442,153 @@ def option_details_page(active_user):
                 with c_act:
                     long_action = st.radio(
                         "Action",
-                        ["Select action…", "Exercise (Assign Equivalent)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
-                        index=0,
+                        ["Exercise (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
+                        label_visibility="collapsed",
                         key="long_opt_action",
-                        label_visibility="collapsed"
                     )
 
-                qty_to_process = qty_avail
+                # Defaults (match short section behavior: no extra "bottom fold" for Exercise/Expire)
+                qty_to_process = int(qty_avail)
                 close_date = date.today()
-                close_price = 0.0
+                close_price = float(lr.get('current_price', 0) or 0.0)
                 close_fees = 0.0
+                ex_date = date.today()
 
+                # --- ACTION INPUTS (only for actions that need them) ---
                 if "Sell-To-Close" in long_action:
                     st.markdown("---")
                     st.caption("🧾 **Sell-To-Close Details**: Sell the selected long option to close it.")
-                    cc0, cc1, cc2, cc3 = st.columns([1,1,1,1])
+                    cc0, cc1, cc2, cc3 = st.columns([1, 1, 1, 1])
                     with cc0:
-                        qty_to_process = st.number_input("Contracts to Close", min_value=0.0, max_value=float(qty_avail), value=float(qty_avail), step=1.0, key="ltc_qty")
+                        qty_to_process = st.number_input(
+                            "Contracts to Close",
+                            min_value=1,
+                            max_value=int(qty_avail),
+                            value=int(qty_avail),
+                            step=1,
+                            key=f"ltc_qty_{sym}_{opt_t}_{exp_iso}_{strike}",
+                        )
                     with cc1:
-                        close_date = st.date_input("Close Date", value=date.today(), key="ltc_dt")
+                        close_date = st.date_input(
+                            "Transaction Date",
+                            value=date.today(),
+                            key=f"ltc_dt_{sym}_{opt_t}_{exp_iso}_{strike}",
+                        )
                     with cc2:
-                        close_price = st.number_input("Sell Price", min_value=0.0, value=float(lr.get('current_price',0) or 0.0), step=0.01, key="ltc_px")
+                        close_price = st.number_input(
+                            "Sell Price ($)",
+                            min_value=0.0,
+                            value=float(lr.get("current_price", 0) or 0.0),
+                            step=0.01,
+                            format="%.2f",
+                            key=f"ltc_px_{sym}_{opt_t}_{exp_iso}_{strike}",
+                        )
                     with cc3:
-                        close_fees = st.number_input("Fees", min_value=0.0, value=0.0, step=0.01, key="ltc_fee")
-
-                if "Expire" in long_action:
-                    st.markdown("---")
-                    st.caption("⏳ **Expire Details**: Close the selected long option at $0.")
-                    ec0, ec1 = st.columns([1,1])
-                    with ec0:
-                        qty_to_process = st.number_input("Contracts to Expire", min_value=0.0, max_value=float(qty_avail), value=float(qty_avail), step=1.0, key="lexp_qty")
-                    with ec1:
-                        close_date = st.date_input("Expiry Close Date", value=date.today(), key="lexp_dt")
-                    close_price = 0.0
-                    close_fees = 0.0
-
-                # Exercise (assignment equivalent)
-                ex_date = date.today()
-                ex_fees = 0.0
-                if "Exercise" in long_action:
-                    st.markdown("---")
-                    st.caption("📌 **Exercise Details**: Exercise the long option. This will remove the option position and create the corresponding stock trade at the strike price.")
-                    ex0, ex1, ex2 = st.columns([1,1,1])
-                    with ex0:
-                        qty_to_process = st.number_input("Contracts to Exercise", min_value=0.0, max_value=float(qty_avail), value=float(qty_avail), step=1.0, key="lex_qty")
-                    with ex1:
-                        ex_date = st.date_input("Exercise Date", value=date.today(), key="lex_dt")
-                    with ex2:
-                        ex_fees = st.number_input("Fees (Exercise)", min_value=0.0, value=0.0, step=0.01, key="lex_fee")
-
-                # Roll
-                roll_close_date = date.today()
-                roll_close_price = 0.0
-                roll_close_fees = 0.0
-                new_open_date = date.today()
-                new_open_price = 0.0
-                new_open_fees = 0.0
-                new_exp = date.today()
-                new_strike = strike
-                new_type = opt_t if opt_t else "CALL"
+                        close_fees = st.number_input(
+                            "Fees ($)",
+                            min_value=0.0,
+                            value=0.0,
+                            step=0.01,
+                            format="%.2f",
+                            key=f"ltc_fee_{sym}_{opt_t}_{exp_iso}_{strike}",
+                        )
+                    calc_stc = float(close_price) * int(qty_to_process) * 100
+                    net_cash = calc_stc - float(close_fees)
+                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
 
                 if "Roll Position" in long_action:
                     st.markdown("---")
-                    st.caption("🔁 **Roll Details**: Sell the current long option (close) and buy a new long option (open).")
-                    r0, r1, r2, r3 = st.columns([1,1,1,1])
-                    with r0:
-                        qty_to_process = st.number_input("Contracts to Roll", min_value=0.0, max_value=float(qty_avail), value=float(qty_avail), step=1.0, key="lroll_qty")
-                    with r1:
-                        roll_close_date = st.date_input("Close Date (Sell)", value=date.today(), key="lroll_cdt")
-                    with r2:
-                        roll_close_price = st.number_input("Close Price (Sell)", min_value=0.0, value=float(lr.get('current_price',0) or 0.0), step=0.01, key="lroll_cpx")
-                    with r3:
-                        roll_close_fees = st.number_input("Close Fees", min_value=0.0, value=0.0, step=0.01, key="lroll_cfee")
+                    st.caption("🔁 **Roll Details**: Split into Sell-To-Close (current) and Buy-To-Open (new).")
+                    roll_key = f"lroll_{sym}_{opt_t}_{exp_iso}_{strike}"
+                    qty_to_process = st.number_input(
+                        "Contracts to Roll",
+                        min_value=1,
+                        max_value=int(qty_avail),
+                        value=int(qty_avail),
+                        step=1,
+                        key=f"{roll_key}_qty",
+                    )
+                    roll_close_date = st.date_input(
+                        "Roll Transaction Date",
+                        value=date.today(),
+                        key=f"{roll_key}_date",
+                    )
 
-                    st.markdown("**New Long Option (Buy)**")
-                    n0, n1, n2, n3, n4 = st.columns([1,1,1,1,1])
-                    with n0:
-                        new_open_date = st.date_input("Open Date (Buy)", value=date.today(), key="lroll_odt")
+                    st.markdown("#### Step 1 — Sell-To-Close current contract")
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        roll_close_price = st.number_input(
+                            "STC Price ($)",
+                            min_value=0.0,
+                            value=float(lr.get("current_price", 0) or 0.0),
+                            step=0.01,
+                            format="%.2f",
+                            key=f"{roll_key}_stc_price",
+                        )
+                    with b2:
+                        roll_close_fees = st.number_input(
+                            "STC Fees ($)",
+                            min_value=0.0,
+                            value=0.0,
+                            step=0.01,
+                            format="%.2f",
+                            key=f"{roll_key}_stc_fees",
+                        )
+
+                    st.markdown("#### Step 2 — Buy-To-Open new contract")
+                    n1, n2, n3, n4 = st.columns([1, 1, 1, 1])
                     with n1:
-                        new_exp = st.date_input("New Expiration", value=date.today(), key="lroll_nexp")
+                        new_strike = st.number_input(
+                            "New Strike ($)",
+                            value=float(strike),
+                            format="%.2f",
+                            key=f"{roll_key}_new_strike",
+                        )
                     with n2:
-                        new_strike = st.number_input("New Strike", min_value=0.0, value=float(strike), step=0.5, key="lroll_nstk")
+                        def_date = _next_friday_local(date.today())
+                        new_exp = st.date_input(
+                            "New Expiration Date",
+                            value=def_date,
+                            key=f"{roll_key}_new_exp",
+                        )
                     with n3:
-                        new_type = st.selectbox("New Type", ["CALL", "PUT"], index=(0 if new_type=="CALL" else 1), key="lroll_ntype")
+                        new_type = st.selectbox(
+                            "New Type",
+                            ["CALL", "PUT"],
+                            index=(0 if opt_t == "CALL" else 1),
+                            key=f"{roll_key}_new_type",
+                        )
                     with n4:
-                        new_open_price = st.number_input("Buy Price", min_value=0.0, value=0.0, step=0.01, key="lroll_opx")
-                    new_open_fees = st.number_input("Open Fees (Buy)", min_value=0.0, value=0.0, step=0.01, key="lroll_ofee")
+                        new_open_price = st.number_input(
+                            "Buy Price ($)",
+                            min_value=0.0,
+                            value=0.0,
+                            step=0.01,
+                            format="%.2f",
+                            key=f"{roll_key}_new_px",
+                        )
+                    new_open_date = st.date_input(
+                        "Open Transaction Date",
+                        value=roll_close_date,
+                        key=f"{roll_key}_new_date",
+                    )
+                    new_open_fees = st.number_input(
+                        "Open Fees ($)",
+                        min_value=0.0,
+                        value=0.0,
+                        step=0.01,
+                        format="%.2f",
+                        key=f"{roll_key}_new_fees",
+                    )
+
+                    calc_stc = float(roll_close_price) * int(qty_to_process) * 100
+                    calc_bto = float(new_open_price) * int(qty_to_process) * 100
+                    net_cash = calc_stc - calc_bto - float(roll_close_fees) - float(new_open_fees)
+                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+
                 # --- Execute ---
-                action_ready = long_action != "Select action…"
-                needs_confirm = action_ready and (('Exercise' in long_action) or ('Expire' in long_action))
-                confirm_ok = action_ready
-                if not action_ready:
-                    st.caption("Select an action to continue.")
+                needs_confirm = (('Exercise' in long_action) or ('Expire' in long_action))
+                confirm_ok = True
                 if needs_confirm:
                     confirm_ok = st.checkbox('I understand this will update holdings and cannot be undone.', key='long_confirm')
 
