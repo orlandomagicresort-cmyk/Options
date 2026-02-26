@@ -3115,7 +3115,7 @@ def option_details_page(active_user):
         opt_html += "</tbody></table>"
         st.markdown(opt_html, unsafe_allow_html=True)
 
-        with st.expander("⚡ Manage Active Contracts", expanded=True):
+        with st.expander("⚡ Manage Short Contracts", expanded=True):
             c_sel, c_act, c_btn = st.columns([3, 2, 1])
             with c_sel:
                 selected_label = st.selectbox("Select Contract to Manage", options=list(selector_options.keys()), key="opt_man_sel")
@@ -3123,6 +3123,7 @@ def option_details_page(active_user):
             if selected_label:
                 sel_row = selector_options[selected_label]
                 total_avail = int(sel_row['qty'])
+                st.caption(f"Selected: **{sel_row['symbol']}** {sel_row['type']} • Exp: **{format_date_custom(sel_row['expiration'])}** • Strike: **${float(sel_row['strike']):,.2f}** • Qty: **{total_avail:g}**")
                 
                 with c_act:
                     action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Buy-To-Close (Close Short)"], label_visibility="collapsed")
@@ -3252,11 +3253,13 @@ def option_details_page(active_user):
                     calc_sto = float(new_premium) * int(qty_to_process) * 100
                     net_cash = calc_sto - calc_btc - float(roll_btc_fees) - float(new_fees)
                     st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+                needs_confirm = ('Assignment' in action_choice) or ('Expire' in action_choice)
+                confirm_ok = True
+                if needs_confirm:
+                    confirm_ok = st.checkbox('I understand this will update holdings and cannot be undone.', key='short_confirm')
 
                 with c_btn:
-                    st.write("")
-                    st.write("") 
-                    if st.button("Process Action", type="primary", use_container_width=True):
+                    if st.button("Process Action", type="primary", use_container_width=True, key="short_opt_execute", disabled=(not confirm_ok)):
                         
                         # 1. ASSIGNMENT
                         if "Assignment" in action_choice:
@@ -3400,9 +3403,7 @@ def option_details_page(active_user):
 
 
 # --- Long Option Actions ---
-    st.markdown("")
     st.markdown("---")
-    st.subheader("Long Option Actions")
     with st.expander("⚡ Manage Long Contracts", expanded=True):
         
         if not leaps_df.empty:
@@ -3421,10 +3422,9 @@ def option_details_page(active_user):
                 if key in long_selector:
                     key = f"{key} (id {r.get('id','')})"
                 long_selector[key] = r
-
-            c0, c1 = st.columns([2, 1])
-            with c0:
-                long_sel_label = st.selectbox("Select Long Contract to Manage", options=list(long_selector.keys()), key="long_opt_man_sel")
+            c_sel, c_act, c_btn = st.columns([3, 2, 1])
+            with c_sel:
+                long_sel_label = st.selectbox("Select Contract to Manage", options=list(long_selector.keys()), key="long_opt_man_sel")
             if long_sel_label:
                 lr = long_selector[long_sel_label]
                 sym = lr.get('symbol','UNK')
@@ -3432,13 +3432,14 @@ def option_details_page(active_user):
                 exp_raw = lr.get('expiration','')
                 exp_iso = str(exp_raw) if exp_raw is not None else ""
                 qty_avail = float(lr.get('quantity',0) or 0)
+                st.caption(f"Selected: **{sym}** {opt_t or ''} • Exp: **{format_date_custom(exp_raw)}** • Strike: **${strike:,.2f}** • Qty: **{qty_avail:g}**")
                 t_raw = str(lr.get('type','') or lr.get('type_disp','') or '').upper()
                 opt_t = "CALL" if "CALL" in t_raw else ("PUT" if "PUT" in t_raw else "")
                 asset_type = lr.get('type','LEAP').upper()
                 if "LEAP" not in asset_type:
                     asset_type = f"LEAP {opt_t}".strip()
 
-                with c1:
+                with c_act:
                     long_action = st.radio(
                         "Action",
                         ["Exercise (Assign Equivalent)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
@@ -3526,11 +3527,14 @@ def option_details_page(active_user):
                     with n4:
                         new_open_price = st.number_input("Buy Price", min_value=0.0, value=0.0, step=0.01, key="lroll_opx")
                     new_open_fees = st.number_input("Open Fees (Buy)", min_value=0.0, value=0.0, step=0.01, key="lroll_ofee")
-
                 # --- Execute ---
-                exec_col0, exec_col1 = st.columns([1,3])
-                with exec_col0:
-                    do_it = st.button("Process Action", type="primary", use_container_width=True, key="long_opt_execute")
+                needs_confirm = ('Exercise' in long_action) or ('Expire' in long_action)
+                confirm_ok = True
+                if needs_confirm:
+                    confirm_ok = st.checkbox('I understand this will update holdings and cannot be undone.', key='long_confirm')
+
+                with c_btn:
+                    do_it = st.button("Process Action", type="primary", use_container_width=True, key="long_opt_execute", disabled=(not confirm_ok))
 
                 if do_it:
                     try:
