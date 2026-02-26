@@ -3440,7 +3440,7 @@ def option_details_page(active_user):
                     asset_type = f"LEAP {opt_t}".strip()
 
                 with c_act:
-                    long_action = st.selectbox(
+                    long_action = st.radio(
                         "Action",
                         ["Select action…", "Exercise (Assign Equivalent)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
                         index=0,
