@@ -426,7 +426,12 @@ def _get_accessible_accounts(user):
         pass
     return out
 
-def _set_active_account(user, ui=st):
+def _set_active_account(user, ui=st, show_label: bool = True, label: str = "Working on account"):
+    """Render account selector + set active user context.
+
+    If show_label is False, the selectbox label is collapsed so the caller can render
+    a compact inline label in a custom layout (e.g., top bar).
+    """
     """Render account selector + set active user context."""
     _ensure_user_preferences_row(user)
     _activate_pending_invites(user)
@@ -437,7 +442,8 @@ def _set_active_account(user, ui=st):
     if cur not in labels:
         cur = labels[0]
 
-    sel = ui.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
+    sel_label = label if show_label else ""
+    sel = ui.selectbox(sel_label, labels, index=labels.index(cur), key="account_selector", label_visibility=("visible" if show_label else "collapsed"))
     st.session_state["active_account_label"] = sel
     chosen = next(a for a in accts if a["label"] == sel)
 
@@ -5310,7 +5316,7 @@ def main():
         st.session_state["top_nav_page"] = "Dashboard"
 
     with st.container():
-        c_logo, c_nav = st.columns([1.1, 8.9])
+        c_logo, c_nav, c_logout = st.columns([1.1, 8.2, 0.7], gap="small")
 
         with c_logo:
             st.image("logo.png", width=120)
@@ -5359,19 +5365,25 @@ def main():
                     label_visibility="collapsed",
                 )
 
-    # Secondary row: account selector + signed-in user + logout (below main menu)
-    with st.container():
-        spacer, acct_col, user_col, logout_col = st.columns([6.0, 2.6, 1.9, 0.9], gap="small")
-        with acct_col:
-            active_user = _set_active_account(user, ui=acct_col)
-        with user_col:
-            u_email = getattr(user, "email", "")
-            st.caption(f"Signed in as **{u_email}**")
-        with logout_col:
+        with c_logout:
+            # Place logout beside the main menu (next to Settings)
             if st.button("Logout", key="logout_top", type="secondary"):
                 supabase.auth.sign_out()
                 st.session_state.user = None
                 st.rerun()
+
+    # Secondary row: signed-in user + working account (below main menu)
+    with st.container():
+        user_col, acct_wrap = st.columns([3.2, 6.8], gap="small")
+        with user_col:
+            u_email = getattr(user, "email", "")
+            st.caption(f"Signed in as **{u_email}**")
+        with acct_wrap:
+            lbl_col, dd_col = st.columns([2.2, 4.6], gap="small")
+            with lbl_col:
+                st.caption("Working on account")
+            with dd_col:
+                active_user = _set_active_account(user, ui=dd_col, show_label=False)
 
     st.divider()
 
