@@ -216,7 +216,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 st.set_page_config(
     page_title="Pro Options Tracker",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 
@@ -426,8 +426,13 @@ def _get_accessible_accounts(user):
         pass
     return out
 
-def _set_active_account(user):
-    """Render account selector + set active user context."""
+def _set_active_account(user, ui=st, show_label: bool = True, label: str = "Working on account"):
+    """Account selection and active user context.
+
+    If show_label is False, the selectbox label is collapsed so the caller can render
+    a compact inline label in a custom layout (e.g., top bar).
+    """
+
     _ensure_user_preferences_row(user)
     _activate_pending_invites(user)
 
@@ -437,7 +442,8 @@ def _set_active_account(user):
     if cur not in labels:
         cur = labels[0]
 
-    sel = st.sidebar.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
+    sel_label = label if show_label else ""
+    sel = ui.selectbox(sel_label, labels, index=labels.index(cur), key="account_selector", label_visibility=("visible" if show_label else "collapsed"))
     st.session_state["active_account_label"] = sel
     chosen = next(a for a in accts if a["label"] == sel)
 
@@ -745,69 +751,55 @@ def account_sharing_page(user):
             st.error(f"Could not update password: {e}")
 
 def handle_auth():
-    # Sidebar header (centered logo + title)
-    _c1, _c2, _c3 = st.sidebar.columns([1, 2, 1])
-    with _c2:
-        st.image("logo.png", width=140)
-    st.sidebar.title("Stock Portfolio")
-    if not supabase: 
+    """Authenticate user. When not logged in, render a clean main-page login/register view."""
+    if not supabase:
         st.warning("⚠️ Database not connected.")
         return False
 
+    # If already logged in, nothing to render here
     if st.session_state.get("user"):
         st.session_state.user = st.session_state.get("user")
-
-        st.sidebar.success(f"User: {st.session_state.user.email}")
-        if st.sidebar.button("Logout"):
-            supabase.auth.sign_out()
-            st.session_state.user = None
-            st.rerun()
         return True
 
-    tab1, tab2 = st.sidebar.tabs(["Login", "Register"])
-    with tab1:
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_pass")
-        if st.button("Sign In", type="primary"):
-            try:
-                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                st.session_state.user = res.user
-                st.session_state.access_token = getattr(getattr(res, 'session', None), 'access_token', '') or ''
-                ensure_supabase_auth()
-                st.rerun()
-            except Exception as e: st.error(f"Login failed: {e}")
-    with tab2:
-        new_email = st.text_input("Email", key="reg_email")
-        new_pass = st.text_input("Password", type="password", key="reg_pass")
-        if st.button("Create Account"):
-            try:
-                res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
-                st.success("Account created! Log in.")
-            except Exception as e: st.error(f"Signup failed: {e}")
+    # --- Clean login screen (no sidebar) ---
+    h1, h2, h3 = st.columns([1, 2, 1])
+    with h2:
+        st.image("logo.png", width=160)
+        st.markdown("<h2 style='text-align:center;margin-top:0.25rem;'>Stock Portfolio</h2>", unsafe_allow_html=True)
+        st.caption("Sign in to continue.")
+
+        tab1, tab2 = st.tabs(["Login", "Register"])
+        with tab1:
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_pass")
+            if st.button("Sign In", type="primary"):
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    st.session_state.user = res.user
+                    st.session_state.access_token = getattr(getattr(res, "session", None), "access_token", "") or ""
+                    ensure_supabase_auth()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
+
+        with tab2:
+            new_email = st.text_input("Email", key="reg_email")
+            new_pass = st.text_input("Password", type="password", key="reg_pass")
+            new_pass2 = st.text_input("Confirm Password", type="password", key="reg_pass2")
+            if st.button("Create Account", type="primary"):
+                try:
+                    if new_pass != new_pass2:
+                        st.error("Passwords do not match.")
+                    else:
+                        supabase.auth.sign_up({"email": new_email, "password": new_pass})
+                        st.success("Account created. Please check your email to confirm, then sign in.")
+                except Exception as e:
+                    st.error(f"Registration failed: {e}")
+
     return False
 
-# --------------------------------------------------------------------------------
-# 4. DATA HELPERS
-# --------------------------------------------------------------------------------
-def _iso_date(d_val):
-    if d_val is None or (isinstance(d_val, float) and pd.isna(d_val)):
-        return ""
-    if isinstance(d_val, datetime):
-        return d_val.date().isoformat()
-    if isinstance(d_val, date):
-        return d_val.isoformat()
-    s = str(d_val).strip()
-    if not s:
-        return ""
-    # Strip time if present
-    s = s.split('T')[0].split(' ')[0]
-    # Normalize common formats
-    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%Y/%m/%d'):
-        try:
-            return datetime.strptime(s, fmt).date().isoformat()
-        except Exception:
-            pass
-    return s
+
+
 
 def format_date_custom(d_val):
     if not d_val or pd.isna(d_val): return ""
@@ -1014,112 +1006,6 @@ def get_yahoo_option_mid_price(symbol: str, expiry, strike, right: str):
 
 
 @st.cache_data(ttl=3600)
-
-@st.cache_data(ttl=600)
-def _yahoo_underlying_last(symbol: str):
-    """Best-effort underlying last price from Yahoo via yfinance."""
-    sym = _clean_symbol_for_yahoo(symbol)
-    if not sym:
-        return None
-    try:
-        t = yf.Ticker(sym)
-        # fast_info is fastest, but may not exist in older versions
-        try:
-            fi = getattr(t, "fast_info", None)
-            if fi:
-                for k in ("last_price", "lastPrice", "regularMarketPrice"):
-                    if k in fi and fi.get(k) is not None:
-                        return float(fi.get(k))
-        except Exception:
-            pass
-        # Fallback to recent close
-        hist = t.history(period="5d", interval="1d")
-        if hist is not None and not hist.empty and "Close" in hist.columns:
-            return float(hist["Close"].iloc[-1])
-    except Exception:
-        return None
-    return None
-
-
-def get_yahoo_option_delta(symbol: str, expiry, strike, right: str):
-    """Approximate option delta using Black-Scholes with Yahoo implied volatility.
-
-    Yahoo's option chain (via yfinance) does not reliably provide delta directly.
-    We compute an estimate from:
-      - underlying last price (Yahoo)
-      - strike
-      - time to expiry
-      - implied volatility from the option chain row
-      - risk-free rate (assumed)
-    Returns float in [-1, 1] or None.
-    """
-    sym = _clean_symbol_for_yahoo(symbol)
-    exp = _iso_date(expiry)
-    try:
-        k = float(strike)
-    except Exception:
-        return None
-    if not sym or not exp:
-        return None
-
-    try:
-        calls, puts = _yahoo_option_chain(sym, exp)
-        df = calls if str(right).upper().startswith("C") else puts
-        if df is None or df.empty or "strike" not in df.columns:
-            return None
-
-        diffs = (df["strike"].astype(float) - k).abs()
-        idx = diffs.idxmin()
-        if float(diffs.loc[idx]) > 0.001:
-            return None
-
-        row = df.loc[idx]
-        iv = row.get("impliedVolatility", None)
-        try:
-            iv = float(iv)
-        except Exception:
-            iv = None
-        if iv is None or iv <= 0:
-            return None
-
-        s = _yahoo_underlying_last(sym)
-        if s is None or s <= 0:
-            return None
-
-        # Time to expiry in years
-        try:
-            exp_dt = datetime.fromisoformat(exp).date()
-        except Exception:
-            return None
-        t_days = (exp_dt - date.today()).days
-        if t_days <= 0:
-            return None
-        T = max(t_days / 365.0, 1/365.0)
-
-        r = 0.04  # assumed risk-free rate; used only for delta approximation
-
-        # Black-Scholes d1
-        try:
-            d1 = (math.log(s / k) + (r + 0.5 * iv * iv) * T) / (iv * math.sqrt(T))
-        except Exception:
-            return None
-
-        # Normal CDF using erf
-        Nd1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
-        if str(right).upper().startswith("C"):
-            delta = Nd1
-        else:
-            delta = Nd1 - 1.0
-
-        # Clamp and round
-        try:
-            delta = max(-1.0, min(1.0, float(delta)))
-            return round(delta, 4)
-        except Exception:
-            return None
-    except Exception:
-        return None
-
 def get_usd_to_cad_rate():
     try:
         ticker = yf.Ticker("CAD=X")
@@ -4303,7 +4189,6 @@ def pricing_page(active_user):
     def _refresh_and_optionally_save(df_in: pd.DataFrame, do_save: bool) -> pd.DataFrame:
         df = df_in.copy()
         mids = []
-        deltas = []
         changed = 0
 
         with st.spinner("Fetching Yahoo option mid prices..."):
@@ -4320,18 +4205,12 @@ def pricing_page(active_user):
                 mid = get_yahoo_option_mid_price(sym, exp, strike, right)
                 mids.append(mid)
 
-                dlt = get_yahoo_option_delta(sym, exp, strike, right)
-                deltas.append(dlt)
-
                 prog.progress(i / total)
 
         df["yahoo_mid"] = mids
-        df["yahoo_delta"] = deltas
 
         # Choose new price: Yahoo mid if available else keep existing last_price
         df["current_db_price"] = df.get("last_price", 0.0).apply(clean_number)
-        df["current_db_delta"] = df.get("delta", None).apply(clean_number) if "delta" in df.columns else pd.NA
-        df["new_delta"] = df["yahoo_delta"]
         df["new_price"] = df.apply(
             lambda r: r["yahoo_mid"] if (r["yahoo_mid"] is not None and not pd.isna(r["yahoo_mid"])) else r["current_db_price"],
             axis=1
@@ -4341,33 +4220,9 @@ def pricing_page(active_user):
             for _, row in df.iterrows():
                 new_p = float(row["new_price"])
                 old_p = float(row["current_db_price"])
-                upd = {}
                 if abs(new_p - old_p) > 1e-9:
-                    upd["last_price"] = new_p
-
-                # Always overwrite delta with Yahoo-derived estimate when available
-                new_d = row.get("new_delta", None)
-                try:
-                    if new_d is not None and not pd.isna(new_d):
-                        upd["delta"] = float(new_d)
-                except Exception:
-                    pass
-
-                if upd:
-                    try:
-                        supabase.table("assets").update(upd).eq("id", row["id"]).execute()
-                        changed += 1
-                    except Exception:
-                        # If the assets table doesn't have a delta column in this deployment,
-                        # retry with price-only update to avoid failing the whole save.
-                        if "delta" in upd:
-                            try:
-                                upd2 = {k: v for k, v in upd.items() if k != "delta"}
-                                if upd2:
-                                    supabase.table("assets").update(upd2).eq("id", row["id"]).execute()
-                                    changed += 1
-                            except Exception:
-                                pass
+                    supabase.table("assets").update({"last_price": new_p}).eq("id", row["id"]).execute()
+                    changed += 1
 
             st.success(f"✅ Saved {changed} updated LEAP prices to the database.")
         return df
@@ -4385,13 +4240,12 @@ def pricing_page(active_user):
         out_df["new_price"] = out_df["current_db_price"]
 
     # Display
-    show = out_df[["ticker_clean", "exp_disp", "strike_price", "new_delta", "right", "current_db_price", "yahoo_mid", "new_price"]].copy()
+    show = out_df[["ticker_clean", "exp_disp", "strike_price", "right", "current_db_price", "yahoo_mid", "new_price"]].copy()
 
     show.rename(columns={
         "ticker_clean": "Ticker",
         "exp_disp": "Exp",
         "strike_price": "Strike",
-        "new_delta": "Delta",
         "right": "Option",
                 "current_db_price": "DB Price",
         "yahoo_mid": "Yahoo Mid",
@@ -4408,8 +4262,6 @@ def pricing_page(active_user):
     try:
         show["_exp_sort"] = pd.to_datetime(show["Exp"], errors="coerce")
         show["Strike"] = pd.to_numeric(show["Strike"], errors="coerce")
-        if "Delta" in show.columns:
-            show["Delta"] = pd.to_numeric(show["Delta"], errors="coerce")
         show = show.sort_values(by=["Ticker", "_exp_sort", "Strike"], ascending=[True, True, False]).drop(columns=["_exp_sort"])
     except Exception:
         pass
@@ -4426,7 +4278,7 @@ def pricing_page(active_user):
     # --- Display formatting (robust to blanks / strings) ---
     # Pandas Styler can raise a TypeError when a column contains mixed types (e.g., numbers + ""/None).
     # Coerce to numeric where it makes sense, then apply safe formatter functions.
-    for _col in ["Strike", "Delta", "DB Price", "Yahoo Mid", "Lead Price (New)"]:
+    for _col in ["Strike", "DB Price", "Yahoo Mid", "Lead Price (New)"]:
         if _col in show.columns:
             show[_col] = pd.to_numeric(show[_col], errors="coerce")
 
@@ -4449,7 +4301,6 @@ def pricing_page(active_user):
     try:
         styled_show = show.style.apply(_highlight_updated_rows, axis=1).format({
             "Strike": _fmt_currency_2,
-            "Delta": _fmt_num_3,
             "DB Price": _fmt_num_3,
             "Yahoo Mid": _fmt_num_3,
             "Lead Price (New)": _fmt_num_3,
@@ -5448,26 +5299,117 @@ def settings_page(user):
 
 def main():
     # page config already set at top
-    
+
     force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
-    
-    if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
-    st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"])
+
+    if not handle_auth():
+        st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True)
+        return
+
     user = st.session_state.user
-    active_user = _set_active_account(user)
-    if page == "Dashboard": dashboard_page(active_user, view="summary")
-    elif page == "Holdings": dashboard_page(active_user, view="holdings")
-    elif page == "Option Details": option_details_page(active_user)
-    elif page == "Update LEAP Prices": pricing_page(active_user)
-    elif page == "Weekly Snapshot": snapshot_page(active_user)
-    elif page == "Cash Management": cash_management_page(active_user)
-    elif page == "Enter Trade": trade_entry_page(active_user)
-    elif page == "Ledger": ledger_page(active_user)
-    elif page == "Import Data": import_page(active_user)
-    elif page == "Profile": account_sharing_page(active_user)
-    elif page == "Community": community_page(user)
-    elif page == "Settings": settings_page(user)
+    active_user = None
+
+    # --- Top bar: logo + segmented navigation ---
+    PAGES = ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"]
+
+    if "top_nav_page" not in st.session_state:
+        st.session_state["top_nav_page"] = "Dashboard"
+
+    with st.container():
+        c_logo, c_nav, c_logout = st.columns([1.1, 8.2, 0.7], gap="small")
+
+        with c_logo:
+            st.image("logo.png", width=120)
+
+        with c_nav:
+            # Small CSS just for the nav area (kept minimal to avoid impacting other radios)
+            st.markdown(
+                """
+                <style>
+                /* Make the first horizontal radio group on the page feel like a segmented control */
+                div[data-testid="stRadio"] > div[role="radiogroup"]{
+                    background: rgba(127,127,127,0.08);
+                    padding: 0.35rem;
+                    border-radius: 999px;
+                    gap: 0.25rem;
+                    justify-content: space-between;
+                }
+                div[data-testid="stRadio"] label { margin: 0 !important; }
+                div[data-testid="stRadio"] label > div:first-child { display:none !important; } /* hide default circle */
+                div[data-testid="stRadio"] label > div:last-child {
+                    padding: 0.45rem 0.85rem;
+                    border-radius: 999px;
+                    font-weight: 600;
+                    white-space: nowrap;
+                }
+                /* Selected state */
+                div[data-testid="stRadio"] input:checked + div { background: rgba(127,127,127,0.18); }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            if hasattr(st, "segmented_control"):
+                page = st.segmented_control(
+                    label="",
+                    options=PAGES,
+                    default=st.session_state.get("top_nav_page", "Dashboard"),
+                    key="top_nav_page",
+                )
+            else:
+                page = st.radio(
+                    label="",
+                    options=PAGES,
+                    horizontal=True,
+                    key="top_nav_page",
+                    label_visibility="collapsed",
+                )
+
+        with c_logout:
+            # Place logout beside the main menu (next to Settings)
+            if st.button("Logout", key="logout_top", type="secondary"):
+                supabase.auth.sign_out()
+                st.session_state.user = None
+                st.rerun()# Secondary row: signed-in user + working account (below main menu)
+    with st.container():
+        user_col, acct_wrap = st.columns([3.6, 6.4], gap="small")
+        with user_col:
+            u_email = getattr(user, "email", "")
+            st.caption(f"Signed in as **{u_email}**")
+        with acct_wrap:
+            c_lbl, c_dd = st.columns([1.9, 4.5], gap="small")
+            with c_lbl:
+                # Keep it on the same line as the dropdown (compact)
+                st.markdown("<div style='padding-top:0.35rem; font-size:0.85rem; color:rgba(120,120,120,1);'>Working on account</div>", unsafe_allow_html=True)
+            with c_dd:
+                active_user = _set_active_account(user, ui=st, show_label=False)
+
+    st.divider()
+
+    if page == "Dashboard":
+        dashboard_page(active_user, view="summary")
+    elif page == "Holdings":
+        dashboard_page(active_user, view="holdings")
+    elif page == "Option Details":
+        option_details_page(active_user)
+    elif page == "Update LEAP Prices":
+        pricing_page(active_user)
+    elif page == "Weekly Snapshot":
+        snapshot_page(active_user)
+    elif page == "Cash Management":
+        cash_management_page(active_user)
+    elif page == "Enter Trade":
+        trade_entry_page(active_user)
+    elif page == "Ledger":
+        ledger_page(active_user)
+    elif page == "Import Data":
+        import_page(active_user)
+    elif page == "Profile":
+        account_sharing_page(active_user)
+    elif page == "Community":
+        community_page(user)
+    elif page == "Settings":
+        settings_page(user)
 
 if __name__ == "__main__":
     main()
