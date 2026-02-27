@@ -426,13 +426,8 @@ def _get_accessible_accounts(user):
         pass
     return out
 
-def _set_active_account(user, ui=st, show_label: bool = True, label: str = "Working on account"):
-    """Account selection and active user context.
-
-    If show_label is False, the selectbox label is collapsed so the caller can render
-    a compact inline label in a custom layout (e.g., top bar).
-    """
-
+def _set_active_account(user, ui=st):
+    """Render account selector + set active user context."""
     _ensure_user_preferences_row(user)
     _activate_pending_invites(user)
 
@@ -442,8 +437,7 @@ def _set_active_account(user, ui=st, show_label: bool = True, label: str = "Work
     if cur not in labels:
         cur = labels[0]
 
-    sel_label = label if show_label else ""
-    sel = ui.selectbox(sel_label, labels, index=labels.index(cur), key="account_selector", label_visibility=("visible" if show_label else "collapsed"))
+    sel = ui.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
     st.session_state["active_account_label"] = sel
     chosen = next(a for a in accts if a["label"] == sel)
 
@@ -5316,7 +5310,7 @@ def main():
         st.session_state["top_nav_page"] = "Dashboard"
 
     with st.container():
-        c_logo, c_nav, c_logout = st.columns([1.1, 8.2, 0.7], gap="small")
+        c_logo, c_nav = st.columns([1.1, 8.9])
 
         with c_logo:
             st.image("logo.png", width=120)
@@ -5365,24 +5359,19 @@ def main():
                     label_visibility="collapsed",
                 )
 
-        with c_logout:
-            # Place logout beside the main menu (next to Settings)
-            if st.button("Logout", key="logout_top", type="secondary"):
-                supabase.auth.sign_out()
-                st.session_state.user = None
-                st.rerun()# Secondary row: signed-in user + working account (below main menu)
+    # Secondary row: account selector + signed-in user + logout (below main menu)
     with st.container():
-        user_col, acct_wrap = st.columns([3.6, 6.4], gap="small")
+        spacer, acct_col, user_col, logout_col = st.columns([6.0, 2.6, 1.9, 0.9], gap="small")
+        with acct_col:
+            active_user = _set_active_account(user, ui=acct_col)
         with user_col:
             u_email = getattr(user, "email", "")
             st.caption(f"Signed in as **{u_email}**")
-        with acct_wrap:
-            c_lbl, c_dd = st.columns([1.9, 4.5], gap="small")
-            with c_lbl:
-                # Keep it on the same line as the dropdown (compact)
-                st.markdown("<div style='padding-top:0.35rem; font-size:0.85rem; color:rgba(120,120,120,1);'>Working on account</div>", unsafe_allow_html=True)
-            with c_dd:
-                active_user = _set_active_account(user, ui=st, show_label=False)
+        with logout_col:
+            if st.button("Logout", key="logout_top", type="secondary"):
+                supabase.auth.sign_out()
+                st.session_state.user = None
+                st.rerun()
 
     st.divider()
 
