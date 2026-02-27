@@ -18,7 +18,7 @@ def apply_global_ui_theme():
     Colors should be controlled via .streamlit/config.toml for consistency.
     """
     st.markdown(
-        """x
+        """
         <style>
         /* Typography + spacing (no hard-coded colors) */
         .stApp {
