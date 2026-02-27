@@ -427,12 +427,12 @@ def _get_accessible_accounts(user):
     return out
 
 def _set_active_account(user, ui=st, show_label: bool = True, label: str = "Working on account"):
-    """Render account selector + set active user context.
+    """Account selection and active user context.
 
     If show_label is False, the selectbox label is collapsed so the caller can render
     a compact inline label in a custom layout (e.g., top bar).
     """
-    """Render account selector + set active user context."""
+
     _ensure_user_preferences_row(user)
     _activate_pending_invites(user)
 
@@ -5370,20 +5370,19 @@ def main():
             if st.button("Logout", key="logout_top", type="secondary"):
                 supabase.auth.sign_out()
                 st.session_state.user = None
-                st.rerun()
-
-    # Secondary row: signed-in user + working account (below main menu)
+                st.rerun()# Secondary row: signed-in user + working account (below main menu)
     with st.container():
-        user_col, acct_wrap = st.columns([3.2, 6.8], gap="small")
+        user_col, acct_wrap = st.columns([3.6, 6.4], gap="small")
         with user_col:
             u_email = getattr(user, "email", "")
             st.caption(f"Signed in as **{u_email}**")
         with acct_wrap:
-            lbl_col, dd_col = st.columns([2.2, 4.6], gap="small")
-            with lbl_col:
-                st.caption("Working on account")
-            with dd_col:
-                active_user = _set_active_account(user, ui=dd_col, show_label=False)
+            c_lbl, c_dd = st.columns([1.9, 4.5], gap="small")
+            with c_lbl:
+                # Keep it on the same line as the dropdown (compact)
+                st.markdown("<div style='padding-top:0.35rem; font-size:0.85rem; color:rgba(120,120,120,1);'>Working on account</div>", unsafe_allow_html=True)
+            with c_dd:
+                active_user = _set_active_account(user, ui=st, show_label=False)
 
     st.divider()
 
