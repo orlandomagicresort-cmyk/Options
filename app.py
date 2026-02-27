@@ -4452,58 +4452,58 @@ def pricing_page(active_user):
                     df_pick = df_pick.reset_index(drop=True)
                     labels = [_label(df_pick.loc[i]) for i in range(len(df_pick))]
 
-                    # Use a form so checking the confirm box / editing the number doesn't collapse the UI
-                    with st.form("manual_leap_override_form", clear_on_submit=False):
-                        sel_ix = st.radio(
-                            "Select contract to override",
-                            options=list(range(len(labels))),
-                            format_func=lambda i: labels[i],
-                            key="manual_price_contract_ix",
-                        )
-                        row = df_pick.loc[sel_ix]
+                    # Manual override inputs (kept stable via session_state keys)
 
-                        c1, c2 = st.columns([1, 1])
-                        with c1:
-                            current_db = row.get("current_db_price", row.get("last_price", None))
-                            try:
-                                st.metric("Current DB Price", "" if current_db in (None, "") else f"${float(current_db):,.2f}")
-                            except Exception:
-                                st.metric("Current DB Price", "")
+                    sel_ix = st.radio(
+                        "Select contract to override",
+                        options=list(range(len(labels))),
+                        format_func=lambda i: labels[i],
+                        key="manual_price_contract_ix",
+                    )
+                    row = df_pick.loc[sel_ix]
 
-                        with c2:
-                            yh = row.get("yahoo_mid", None)
-                            try:
-                                st.metric("Yahoo Mid", "" if yh in (None, "") else f"${float(yh):,.2f}")
-                            except Exception:
-                                st.metric("Yahoo Mid", "")
-
-                        default_val = 0.0
+                    c1, c2 = st.columns([1, 1])
+                    with c1:
+                        current_db = row.get("current_db_price", row.get("last_price", None))
                         try:
-                            if current_db not in (None, "", "nan"):
-                                default_val = float(current_db)
+                            st.metric("Current DB Price", "" if current_db in (None, "") else f"${float(current_db):,.2f}")
                         except Exception:
-                            default_val = 0.0
+                            st.metric("Current DB Price", "")
 
-                        manual_price = st.number_input(
-                            "Manual price",
-                            min_value=0.0,
-                            value=float(default_val),
-                            step=0.01,
-                            key="manual_override_price",
-                        )
+                    with c2:
+                        yh = row.get("yahoo_mid", None)
+                        try:
+                            st.metric("Yahoo Mid", "" if yh in (None, "") else f"${float(yh):,.2f}")
+                        except Exception:
+                            st.metric("Yahoo Mid", "")
 
-                        confirm = st.checkbox(
-                            "I confirm I want to overwrite the database price for this contract.",
-                            value=False,
-                            key="manual_override_confirm",
-                        )
+                    default_val = 0.0
+                    try:
+                        if current_db not in (None, "", "nan"):
+                            default_val = float(current_db)
+                    except Exception:
+                        default_val = 0.0
 
-                        submitted = st.form_submit_button(
-                            "Save Manual Price",
-                            type="primary",
-                            disabled=not confirm,
-                        )
+                    manual_price = st.number_input(
+                        "Manual price",
+                        min_value=0.0,
+                        value=float(default_val),
+                        step=0.01,
+                        key="manual_override_price",
+                    )
 
+                    confirm = st.checkbox(
+                        "I confirm I want to overwrite the database price for this contract.",
+                        value=False,
+                        key="manual_override_confirm",
+                    )
+
+                    submitted = st.button(
+                        "Save Manual Price",
+                        type="primary",
+                        disabled=not confirm,
+                        key="manual_override_save_btn",
+                    )
                     if submitted:
                         _require_editor()
                         try:
