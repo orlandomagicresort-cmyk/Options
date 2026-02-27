@@ -5308,14 +5308,14 @@ def main():
     user = st.session_state.user
     active_user = None
 
-    # --- Top segment    # --- Top bar: logo + segmented navigation + account/user controls ---
+    # --- Top bar: logo + segmented navigation ---
     PAGES = ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"]
 
     if "top_nav_page" not in st.session_state:
         st.session_state["top_nav_page"] = "Dashboard"
 
     with st.container():
-        c_logo, c_nav, c_controls = st.columns([1.1, 6.2, 2.7])
+        c_logo, c_nav = st.columns([1.1, 8.9])
 
         with c_logo:
             st.image("logo.png", width=120)
@@ -5364,19 +5364,20 @@ def main():
                     label_visibility="collapsed",
                 )
 
-        with c_controls:
-            # Right side controls: account selector + signed-in user + logout
-            acct_col, user_col, logout_col = st.columns([4.8, 3.2, 1.2], gap="small")
-            with acct_col:
-                active_user = _set_active_account(user, ui=acct_col)
-            with user_col:
-                u_email = getattr(user, "email", "")
-                st.caption(f"Signed in as **{u_email}**")
-            with logout_col:
-                if st.button("Logout", key="logout_top", type="secondary"):
-                    supabase.auth.sign_out()
-                    st.session_state.user = None
-                    st.rerun()
+    # Secondary row: account selector + signed-in user + logout (below main menu)
+    with st.container():
+        spacer, acct_col, user_col, logout_col = st.columns([6.0, 2.6, 1.9, 0.9], gap="small")
+        with acct_col:
+            active_user = _set_active_account(user, ui=acct_col)
+        with user_col:
+            u_email = getattr(user, "email", "")
+            st.caption(f"Signed in as **{u_email}**")
+        with logout_col:
+            if st.button("Logout", key="logout_top", type="secondary"):
+                supabase.auth.sign_out()
+                st.session_state.user = None
+                st.rerun()
+
     st.divider()
 
     if page == "Dashboard":
