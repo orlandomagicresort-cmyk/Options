@@ -4412,6 +4412,66 @@ def pricing_page(active_user):
     except Exception:
         pass
     st.markdown(styled_show.to_html(), unsafe_allow_html=True)
+
+# --- Manual override (when Yahoo mid is missing / stale) ---
+with st.expander("✍️ Manual price override (only if Yahoo is missing)", expanded=False):
+    try:
+        # Identify rows where Yahoo didn't return a mid price
+        missing_mask = out_df.get("yahoo_mid").isna() if "yahoo_mid" in out_df.columns else pd.Series([False]*len(out_df))
+        missing_df = out_df.loc[missing_mask].copy() if len(out_df) else out_df.head(0).copy()
+
+        if missing_df.empty:
+            st.caption("All LEAPs returned a Yahoo price on the last refresh.")
+        else:
+            missing_df["label"] = (
+                missing_df["ticker_clean"].astype(str).str.upper()
+                + " | " + missing_df["exp_disp"].astype(str)
+                + " | Strike: $" + pd.to_numeric(missing_df["strike_price"], errors="coerce").fillna(0).map(lambda x: f"{float(x):,.2f}")
+                + " | " + missing_df["right"].astype(str).str.upper()
+            )
+
+            sel_label = st.radio(
+                "Select the contract to override",
+                missing_df["label"].tolist(),
+                key=f"manual_leap_pick_{uid}",
+            )
+
+            sel_row = missing_df.loc[missing_df["label"] == sel_label].iloc[0]
+            manual_price = st.number_input(
+                "Manual price (will overwrite DB last_price)",
+                min_value=0.0,
+                value=float(clean_number(sel_row.get("current_db_price", 0.0)) or 0.0),
+                step=0.01,
+                format="%.3f",
+                key=f"manual_leap_price_{uid}_{str(sel_row.get('id'))}",
+            )
+
+            confirm = st.checkbox(
+                "I confirm I want to overwrite the database price for this option.",
+                value=False,
+                key=f"manual_leap_confirm_{uid}_{str(sel_row.get('id'))}",
+            )
+
+            if st.button(
+                "Save Manual Price",
+                type="primary",
+                disabled=not confirm,
+                key=f"manual_leap_save_{uid}_{str(sel_row.get('id'))}",
+            ):
+                try:
+                    _require_editor()
+                    supabase.table("assets").update({"last_price": float(manual_price)}).eq("id", sel_row["id"]).execute()
+                    st.success("✅ Manual price saved to the database.")
+                    # Force refresh on next view so the table reflects the new DB value
+                    try:
+                        st.cache_data.clear()
+                    except Exception:
+                        pass
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to save manual price: {e}")
+    except Exception as e:
+        st.error(f"Manual override UI error: {e}")
     # Copy / export helpers for Excel (only the New prices)
     try:
         if "Lead Price (New)" in show.columns:
