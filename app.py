@@ -18,7 +18,7 @@ def apply_global_ui_theme():
     Colors should be controlled via .streamlit/config.toml for consistency.
     """
     st.markdown(
-        """
+        """x
         <style>
         /* Typography + spacing (no hard-coded colors) */
         .stApp {
@@ -426,7 +426,7 @@ def _get_accessible_accounts(user):
         pass
     return out
 
-def _set_active_account(user):
+def _set_active_account(user, ui=st):
     """Render account selector + set active user context."""
     _ensure_user_preferences_row(user)
     _activate_pending_invites(user)
@@ -437,7 +437,7 @@ def _set_active_account(user):
     if cur not in labels:
         cur = labels[0]
 
-    sel = st.sidebar.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
+    sel = ui.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
     st.session_state["active_account_label"] = sel
     chosen = next(a for a in accts if a["label"] == sel)
 
@@ -745,69 +745,55 @@ def account_sharing_page(user):
             st.error(f"Could not update password: {e}")
 
 def handle_auth():
-    # Sidebar header (centered logo + title)
-    _c1, _c2, _c3 = st.sidebar.columns([1, 2, 1])
-    with _c2:
-        st.image("logo.png", width=140)
-    st.sidebar.title("Stock Portfolio")
-    if not supabase: 
+    """Authenticate user. When not logged in, render a clean main-page login/register view."""
+    if not supabase:
         st.warning("⚠️ Database not connected.")
         return False
 
+    # If already logged in, nothing to render here
     if st.session_state.get("user"):
         st.session_state.user = st.session_state.get("user")
-
-        st.sidebar.success(f"User: {st.session_state.user.email}")
-        if st.sidebar.button("Logout"):
-            supabase.auth.sign_out()
-            st.session_state.user = None
-            st.rerun()
         return True
 
-    tab1, tab2 = st.sidebar.tabs(["Login", "Register"])
-    with tab1:
-        email = st.text_input("Email", key="login_email")
-        password = st.text_input("Password", type="password", key="login_pass")
-        if st.button("Sign In", type="primary"):
-            try:
-                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                st.session_state.user = res.user
-                st.session_state.access_token = getattr(getattr(res, 'session', None), 'access_token', '') or ''
-                ensure_supabase_auth()
-                st.rerun()
-            except Exception as e: st.error(f"Login failed: {e}")
-    with tab2:
-        new_email = st.text_input("Email", key="reg_email")
-        new_pass = st.text_input("Password", type="password", key="reg_pass")
-        if st.button("Create Account"):
-            try:
-                res = supabase.auth.sign_up({"email": new_email, "password": new_pass})
-                st.success("Account created! Log in.")
-            except Exception as e: st.error(f"Signup failed: {e}")
+    # --- Clean login screen (no sidebar) ---
+    h1, h2, h3 = st.columns([1, 2, 1])
+    with h2:
+        st.image("logo.png", width=160)
+        st.markdown("<h2 style='text-align:center;margin-top:0.25rem;'>Stock Portfolio</h2>", unsafe_allow_html=True)
+        st.caption("Sign in to continue.")
+
+        tab1, tab2 = st.tabs(["Login", "Register"])
+        with tab1:
+            email = st.text_input("Email", key="login_email")
+            password = st.text_input("Password", type="password", key="login_pass")
+            if st.button("Sign In", type="primary"):
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    st.session_state.user = res.user
+                    st.session_state.access_token = getattr(getattr(res, "session", None), "access_token", "") or ""
+                    ensure_supabase_auth()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
+
+        with tab2:
+            new_email = st.text_input("Email", key="reg_email")
+            new_pass = st.text_input("Password", type="password", key="reg_pass")
+            new_pass2 = st.text_input("Confirm Password", type="password", key="reg_pass2")
+            if st.button("Create Account", type="primary"):
+                try:
+                    if new_pass != new_pass2:
+                        st.error("Passwords do not match.")
+                    else:
+                        supabase.auth.sign_up({"email": new_email, "password": new_pass})
+                        st.success("Account created. Please check your email to confirm, then sign in.")
+                except Exception as e:
+                    st.error(f"Registration failed: {e}")
+
     return False
 
-# --------------------------------------------------------------------------------
-# 4. DATA HELPERS
-# --------------------------------------------------------------------------------
-def _iso_date(d_val):
-    if d_val is None or (isinstance(d_val, float) and pd.isna(d_val)):
-        return ""
-    if isinstance(d_val, datetime):
-        return d_val.date().isoformat()
-    if isinstance(d_val, date):
-        return d_val.isoformat()
-    s = str(d_val).strip()
-    if not s:
-        return ""
-    # Strip time if present
-    s = s.split('T')[0].split(' ')[0]
-    # Normalize common formats
-    for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%Y/%m/%d'):
-        try:
-            return datetime.strptime(s, fmt).date().isoformat()
-        except Exception:
-            pass
-    return s
+
+
 
 def format_date_custom(d_val):
     if not d_val or pd.isna(d_val): return ""
@@ -5320,71 +5306,81 @@ def main():
         return
 
     user = st.session_state.user
-    active_user = _set_active_account(user)
+    active_user = None
 
-    # --- Top segmented navigation (Wealthsimple-style) ---
+    # --- Top segment    # --- Top bar: logo + segmented navigation + account/user controls ---
     PAGES = ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"]
 
-    # Prefer Streamlit's native segmented control when available; fall back to a horizontal radio.
     if "top_nav_page" not in st.session_state:
         st.session_state["top_nav_page"] = "Dashboard"
 
-    # Compact header row
-    nav_holder = st.container()
-    with nav_holder:
-        # Small CSS just for the nav area (kept minimal to avoid impacting other radios)
-        st.markdown(
-            """
-            <style>
-            /* Make the first horizontal radio group on the page feel like a segmented control */
-            div[data-testid="stRadio"] > div[role="radiogroup"]{
-                background: rgba(127,127,127,0.08);
-                padding: 0.35rem;
-                border-radius: 999px;
-                gap: 0.25rem;
-                justify-content: space-between;
-            }
-            div[data-testid="stRadio"] label {
-                margin: 0 !important;
-            }
-            div[data-testid="stRadio"] label > div:first-child {
-                display:none !important; /* hide default circle */
-            }
-            div[data-testid="stRadio"] label > div:last-child {
-                padding: 0.45rem 0.85rem;
-                border-radius: 999px;
-                font-weight: 600;
-                white-space: nowrap;
-            }
-            /* Selected state */
-            div[data-testid="stRadio"] input:checked + div {
-                background: rgba(127,127,127,0.18);
-            }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
+    with st.container():
+        c_logo, c_nav, c_controls = st.columns([1.1, 6.2, 2.7])
 
-        if hasattr(st, "segmented_control"):
-            page = st.segmented_control(
-                label="",
-                options=PAGES,
-                default=st.session_state.get("top_nav_page", "Dashboard"),
-                key="top_nav_page",
+        with c_logo:
+            st.image("logo.png", width=120)
+
+        with c_nav:
+            # Small CSS just for the nav area (kept minimal to avoid impacting other radios)
+            st.markdown(
+                """
+                <style>
+                /* Make the first horizontal radio group on the page feel like a segmented control */
+                div[data-testid="stRadio"] > div[role="radiogroup"]{
+                    background: rgba(127,127,127,0.08);
+                    padding: 0.35rem;
+                    border-radius: 999px;
+                    gap: 0.25rem;
+                    justify-content: space-between;
+                }
+                div[data-testid="stRadio"] label { margin: 0 !important; }
+                div[data-testid="stRadio"] label > div:first-child { display:none !important; } /* hide default circle */
+                div[data-testid="stRadio"] label > div:last-child {
+                    padding: 0.45rem 0.85rem;
+                    border-radius: 999px;
+                    font-weight: 600;
+                    white-space: nowrap;
+                }
+                /* Selected state */
+                div[data-testid="stRadio"] input:checked + div { background: rgba(127,127,127,0.18); }
+                </style>
+                """,
+                unsafe_allow_html=True,
             )
-        else:
-            page = st.radio(
-                label="",
-                options=PAGES,
-                horizontal=True,
-                key="top_nav_page",
-                label_visibility="collapsed",
-            )
+
+            if hasattr(st, "segmented_control"):
+                page = st.segmented_control(
+                    label="",
+                    options=PAGES,
+                    default=st.session_state.get("top_nav_page", "Dashboard"),
+                    key="top_nav_page",
+                )
+            else:
+                page = st.radio(
+                    label="",
+                    options=PAGES,
+                    horizontal=True,
+                    key="top_nav_page",
+                    label_visibility="collapsed",
+                )
+
+        with c_controls:
+            # Account selector (delegation)
+            active_user = _set_active_account(user, ui=c_controls)
+
+            # User + logout
+            u_email = getattr(user, "email", "")
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.caption(f"Signed in as **{u_email}**")
+            with c2:
+                if st.button("Logout", key="logout_top"):
+                    supabase.auth.sign_out()
+                    st.session_state.user = None
+                    st.rerun()
 
     st.divider()
-
-    # Keep sidebar clean: use it for context, not navigation
-    st.sidebar.divider()
+tion removed (top bar only)
 
     if page == "Dashboard":
         dashboard_page(active_user, view="summary")
