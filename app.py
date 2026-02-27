@@ -1014,112 +1014,6 @@ def get_yahoo_option_mid_price(symbol: str, expiry, strike, right: str):
 
 
 @st.cache_data(ttl=3600)
-
-@st.cache_data(ttl=600)
-def _yahoo_underlying_last(symbol: str):
-    """Best-effort underlying last price from Yahoo via yfinance."""
-    sym = _clean_symbol_for_yahoo(symbol)
-    if not sym:
-        return None
-    try:
-        t = yf.Ticker(sym)
-        # fast_info is fastest, but may not exist in older versions
-        try:
-            fi = getattr(t, "fast_info", None)
-            if fi:
-                for k in ("last_price", "lastPrice", "regularMarketPrice"):
-                    if k in fi and fi.get(k) is not None:
-                        return float(fi.get(k))
-        except Exception:
-            pass
-        # Fallback to recent close
-        hist = t.history(period="5d", interval="1d")
-        if hist is not None and not hist.empty and "Close" in hist.columns:
-            return float(hist["Close"].iloc[-1])
-    except Exception:
-        return None
-    return None
-
-
-def get_yahoo_option_delta(symbol: str, expiry, strike, right: str):
-    """Approximate option delta using Black-Scholes with Yahoo implied volatility.
-
-    Yahoo's option chain (via yfinance) does not reliably provide delta directly.
-    We compute an estimate from:
-      - underlying last price (Yahoo)
-      - strike
-      - time to expiry
-      - implied volatility from the option chain row
-      - risk-free rate (assumed)
-    Returns float in [-1, 1] or None.
-    """
-    sym = _clean_symbol_for_yahoo(symbol)
-    exp = _iso_date(expiry)
-    try:
-        k = float(strike)
-    except Exception:
-        return None
-    if not sym or not exp:
-        return None
-
-    try:
-        calls, puts = _yahoo_option_chain(sym, exp)
-        df = calls if str(right).upper().startswith("C") else puts
-        if df is None or df.empty or "strike" not in df.columns:
-            return None
-
-        diffs = (df["strike"].astype(float) - k).abs()
-        idx = diffs.idxmin()
-        if float(diffs.loc[idx]) > 0.001:
-            return None
-
-        row = df.loc[idx]
-        iv = row.get("impliedVolatility", None)
-        try:
-            iv = float(iv)
-        except Exception:
-            iv = None
-        if iv is None or iv <= 0:
-            return None
-
-        s = _yahoo_underlying_last(sym)
-        if s is None or s <= 0:
-            return None
-
-        # Time to expiry in years
-        try:
-            exp_dt = datetime.fromisoformat(exp).date()
-        except Exception:
-            return None
-        t_days = (exp_dt - date.today()).days
-        if t_days <= 0:
-            return None
-        T = max(t_days / 365.0, 1/365.0)
-
-        r = 0.04  # assumed risk-free rate; used only for delta approximation
-
-        # Black-Scholes d1
-        try:
-            d1 = (math.log(s / k) + (r + 0.5 * iv * iv) * T) / (iv * math.sqrt(T))
-        except Exception:
-            return None
-
-        # Normal CDF using erf
-        Nd1 = 0.5 * (1.0 + math.erf(d1 / math.sqrt(2.0)))
-        if str(right).upper().startswith("C"):
-            delta = Nd1
-        else:
-            delta = Nd1 - 1.0
-
-        # Clamp and round
-        try:
-            delta = max(-1.0, min(1.0, float(delta)))
-            return round(delta, 4)
-        except Exception:
-            return None
-    except Exception:
-        return None
-
 def get_usd_to_cad_rate():
     try:
         ticker = yf.Ticker("CAD=X")
@@ -3186,185 +3080,6 @@ def option_details_page(active_user):
 
     else: st.info("No Long Option Holdings.")
 
-    # --- Long Option Actions ---
-    st.markdown("")
-    st.subheader("Manage Long Options")
-    if not leaps_df.empty:
-        # Build selector options from each individual long option row (not consolidated)
-        long_selector = {}
-        for _, r in leaps_df.iterrows():
-            sym = r.get('symbol','UNK')
-            exp = format_date_custom(r.get('expiration',''))
-            strike = float(r.get('strike_price',0) or 0)
-            qty = float(r.get('quantity',0) or 0)
-            # Determine option type (CALL/PUT) from stored type string
-            t_raw = str(r.get('type','') or r.get('type_disp','') or '').upper()
-            opt_t = "CALL" if "CALL" in t_raw else ("PUT" if "PUT" in t_raw else "")
-            key = f"{sym} | {exp} | Strike: ${strike:,.2f} | Qty: {qty:g}" + (f" | {opt_t}" if opt_t else "")
-            # Ensure uniqueness even if duplicate rows exist
-            if key in long_selector:
-                key = f"{key} (id {r.get('id','')})"
-            long_selector[key] = r
-
-        c0, c1 = st.columns([2, 1])
-        with c0:
-            long_sel_label = st.selectbox("Select Long Contract to Manage", options=list(long_selector.keys()), key="long_opt_man_sel")
-        if long_sel_label:
-            lr = long_selector[long_sel_label]
-            sym = lr.get('symbol','UNK')
-            strike = float(lr.get('strike_price',0) or 0)
-            exp_raw = lr.get('expiration','')
-            exp_iso = str(exp_raw) if exp_raw is not None else ""
-            qty_avail = float(lr.get('quantity',0) or 0)
-            t_raw = str(lr.get('type','') or lr.get('type_disp','') or '').upper()
-            opt_t = "CALL" if "CALL" in t_raw else ("PUT" if "PUT" in t_raw else "")
-            asset_type = lr.get('type','LEAP').upper()
-            if "LEAP" not in asset_type:
-                asset_type = f"LEAP {opt_t}".strip()
-
-            with c1:
-                long_action = st.radio(
-                    "Action",
-                    ["Exercise (Assign Equivalent)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
-                    key="long_opt_action",
-                    label_visibility="collapsed"
-                )
-
-            qty_to_process = qty_avail
-            close_date = date.today()
-            close_price = 0.0
-            close_fees = 0.0
-
-            if "Sell-To-Close" in long_action:
-                st.markdown("---")
-                st.caption("🧾 **Sell-To-Close Details**: Sell the selected long option to close it.")
-                cc0, cc1, cc2, cc3 = st.columns([1,1,1,1])
-                with cc0:
-                    qty_to_process = st.number_input("Contracts to Close", min_value=0.0, max_value=float(qty_avail), value=float(qty_avail), step=1.0, key="ltc_qty")
-                with cc1:
-                    close_date = st.date_input("Close Date", value=date.today(), key="ltc_dt")
-                with cc2:
-                    close_price = st.number_input("Sell Price", min_value=0.0, value=float(lr.get('current_price',0) or 0.0), step=0.01, key="ltc_px")
-                with cc3:
-                    close_fees = st.number_input("Fees", min_value=0.0, value=0.0, step=0.01, key="ltc_fee")
-
-            if "Expire" in long_action:
-                st.markdown("---")
-                st.caption("⏳ **Expire Details**: Close the selected long option at $0.")
-                ec0, ec1 = st.columns([1,1])
-                with ec0:
-                    qty_to_process = st.number_input("Contracts to Expire", min_value=0.0, max_value=float(qty_avail), value=float(qty_avail), step=1.0, key="lexp_qty")
-                with ec1:
-                    close_date = st.date_input("Expiry Close Date", value=date.today(), key="lexp_dt")
-                close_price = 0.0
-                close_fees = 0.0
-
-            # Exercise (assignment equivalent)
-            ex_date = date.today()
-            ex_fees = 0.0
-            if "Exercise" in long_action:
-                st.markdown("---")
-                st.caption("📌 **Exercise Details**: Exercise the long option. This will remove the option position and create the corresponding stock trade at the strike price.")
-                ex0, ex1, ex2 = st.columns([1,1,1])
-                with ex0:
-                    qty_to_process = st.number_input("Contracts to Exercise", min_value=0.0, max_value=float(qty_avail), value=float(qty_avail), step=1.0, key="lex_qty")
-                with ex1:
-                    ex_date = st.date_input("Exercise Date", value=date.today(), key="lex_dt")
-                with ex2:
-                    ex_fees = st.number_input("Fees (Exercise)", min_value=0.0, value=0.0, step=0.01, key="lex_fee")
-
-            # Roll
-            roll_close_date = date.today()
-            roll_close_price = 0.0
-            roll_close_fees = 0.0
-            new_open_date = date.today()
-            new_open_price = 0.0
-            new_open_fees = 0.0
-            new_exp = date.today()
-            new_strike = strike
-            new_type = opt_t if opt_t else "CALL"
-
-            if "Roll Position" in long_action:
-                st.markdown("---")
-                st.caption("🔁 **Roll Details**: Sell the current long option (close) and buy a new long option (open).")
-                r0, r1, r2, r3 = st.columns([1,1,1,1])
-                with r0:
-                    qty_to_process = st.number_input("Contracts to Roll", min_value=0.0, max_value=float(qty_avail), value=float(qty_avail), step=1.0, key="lroll_qty")
-                with r1:
-                    roll_close_date = st.date_input("Close Date (Sell)", value=date.today(), key="lroll_cdt")
-                with r2:
-                    roll_close_price = st.number_input("Close Price (Sell)", min_value=0.0, value=float(lr.get('current_price',0) or 0.0), step=0.01, key="lroll_cpx")
-                with r3:
-                    roll_close_fees = st.number_input("Close Fees", min_value=0.0, value=0.0, step=0.01, key="lroll_cfee")
-
-                st.markdown("**New Long Option (Buy)**")
-                n0, n1, n2, n3, n4 = st.columns([1,1,1,1,1])
-                with n0:
-                    new_open_date = st.date_input("Open Date (Buy)", value=date.today(), key="lroll_odt")
-                with n1:
-                    new_exp = st.date_input("New Expiration", value=date.today(), key="lroll_nexp")
-                with n2:
-                    new_strike = st.number_input("New Strike", min_value=0.0, value=float(strike), step=0.5, key="lroll_nstk")
-                with n3:
-                    new_type = st.selectbox("New Type", ["CALL", "PUT"], index=(0 if new_type=="CALL" else 1), key="lroll_ntype")
-                with n4:
-                    new_open_price = st.number_input("Buy Price", min_value=0.0, value=0.0, step=0.01, key="lroll_opx")
-                new_open_fees = st.number_input("Open Fees (Buy)", min_value=0.0, value=0.0, step=0.01, key="lroll_ofee")
-
-            # --- Execute ---
-            exec_col0, exec_col1 = st.columns([1,3])
-            with exec_col0:
-                do_it = st.button("Execute", key="long_opt_execute")
-
-            if do_it:
-                try:
-                    q = float(qty_to_process or 0)
-                    if q <= 0:
-                        st.error("Quantity must be greater than 0.")
-                        st.stop()
-                    if q > float(qty_avail):
-                        st.error("Quantity exceeds available contracts.")
-                        st.stop()
-
-                    if "Sell-To-Close" in long_action:
-                        update_asset_position(uid, sym, q, float(close_price), "Sell", close_date, asset_type, expiration=exp_iso, strike=strike, fees=float(close_fees))
-                        st.success(f"Closed {q:g} contract(s) via Sell-To-Close.")
-                        st.rerun()
-
-                    elif "Expire" in long_action:
-                        update_asset_position(uid, sym, q, 0.0, "Sell", close_date, asset_type, expiration=exp_iso, strike=strike, fees=0.0)
-                        st.success(f"Expired {q:g} contract(s).")
-                        st.rerun()
-
-                    elif "Exercise" in long_action:
-                        # 1) Remove the option position at $0
-                        update_asset_position(uid, sym, q, 0.0, "Sell", ex_date, asset_type, expiration=exp_iso, strike=strike, fees=0.0)
-                        # 2) Create the stock trade at strike
-                        shares = int(q * 100)
-                        if opt_t == "CALL":
-                            update_asset_position(uid, sym, shares, float(strike), "Buy", ex_date, "STOCK", fees=float(ex_fees))
-                            st.success(f"Exercised CALL: bought {shares} shares @ ${strike:,.2f}.")
-                        elif opt_t == "PUT":
-                            update_asset_position(uid, sym, shares, float(strike), "Sell", ex_date, "STOCK", fees=float(ex_fees))
-                            st.success(f"Exercised PUT: sold {shares} shares @ ${strike:,.2f}.")
-                        else:
-                            st.warning("Could not determine option type (CALL/PUT) for exercise. Option position was closed, but no stock trade was created.")
-                        st.rerun()
-
-                    elif "Roll Position" in long_action:
-                        # Close old
-                        update_asset_position(uid, sym, q, float(roll_close_price), "Sell", roll_close_date, asset_type, expiration=exp_iso, strike=strike, fees=float(roll_close_fees))
-                        # Open new
-                        new_asset_type = f"LEAP {new_type}".strip()
-                        update_asset_position(uid, sym, q, float(new_open_price), "Buy", new_open_date, new_asset_type, expiration=str(new_exp), strike=float(new_strike), fees=float(new_open_fees))
-                        st.success(f"Rolled {q:g} contract(s): closed old and opened new.")
-                        st.rerun()
-                except Exception as e:
-                    st.error(f"Action failed: {e}")
-    else:
-        st.info("No Long Option Holdings to manage.")
-
-
     # --- Short Options (Consolidated) ---
     st.subheader(f"Short Option Liabilities ({selected_currency})")
     
@@ -3400,7 +3115,7 @@ def option_details_page(active_user):
         opt_html += "</tbody></table>"
         st.markdown(opt_html, unsafe_allow_html=True)
 
-        with st.expander("⚡ Manage Active Contracts", expanded=True):
+        with st.expander("⚡ Manage Short Contracts", expanded=True):
             c_sel, c_act, c_btn = st.columns([3, 2, 1])
             with c_sel:
                 selected_label = st.selectbox("Select Contract to Manage", options=list(selector_options.keys()), key="opt_man_sel")
@@ -3408,6 +3123,7 @@ def option_details_page(active_user):
             if selected_label:
                 sel_row = selector_options[selected_label]
                 total_avail = int(sel_row['qty'])
+                st.caption(f"Selected: **{sel_row['symbol']}** {sel_row['type']} • Exp: **{format_date_custom(sel_row['expiration'])}** • Strike: **${float(sel_row['strike']):,.2f}** • Qty: **{total_avail:g}**")
                 
                 with c_act:
                     action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Buy-To-Close (Close Short)"], label_visibility="collapsed")
@@ -3537,11 +3253,13 @@ def option_details_page(active_user):
                     calc_sto = float(new_premium) * int(qty_to_process) * 100
                     net_cash = calc_sto - calc_btc - float(roll_btc_fees) - float(new_fees)
                     st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+                needs_confirm = ('Assignment' in action_choice) or ('Expire' in action_choice)
+                confirm_ok = True
+                if needs_confirm:
+                    confirm_ok = st.checkbox('I understand this will update holdings and cannot be undone.', key='short_confirm')
 
                 with c_btn:
-                    st.write("")
-                    st.write("") 
-                    if st.button("Process Action", type="primary", use_container_width=True):
+                    if st.button("Process Action", type="primary", use_container_width=True, key="short_opt_execute", disabled=(not confirm_ok)):
                         
                         # 1. ASSIGNMENT
                         if "Assignment" in action_choice:
@@ -3682,6 +3400,252 @@ def option_details_page(active_user):
                             st.rerun()
     else:
         st.info("No Active Short Options.")
+
+
+# --- Long Option Actions ---
+    st.markdown("---")
+    with st.expander("⚡ Manage Long Contracts", expanded=True):
+        
+        if not leaps_df.empty:
+            # Build selector options from each individual long option row (not consolidated)
+            long_selector = {}
+            for _, r in leaps_df.iterrows():
+                sym = r.get('symbol','UNK')
+                exp = format_date_custom(r.get('expiration',''))
+                strike = float(r.get('strike_price',0) or 0)
+                qty = float(r.get('quantity',0) or 0)
+                # Determine option type (CALL/PUT) from stored type string
+                t_raw = str(r.get('type','') or r.get('type_disp','') or '').upper()
+                opt_t = "CALL" if "CALL" in t_raw else ("PUT" if "PUT" in t_raw else "")
+                key = f"{sym} | {exp} | Strike: ${strike:,.2f} | Qty: {qty:g}" + (f" | {opt_t}" if opt_t else "")
+                # Ensure uniqueness even if duplicate rows exist
+                if key in long_selector:
+                    key = f"{key} (id {r.get('id','')})"
+                long_selector[key] = r
+            c_sel, c_act, c_btn = st.columns([3, 2, 1])
+            with c_sel:
+                long_sel_label = st.selectbox("Select Contract to Manage", options=list(long_selector.keys()), key="long_opt_man_sel")
+            if long_sel_label:
+                lr = long_selector[long_sel_label]
+                sym = lr.get('symbol','UNK')
+                strike = float(lr.get('strike_price',0) or 0)
+                exp_raw = lr.get('expiration','')
+                exp_iso = str(exp_raw) if exp_raw is not None else ""
+                qty_avail = float(lr.get('quantity',0) or 0)
+                st.caption(f"Selected: **{sym}** {opt_t or ''} • Exp: **{format_date_custom(exp_raw)}** • Strike: **${strike:,.2f}** • Qty: **{qty_avail:g}**")
+                t_raw = str(lr.get('type','') or lr.get('type_disp','') or '').upper()
+                opt_t = "CALL" if "CALL" in t_raw else ("PUT" if "PUT" in t_raw else "")
+                asset_type = lr.get('type','LEAP').upper()
+                if "LEAP" not in asset_type:
+                    asset_type = f"LEAP {opt_t}".strip()
+
+                with c_act:
+                    long_action = st.radio(
+                        "Action",
+                        ["Exercise (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
+                        label_visibility="collapsed",
+                        key="long_opt_action",
+                    )
+
+                # Defaults (match short section behavior: no extra "bottom fold" for Exercise/Expire)
+                qty_to_process = int(qty_avail)
+                close_date = date.today()
+                close_price = float(lr.get('current_price', 0) or 0.0)
+                close_fees = 0.0
+                ex_date = date.today()
+
+                # --- ACTION INPUTS (only for actions that need them) ---
+                if "Sell-To-Close" in long_action:
+                    st.markdown("---")
+                    st.caption("🧾 **Sell-To-Close Details**: Sell the selected long option to close it.")
+                    cc0, cc1, cc2, cc3 = st.columns([1, 1, 1, 1])
+                    with cc0:
+                        qty_to_process = st.number_input(
+                            "Contracts to Close",
+                            min_value=1,
+                            max_value=int(qty_avail),
+                            value=int(qty_avail),
+                            step=1,
+                            key=f"ltc_qty_{sym}_{opt_t}_{exp_iso}_{strike}",
+                        )
+                    with cc1:
+                        close_date = st.date_input(
+                            "Transaction Date",
+                            value=date.today(),
+                            key=f"ltc_dt_{sym}_{opt_t}_{exp_iso}_{strike}",
+                        )
+                    with cc2:
+                        close_price = st.number_input(
+                            "Sell Price ($)",
+                            min_value=0.0,
+                            value=float(lr.get("current_price", 0) or 0.0),
+                            step=0.01,
+                            format="%.2f",
+                            key=f"ltc_px_{sym}_{opt_t}_{exp_iso}_{strike}",
+                        )
+                    with cc3:
+                        close_fees = st.number_input(
+                            "Fees ($)",
+                            min_value=0.0,
+                            value=0.0,
+                            step=0.01,
+                            format="%.2f",
+                            key=f"ltc_fee_{sym}_{opt_t}_{exp_iso}_{strike}",
+                        )
+                    calc_stc = float(close_price) * int(qty_to_process) * 100
+                    net_cash = calc_stc - float(close_fees)
+                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+
+                if "Roll Position" in long_action:
+                    st.markdown("---")
+                    st.caption("🔁 **Roll Details**: Split into Sell-To-Close (current) and Buy-To-Open (new).")
+                    roll_key = f"lroll_{sym}_{opt_t}_{exp_iso}_{strike}"
+                    qty_to_process = st.number_input(
+                        "Contracts to Roll",
+                        min_value=1,
+                        max_value=int(qty_avail),
+                        value=int(qty_avail),
+                        step=1,
+                        key=f"{roll_key}_qty",
+                    )
+                    roll_close_date = st.date_input(
+                        "Roll Transaction Date",
+                        value=date.today(),
+                        key=f"{roll_key}_date",
+                    )
+
+                    st.markdown("#### Step 1 — Sell-To-Close current contract")
+                    b1, b2 = st.columns(2)
+                    with b1:
+                        roll_close_price = st.number_input(
+                            "STC Price ($)",
+                            min_value=0.0,
+                            value=float(lr.get("current_price", 0) or 0.0),
+                            step=0.01,
+                            format="%.2f",
+                            key=f"{roll_key}_stc_price",
+                        )
+                    with b2:
+                        roll_close_fees = st.number_input(
+                            "STC Fees ($)",
+                            min_value=0.0,
+                            value=0.0,
+                            step=0.01,
+                            format="%.2f",
+                            key=f"{roll_key}_stc_fees",
+                        )
+
+                    st.markdown("#### Step 2 — Buy-To-Open new contract")
+                    n1, n2, n3, n4 = st.columns([1, 1, 1, 1])
+                    with n1:
+                        new_strike = st.number_input(
+                            "New Strike ($)",
+                            value=float(strike),
+                            format="%.2f",
+                            key=f"{roll_key}_new_strike",
+                        )
+                    with n2:
+                        def_date = _next_friday_local(date.today())
+                        new_exp = st.date_input(
+                            "New Expiration Date",
+                            value=def_date,
+                            key=f"{roll_key}_new_exp",
+                        )
+                    with n3:
+                        new_type = st.selectbox(
+                            "New Type",
+                            ["CALL", "PUT"],
+                            index=(0 if opt_t == "CALL" else 1),
+                            key=f"{roll_key}_new_type",
+                        )
+                    with n4:
+                        new_open_price = st.number_input(
+                            "Buy Price ($)",
+                            min_value=0.0,
+                            value=0.0,
+                            step=0.01,
+                            format="%.2f",
+                            key=f"{roll_key}_new_px",
+                        )
+                    new_open_date = st.date_input(
+                        "Open Transaction Date",
+                        value=roll_close_date,
+                        key=f"{roll_key}_new_date",
+                    )
+                    new_open_fees = st.number_input(
+                        "Open Fees ($)",
+                        min_value=0.0,
+                        value=0.0,
+                        step=0.01,
+                        format="%.2f",
+                        key=f"{roll_key}_new_fees",
+                    )
+
+                    calc_stc = float(roll_close_price) * int(qty_to_process) * 100
+                    calc_bto = float(new_open_price) * int(qty_to_process) * 100
+                    net_cash = calc_stc - calc_bto - float(roll_close_fees) - float(new_open_fees)
+                    st.write(f"**Net Cash Effect:** ${net_cash:+,.2f}")
+
+                # --- Execute ---
+                needs_confirm = (('Exercise' in long_action) or ('Expire' in long_action))
+                confirm_ok = True
+                if needs_confirm:
+                    confirm_ok = st.checkbox('I understand this will update holdings and cannot be undone.', key='long_confirm')
+
+                with c_btn:
+                    do_it = st.button("Process Action", type="primary", use_container_width=True, key="long_opt_execute", disabled=(not confirm_ok))
+
+                if do_it:
+                    try:
+                        q = float(qty_to_process or 0)
+                        if q <= 0:
+                            st.error("Quantity must be greater than 0.")
+                            st.stop()
+                        if q > float(qty_avail):
+                            st.error("Quantity exceeds available contracts.")
+                            st.stop()
+
+                        if "Sell-To-Close" in long_action:
+                            update_asset_position(uid, sym, q, float(close_price), "Sell", close_date, asset_type, expiration=exp_iso, strike=strike, fees=float(close_fees))
+                            st.success(f"Closed {q:g} contract(s) via Sell-To-Close.")
+                            st.rerun()
+
+                        elif "Expire" in long_action:
+                            update_asset_position(uid, sym, q, 0.0, "Sell", close_date, asset_type, expiration=exp_iso, strike=strike, fees=0.0)
+                            st.success(f"Expired {q:g} contract(s).")
+                            st.rerun()
+
+                        elif "Exercise" in long_action:
+                            # 1) Remove the option position at $0
+                            update_asset_position(uid, sym, q, 0.0, "Sell", ex_date, asset_type, expiration=exp_iso, strike=strike, fees=0.0)
+                            # 2) Create the stock trade at strike
+                            shares = int(q * 100)
+                            if opt_t == "CALL":
+                                update_asset_position(uid, sym, shares, float(strike), "Buy", ex_date, "STOCK", fees=float(ex_fees))
+                                st.success(f"Exercised CALL: bought {shares} shares @ ${strike:,.2f}.")
+                            elif opt_t == "PUT":
+                                update_asset_position(uid, sym, shares, float(strike), "Sell", ex_date, "STOCK", fees=float(ex_fees))
+                                st.success(f"Exercised PUT: sold {shares} shares @ ${strike:,.2f}.")
+                            else:
+                                st.warning("Could not determine option type (CALL/PUT) for exercise. Option position was closed, but no stock trade was created.")
+                            st.rerun()
+
+                        elif "Roll Position" in long_action:
+                            # Close old
+                            update_asset_position(uid, sym, q, float(roll_close_price), "Sell", roll_close_date, asset_type, expiration=exp_iso, strike=strike, fees=float(roll_close_fees))
+                            # Open new
+                            new_asset_type = f"LEAP {new_type}".strip()
+                            update_asset_position(uid, sym, q, float(new_open_price), "Buy", new_open_date, new_asset_type, expiration=str(new_exp), strike=float(new_strike), fees=float(new_open_fees))
+                            st.success(f"Rolled {q:g} contract(s): closed old and opened new.")
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"Action failed: {e}")
+        else:
+            st.info("No Long Option Holdings to manage.")
+
+
+    
+
 
 def snapshot_page(user):
     st.header("📸 Weekly Snapshot & History")
@@ -4308,7 +4272,6 @@ def pricing_page(active_user):
     def _refresh_and_optionally_save(df_in: pd.DataFrame, do_save: bool) -> pd.DataFrame:
         df = df_in.copy()
         mids = []
-        deltas = []
         changed = 0
 
         with st.spinner("Fetching Yahoo option mid prices..."):
@@ -4325,18 +4288,12 @@ def pricing_page(active_user):
                 mid = get_yahoo_option_mid_price(sym, exp, strike, right)
                 mids.append(mid)
 
-                dlt = get_yahoo_option_delta(sym, exp, strike, right)
-                deltas.append(dlt)
-
                 prog.progress(i / total)
 
         df["yahoo_mid"] = mids
-        df["yahoo_delta"] = deltas
 
         # Choose new price: Yahoo mid if available else keep existing last_price
         df["current_db_price"] = df.get("last_price", 0.0).apply(clean_number)
-        df["current_db_delta"] = df.get("delta", None).apply(clean_number) if "delta" in df.columns else pd.NA
-        df["new_delta"] = df["yahoo_delta"]
         df["new_price"] = df.apply(
             lambda r: r["yahoo_mid"] if (r["yahoo_mid"] is not None and not pd.isna(r["yahoo_mid"])) else r["current_db_price"],
             axis=1
@@ -4346,33 +4303,9 @@ def pricing_page(active_user):
             for _, row in df.iterrows():
                 new_p = float(row["new_price"])
                 old_p = float(row["current_db_price"])
-                upd = {}
                 if abs(new_p - old_p) > 1e-9:
-                    upd["last_price"] = new_p
-
-                # Always overwrite delta with Yahoo-derived estimate when available
-                new_d = row.get("new_delta", None)
-                try:
-                    if new_d is not None and not pd.isna(new_d):
-                        upd["delta"] = float(new_d)
-                except Exception:
-                    pass
-
-                if upd:
-                    try:
-                        supabase.table("assets").update(upd).eq("id", row["id"]).execute()
-                        changed += 1
-                    except Exception:
-                        # If the assets table doesn't have a delta column in this deployment,
-                        # retry with price-only update to avoid failing the whole save.
-                        if "delta" in upd:
-                            try:
-                                upd2 = {k: v for k, v in upd.items() if k != "delta"}
-                                if upd2:
-                                    supabase.table("assets").update(upd2).eq("id", row["id"]).execute()
-                                    changed += 1
-                            except Exception:
-                                pass
+                    supabase.table("assets").update({"last_price": new_p}).eq("id", row["id"]).execute()
+                    changed += 1
 
             st.success(f"✅ Saved {changed} updated LEAP prices to the database.")
         return df
@@ -4390,13 +4323,12 @@ def pricing_page(active_user):
         out_df["new_price"] = out_df["current_db_price"]
 
     # Display
-    show = out_df[["ticker_clean", "exp_disp", "strike_price", "new_delta", "right", "current_db_price", "yahoo_mid", "new_price"]].copy()
+    show = out_df[["ticker_clean", "exp_disp", "strike_price", "right", "current_db_price", "yahoo_mid", "new_price"]].copy()
 
     show.rename(columns={
         "ticker_clean": "Ticker",
         "exp_disp": "Exp",
         "strike_price": "Strike",
-        "new_delta": "Delta",
         "right": "Option",
                 "current_db_price": "DB Price",
         "yahoo_mid": "Yahoo Mid",
@@ -4413,8 +4345,6 @@ def pricing_page(active_user):
     try:
         show["_exp_sort"] = pd.to_datetime(show["Exp"], errors="coerce")
         show["Strike"] = pd.to_numeric(show["Strike"], errors="coerce")
-        if "Delta" in show.columns:
-            show["Delta"] = pd.to_numeric(show["Delta"], errors="coerce")
         show = show.sort_values(by=["Ticker", "_exp_sort", "Strike"], ascending=[True, True, False]).drop(columns=["_exp_sort"])
     except Exception:
         pass
@@ -4431,7 +4361,7 @@ def pricing_page(active_user):
     # --- Display formatting (robust to blanks / strings) ---
     # Pandas Styler can raise a TypeError when a column contains mixed types (e.g., numbers + ""/None).
     # Coerce to numeric where it makes sense, then apply safe formatter functions.
-    for _col in ["Strike", "Delta", "DB Price", "Yahoo Mid", "Lead Price (New)"]:
+    for _col in ["Strike", "DB Price", "Yahoo Mid", "Lead Price (New)"]:
         if _col in show.columns:
             show[_col] = pd.to_numeric(show[_col], errors="coerce")
 
@@ -4454,7 +4384,6 @@ def pricing_page(active_user):
     try:
         styled_show = show.style.apply(_highlight_updated_rows, axis=1).format({
             "Strike": _fmt_currency_2,
-            "Delta": _fmt_num_3,
             "DB Price": _fmt_num_3,
             "Yahoo Mid": _fmt_num_3,
             "Lead Price (New)": _fmt_num_3,
