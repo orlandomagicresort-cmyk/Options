@@ -3188,7 +3188,7 @@ def option_details_page(active_user):
 
     # --- Long Option Actions ---
     st.markdown("")
-    st.subheader("Manage Long Options")
+    st.subheader("Manage Long Contracts")
     if not leaps_df.empty:
         # Build selector options from each individual long option row (not consolidated)
         long_selector = {}
@@ -3208,7 +3208,7 @@ def option_details_page(active_user):
 
         c0, c1 = st.columns([2, 1])
         with c0:
-            long_sel_label = st.selectbox("Select Long Contract to Manage", options=list(long_selector.keys()), key="long_opt_man_sel")
+            long_sel_label = st.radio("Select Long Contract to Manage", options=list(long_selector.keys()), key="long_opt_man_sel")
         if long_sel_label:
             lr = long_selector[long_sel_label]
             sym = lr.get('symbol','UNK')
@@ -3223,12 +3223,7 @@ def option_details_page(active_user):
                 asset_type = f"LEAP {opt_t}".strip()
 
             with c1:
-                long_action = st.radio(
-                    "Action",
-                    ["Exercise (Assign Equivalent)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"],
-                    key="long_opt_action",
-                    label_visibility="collapsed"
-                )
+                long_action = st.radio("Action", ["Select action...", "Exercise (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Sell-To-Close (Close Long)"], key="long_opt_action", label_visibility="collapsed")
 
             qty_to_process = qty_avail
             close_date = date.today()
@@ -3314,7 +3309,7 @@ def option_details_page(active_user):
             # --- Execute ---
             exec_col0, exec_col1 = st.columns([1,3])
             with exec_col0:
-                do_it = st.button("Execute", key="long_opt_execute")
+                do_it = st.button("Process Action", type="primary", use_container_width=True, key="long_opt_execute", disabled=(long_action=="Select action..."))
 
             if do_it:
                 try:
@@ -3394,23 +3389,23 @@ def option_details_page(active_user):
             opt_html += f"<tr><td>{row['symbol']}</td><td>{row['type']}</td><td>{s_date}</td>"
             opt_html += f"<td>{s_strike}</td><td>{row['qty']:g}</td><td>{s_price}</td><td>{s_liab}</td><td>{s_collateral}</td></tr>"
             
-            label = f"{row['symbol']} {row['type']} ${row['strike']} ({s_date}) [Qty: {row['qty']:g}]"
+            label = f"{row['symbol']} | {s_date} | Strike: ${float(row['strike']):,.2f} | Qty: {row['qty']:g} | {row['type']}"
             selector_options[label] = row
 
         opt_html += "</tbody></table>"
         st.markdown(opt_html, unsafe_allow_html=True)
 
-        with st.expander("⚡ Manage Active Contracts", expanded=True):
+        with st.expander("⚡ Manage Short Contracts", expanded=True):
             c_sel, c_act, c_btn = st.columns([3, 2, 1])
             with c_sel:
-                selected_label = st.selectbox("Select Contract to Manage", options=list(selector_options.keys()), key="opt_man_sel")
+                selected_label = st.radio("Select Contract to Manage", options=list(selector_options.keys()), key="opt_man_sel")
             
             if selected_label:
                 sel_row = selector_options[selected_label]
                 total_avail = int(sel_row['qty'])
                 
                 with c_act:
-                    action_choice = st.radio("Action", ["Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Buy-To-Close (Close Short)"], label_visibility="collapsed")
+                    action_choice = st.radio("Action", ["Select action...", "Assignment (Stock Trade)", "Expire (Close @ $0)", "Roll Position (Close & New)", "Buy-To-Close (Close Short)"], key="short_opt_action", label_visibility="collapsed")
                 
                 # --- ACTION INPUTS ---
                 qty_to_process = total_avail
@@ -3541,7 +3536,7 @@ def option_details_page(active_user):
                 with c_btn:
                     st.write("")
                     st.write("") 
-                    if st.button("Process Action", type="primary", use_container_width=True):
+                    if st.button("Process Action", type="primary", use_container_width=True, disabled=(action_choice=="Select action...")):
                         
                         # 1. ASSIGNMENT
                         if "Assignment" in action_choice:
