@@ -4322,6 +4322,9 @@ def pricing_page(active_user):
         out_df["current_db_price"] = out_df.get("last_price", 0.0).apply(clean_number)
         out_df["new_price"] = out_df["current_db_price"]
 
+    # Persist latest table for manual overrides
+    st.session_state['leap_prices_out_df'] = out_df.copy()
+
     # Display
     show = out_df[["ticker_clean", "exp_disp", "strike_price", "right", "current_db_price", "yahoo_mid", "new_price"]].copy()
 
@@ -4413,74 +4416,86 @@ def pricing_page(active_user):
         pass
     st.markdown(styled_show.to_html(), unsafe_allow_html=True)
 
-# --- Manual price override (when Yahoo doesn't update a contract) ---
-st.divider()
-with st.expander("✍️ Manual LEAP price override", expanded=False):
-    st.caption("Use this when a specific contract isn't getting a Yahoo Mid price. This will overwrite the database price for that contract.")
-    try:
-        if 'out_df' not in locals() or out_df is None or len(out_df) == 0:
-            st.info("No LEAP rows are loaded yet. Run a refresh above first.")
-        else:
-            only_missing = st.checkbox("Show only contracts missing Yahoo Mid", value=True, key="manual_price_only_missing")
-            df_pick = out_df.copy()
-
-            if only_missing and "yahoo_mid" in df_pick.columns:
-                df_pick = df_pick[df_pick["yahoo_mid"].isna()].copy()
-
-            if df_pick.empty:
-                st.info("No contracts match that filter.")
+    # --- Manual price override (when Yahoo doesn't update a contract) ---
+    st.divider()
+    with st.expander("✍️ Manual LEAP price override", expanded=False):
+        st.caption("Use this when a specific contract isn't getting a Yahoo Mid price. This will overwrite the database price for that contract.")
+        try:
+            df_src = st.session_state.get("leap_prices_out_df")
+            if df_src is None or len(df_src) == 0:
+                st.info("No LEAP rows are loaded yet. Click **Update LEAP Prices** above first.")
             else:
-                # Build labels consistent with the rest of the page
-                def _fmt_money(x):
-                    try:
-                        if pd.isna(x):
-                            return ""
-                        return f"${float(x):,.2f}"
-                    except Exception:
-                        return ""
-                df_pick["__label"] = (
-                    df_pick.get("ticker_clean", df_pick.get("ticker", "")).astype(str).str.upper()
-                    + " | " + df_pick.get("exp_disp", df_pick.get("expiry_disp", df_pick.get("expiry", ""))).astype(str)
-                    + " | Strike: " + df_pick.get("strike_price", df_pick.get("strike", "")).apply(_fmt_money)
-                    + " | " + df_pick.get("right", df_pick.get("option_type", "")).astype(str).str.upper()
+                only_missing = st.checkbox(
+                    "Show only contracts missing Yahoo Mid",
+                    value=True,
+                    key="manual_price_only_missing",
                 )
+                df_pick = df_src.copy()
+                if only_missing and "yahoo_mid" in df_pick.columns:
+                    df_pick = df_pick[df_pick["yahoo_mid"].isna()].copy()
 
-                labels = df_pick["__label"].tolist()
-                # Use id when available; otherwise fall back to index
-                ids = df_pick["id"].tolist() if "id" in df_pick.columns else list(range(len(df_pick)))
-                label_to_id = dict(zip(labels, ids))
-                default_idx = 0
-                selected_label = st.radio("Select contract", labels, index=default_idx, key="manual_price_contract_radio")
-                selected_id = label_to_id.get(selected_label)
+                if df_pick.empty:
+                    st.info("No contracts match that filter.")
+                else:
+                    # Labels similar to other contract pickers
+                    def _label(r):
+                        t = r.get("ticker", "")
+                        exp = r.get("expiry", "")
+                        strike = r.get("strike", "")
+                        opt = r.get("option_type", r.get("option", ""))
+                        return f"{t} | {exp} | Strike: ${float(strike):,.2f} | {opt}" if strike not in (None, "", "nan") else f"{t} | {exp} | {opt}"
 
-                c1, c2, c3 = st.columns([2, 1, 1])
-                with c1:
-                    manual_price = st.number_input("Manual price (USD)", min_value=0.0, value=0.0, step=0.01, key="manual_price_value")
-                with c2:
-                    st.metric("Current DB Price", _fmt_money(df_pick.loc[df_pick["__label"] == selected_label, "current_db_price"].iloc[0]) if "current_db_price" in df_pick.columns else "")
-                with c3:
-                    st.metric("Yahoo Mid", _fmt_money(df_pick.loc[df_pick["__label"] == selected_label, "yahoo_mid"].iloc[0]) if "yahoo_mid" in df_pick.columns else "")
+                    df_pick = df_pick.reset_index(drop=True)
+                    labels = [ _label(df_pick.loc[i]) for i in range(len(df_pick)) ]
 
-                confirm = st.checkbox("I understand this will overwrite the database price for this contract.", value=False, key="manual_price_confirm")
-                save_btn = st.button("Save Manual Price", type="primary", disabled=(not confirm), key="manual_price_save_btn")
+                    sel_ix = st.radio(
+                        "Select contract to override",
+                        options=list(range(len(labels))),
+                        format_func=lambda i: labels[i],
+                        key="manual_price_contract_ix",
+                    )
+                    row = df_pick.loc[sel_ix]
 
-                if save_btn:
-                    _require_editor(active_user)
-                    if "id" not in df_pick.columns:
-                        st.error("Can't save: this table doesn't include an asset id.")
-                    else:
+                    c1, c2 = st.columns([1, 1])
+                    with c1:
+                        current_db = row.get("current_db_price", row.get("last_price", None))
+                        st.metric("Current DB Price", "" if current_db in (None, "") else f"${float(current_db):,.2f}")
+                    with c2:
+                        yh = row.get("yahoo_mid", None)
+                        st.metric("Yahoo Mid", "" if yh in (None, "") else f"${float(yh):,.2f}")
+
+                    manual_price = st.number_input(
+                        "Manual price",
+                        min_value=0.0,
+                        value=float(current_db) if current_db not in (None, "", "nan") else 0.0,
+                        step=0.01,
+                        key="manual_override_price",
+                    )
+
+                    confirm = st.checkbox(
+                        "I confirm I want to overwrite the database price for this contract.",
+                        value=False,
+                        key="manual_override_confirm",
+                    )
+
+                    btn = st.button(
+                        "Save Manual Price",
+                        type="primary",
+                        disabled=not confirm,
+                        key="manual_override_save_btn",
+                    )
+                    if btn:
+                        _require_editor()
                         try:
-                            supabase.table("assets").update({"last_price": float(manual_price)}).eq("id", selected_id).execute()
-                            st.success("✅ Manual price saved to database.")
-                            try:
-                                st.cache_data.clear()
-                            except Exception:
-                                pass
+                            supabase.table("assets").update({"last_price": float(manual_price)}).eq("id", row["id"]).execute()
+                            st.success("✅ Manual price saved to the database.")
+                            st.session_state["leap_prices_out_df"] = None
                             st.rerun()
                         except Exception as e:
                             st.error(f"Database update failed: {e}")
-    except Exception as e:
-        st.error(f"Manual override UI error: {e}")
+        except Exception as e:
+            st.error(f"Manual override UI error: {e}")
+
 
 
 def safe_reverse_ledger_transaction(transaction_id):
