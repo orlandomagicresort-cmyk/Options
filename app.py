@@ -4413,76 +4413,75 @@ def pricing_page(active_user):
         pass
     st.markdown(styled_show.to_html(), unsafe_allow_html=True)
 
-# --- Manual override (when Yahoo mid is missing / stale) ---
-with st.expander("✍️ Manual price override (only if Yahoo is missing)", expanded=False):
+# --- Manual price override (when Yahoo doesn't update a contract) ---
+st.divider()
+with st.expander("✍️ Manual LEAP price override", expanded=False):
+    st.caption("Use this when a specific contract isn't getting a Yahoo Mid price. This will overwrite the database price for that contract.")
     try:
-        # Identify rows where Yahoo didn't return a mid price
-        missing_mask = out_df.get("yahoo_mid").isna() if "yahoo_mid" in out_df.columns else pd.Series([False]*len(out_df))
-        missing_df = out_df.loc[missing_mask].copy() if len(out_df) else out_df.head(0).copy()
-
-        if missing_df.empty:
-            st.caption("All LEAPs returned a Yahoo price on the last refresh.")
+        if 'out_df' not in locals() or out_df is None or len(out_df) == 0:
+            st.info("No LEAP rows are loaded yet. Run a refresh above first.")
         else:
-            missing_df["label"] = (
-                missing_df["ticker_clean"].astype(str).str.upper()
-                + " | " + missing_df["exp_disp"].astype(str)
-                + " | Strike: $" + pd.to_numeric(missing_df["strike_price"], errors="coerce").fillna(0).map(lambda x: f"{float(x):,.2f}")
-                + " | " + missing_df["right"].astype(str).str.upper()
-            )
+            only_missing = st.checkbox("Show only contracts missing Yahoo Mid", value=True, key="manual_price_only_missing")
+            df_pick = out_df.copy()
 
-            sel_label = st.radio(
-                "Select the contract to override",
-                missing_df["label"].tolist(),
-                key=f"manual_leap_pick_{uid}",
-            )
+            if only_missing and "yahoo_mid" in df_pick.columns:
+                df_pick = df_pick[df_pick["yahoo_mid"].isna()].copy()
 
-            sel_row = missing_df.loc[missing_df["label"] == sel_label].iloc[0]
-            manual_price = st.number_input(
-                "Manual price (will overwrite DB last_price)",
-                min_value=0.0,
-                value=float(clean_number(sel_row.get("current_db_price", 0.0)) or 0.0),
-                step=0.01,
-                format="%.3f",
-                key=f"manual_leap_price_{uid}_{str(sel_row.get('id'))}",
-            )
-
-            confirm = st.checkbox(
-                "I confirm I want to overwrite the database price for this option.",
-                value=False,
-                key=f"manual_leap_confirm_{uid}_{str(sel_row.get('id'))}",
-            )
-
-            if st.button(
-                "Save Manual Price",
-                type="primary",
-                disabled=not confirm,
-                key=f"manual_leap_save_{uid}_{str(sel_row.get('id'))}",
-            ):
-                try:
-                    _require_editor()
-                    supabase.table("assets").update({"last_price": float(manual_price)}).eq("id", sel_row["id"]).execute()
-                    st.success("✅ Manual price saved to the database.")
-                    # Force refresh on next view so the table reflects the new DB value
+            if df_pick.empty:
+                st.info("No contracts match that filter.")
+            else:
+                # Build labels consistent with the rest of the page
+                def _fmt_money(x):
                     try:
-                        st.cache_data.clear()
+                        if pd.isna(x):
+                            return ""
+                        return f"${float(x):,.2f}"
                     except Exception:
-                        pass
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Failed to save manual price: {e}")
+                        return ""
+                df_pick["__label"] = (
+                    df_pick.get("ticker_clean", df_pick.get("ticker", "")).astype(str).str.upper()
+                    + " | " + df_pick.get("exp_disp", df_pick.get("expiry_disp", df_pick.get("expiry", ""))).astype(str)
+                    + " | Strike: " + df_pick.get("strike_price", df_pick.get("strike", "")).apply(_fmt_money)
+                    + " | " + df_pick.get("right", df_pick.get("option_type", "")).astype(str).str.upper()
+                )
+
+                labels = df_pick["__label"].tolist()
+                # Use id when available; otherwise fall back to index
+                ids = df_pick["id"].tolist() if "id" in df_pick.columns else list(range(len(df_pick)))
+                label_to_id = dict(zip(labels, ids))
+                default_idx = 0
+                selected_label = st.radio("Select contract", labels, index=default_idx, key="manual_price_contract_radio")
+                selected_id = label_to_id.get(selected_label)
+
+                c1, c2, c3 = st.columns([2, 1, 1])
+                with c1:
+                    manual_price = st.number_input("Manual price (USD)", min_value=0.0, value=0.0, step=0.01, key="manual_price_value")
+                with c2:
+                    st.metric("Current DB Price", _fmt_money(df_pick.loc[df_pick["__label"] == selected_label, "current_db_price"].iloc[0]) if "current_db_price" in df_pick.columns else "")
+                with c3:
+                    st.metric("Yahoo Mid", _fmt_money(df_pick.loc[df_pick["__label"] == selected_label, "yahoo_mid"].iloc[0]) if "yahoo_mid" in df_pick.columns else "")
+
+                confirm = st.checkbox("I understand this will overwrite the database price for this contract.", value=False, key="manual_price_confirm")
+                save_btn = st.button("Save Manual Price", type="primary", disabled=(not confirm), key="manual_price_save_btn")
+
+                if save_btn:
+                    _require_editor(active_user)
+                    if "id" not in df_pick.columns:
+                        st.error("Can't save: this table doesn't include an asset id.")
+                    else:
+                        try:
+                            supabase.table("assets").update({"last_price": float(manual_price)}).eq("id", selected_id).execute()
+                            st.success("✅ Manual price saved to database.")
+                            try:
+                                st.cache_data.clear()
+                            except Exception:
+                                pass
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Database update failed: {e}")
     except Exception as e:
         st.error(f"Manual override UI error: {e}")
-    # Copy / export helpers for Excel (only the New prices)
-    try:
-        if "Lead Price (New)" in show.columns:
-            export_cols = [c for c in ["Ticker", "Exp", "Strike", "Option", "Lead Price (New)"] if c in show.columns]
-            export_df = show[export_cols].copy()
 
-            # Quick copy: one value per line (paste into Excel column)
-
-            # Quick copy: tab-separated table (paste into Excel with columns)
-    except Exception:
-        pass
 
 def safe_reverse_ledger_transaction(transaction_id):
     res = supabase.table("transactions").select("*").eq("id", transaction_id).execute()
