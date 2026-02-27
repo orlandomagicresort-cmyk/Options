@@ -216,7 +216,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 st.set_page_config(
     page_title="Pro Options Tracker",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 
@@ -5365,22 +5365,19 @@ def main():
                 )
 
         with c_controls:
-            # Account selector (delegation)
-            active_user = _set_active_account(user, ui=c_controls)
-
-            # User + logout
-            u_email = getattr(user, "email", "")
-            c1, c2 = st.columns([3, 1])
-            with c1:
+            # Right side controls: account selector + signed-in user + logout
+            acct_col, user_col, logout_col = st.columns([4.8, 3.2, 1.2], gap="small")
+            with acct_col:
+                active_user = _set_active_account(user, ui=acct_col)
+            with user_col:
+                u_email = getattr(user, "email", "")
                 st.caption(f"Signed in as **{u_email}**")
-            with c2:
-                if st.button("Logout", key="logout_top"):
+            with logout_col:
+                if st.button("Logout", key="logout_top", type="secondary"):
                     supabase.auth.sign_out()
                     st.session_state.user = None
                     st.rerun()
-
     st.divider()
-tion removed (top bar only)
 
     if page == "Dashboard":
         dashboard_page(active_user, view="summary")
