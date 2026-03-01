@@ -593,9 +593,17 @@ def _set_active_account(user):
     if cur not in labels:
         cur = labels[0]
 
-    sel = st.sidebar.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
-    st.session_state["active_account_label"] = sel
-    chosen = next(a for a in accts if a["label"] == sel)
+    # Selector is rendered in the top header (key='account_selector'). We still support
+# older session values / deep links by defaulting safely.
+if "account_selector" not in st.session_state:
+    st.session_state["account_selector"] = cur
+sel = st.session_state.get("account_selector") or cur
+if sel not in labels:
+    sel = labels[0]
+    st.session_state["account_selector"] = sel
+
+st.session_state["active_account_label"] = sel
+chosen = next(a for a in accts if a["label"] == sel)
 
     # Try to resolve the chosen account's display name (used for masking / UI)
     chosen_display = None
@@ -2047,6 +2055,115 @@ def dashboard_page(active_user, view: str = "summary"):
             pv_html += f"<tr><td>{label}</td><td>{_fmt_money(usd_v)}</td><td>{_fmt_money(cad_v)}</td></tr>"
         pv_html += f"<tr class='total-row'><td>Total Portfolio Value</td><td>{_fmt_money(net_liq_usd)}</td><td>{_fmt_money(net_liq_cad)}</td></tr></tbody></table>"
         st.markdown(pv_html, unsafe_allow_html=True)
+
+# --- Visuals: Portfolio Breakdown + Portfolio Value History ---
+try:
+    st.markdown("<div class='card'><div class='h3-title'>Portfolio Breakdown</div>", unsafe_allow_html=True)
+    c_left, c_right = st.columns([1.05, 1.25], gap="large")
+
+    # Donut breakdown (Stocks / LEAPs / Cash / Short Liability)
+    with c_left:
+        try:
+            bdf = pd.DataFrame({
+                "Category": ["Stocks", "LEAP Equity", "Cash", "Short Liability"],
+                "Value": [
+                    float(max(stock_value_usd, 0.0)),
+                    float(max(leap_value_usd, 0.0)),
+                    float(max(cash_usd, 0.0)),
+                    float(max(itm_liability_usd, 0.0)),
+                ],
+            })
+            # If everything is zero, render a neutral donut
+            if float(bdf["Value"].sum()) <= 0:
+                bdf["Value"] = [1, 1, 1, 1]
+
+            bdf["Pct"] = bdf["Value"] / bdf["Value"].sum()
+            bdf["Label"] = bdf.apply(lambda r: f"{r['Category']}  {r['Pct']*100:.0f}%", axis=1)
+
+            donut = (
+                alt.Chart(bdf)
+                .mark_arc(innerRadius=95, outerRadius=165, cornerRadius=10)
+                .encode(
+                    theta=alt.Theta(field="Value", type="quantitative", stack=True),
+                    color=alt.Color(
+                        field="Category",
+                        type="nominal",
+                        scale=alt.Scale(scheme="tableau10"),
+                        legend=alt.Legend(orient="bottom", title=None),
+                    ),
+                    tooltip=[
+                        alt.Tooltip("Category:N"),
+                        alt.Tooltip("Value:Q", format=",.2f"),
+                        alt.Tooltip("Pct:Q", format=".1%"),
+                    ],
+                )
+                .properties(height=320)
+            )
+
+            st.altair_chart(donut, use_container_width=True)
+
+            # Small breakdown table beside / under donut
+            tdf = pd.DataFrame({
+                "Component": ["Stocks", "LEAP Equity", "Cash", "ITM Call Liability"],
+                "USD": [
+                    float(stock_value_usd),
+                    float(leap_value_usd),
+                    float(cash_usd),
+                    float(-itm_liability_usd),
+                ],
+                "CAD": [
+                    float(stock_value_usd * fx),
+                    float(leap_value_usd * fx),
+                    float(cash_usd * fx),
+                    float(-itm_liability_usd * fx),
+                ],
+            })
+            tdf["USD"] = tdf["USD"].apply(_fmt_money)
+            tdf["CAD"] = tdf["CAD"].apply(_fmt_money)
+            st.dataframe(tdf, hide_index=True, use_container_width=True)
+        except Exception:
+            st.info("Portfolio breakdown chart unavailable (insufficient data).")
+
+    # Portfolio value history (weekly snapshots)
+    with c_right:
+        try:
+            hist_df = get_portfolio_history(uid)
+            hist_df = normalize_columns(hist_df) if hist_df is not None else pd.DataFrame()
+            if hist_df is None or hist_df.empty or "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+                raise ValueError("history_missing")
+
+            hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
+            hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
+            hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
+            hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
+
+            # Show last ~12 months if available
+            if not hist_df.empty:
+                cutoff = pd.Timestamp.today() - pd.Timedelta(days=370)
+                hist_df = hist_df[hist_df["snapshot_date"] >= cutoff]
+
+            line = (
+                alt.Chart(hist_df)
+                .mark_line()
+                .encode(
+                    x=alt.X("snapshot_date:T", title=None),
+                    y=alt.Y("total_equity:Q", title=None),
+                    tooltip=[
+                        alt.Tooltip("snapshot_date:T", title="Date"),
+                        alt.Tooltip("total_equity:Q", title="Total Equity", format=",.0f"),
+                    ],
+                )
+                .properties(height=360, title="Total Equity (Weekly Snapshots)")
+            )
+            st.altair_chart(line, use_container_width=True)
+        except Exception:
+            # Fallback: show a tiny sparkline based on current net liq only
+            st.info("Equity history chart will appear after you have weekly snapshots saved in portfolio_history.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
+except Exception:
+    # Charts should never block the dashboard
+    pass
 
         st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
         st.markdown(summ_html, unsafe_allow_html=True)
@@ -5645,19 +5762,54 @@ def main():
     if not email and isinstance(u, dict):
         email = u.get("email")
     acct_label = st.session_state.get("active_account_label", "My Account")
-    st.markdown(
-        f"""<div class=\"topbar\">
-              <div style=\"display:flex; justify-content:space-between; align-items:center; gap:12px;\">
-                <div class=\"brand\"><span class=\"logo\"></span><span>Stock Portfolio</span></div>
-                <div class=\"right\">
-                  <span class=\"pill\">USD</span>
-                  <span class=\"pill\">{acct_label}</span>
-                  <span class=\"pill\">{email or ''}</span>
-                </div>
-              </div>
-            </div>""",
-        unsafe_allow_html=True,
+    # Top bar (visual + selectors)
+u = st.session_state.get("user")
+email = getattr(u, "email", None) if u is not None else None
+if not email and isinstance(u, dict):
+    email = u.get("email")
+
+# Keep a clean, static top bar background/brand; render interactive controls just below
+st.markdown(
+    f"""<div class=\"topbar\">
+          <div style=\"display:flex; justify-content:space-between; align-items:center; gap:12px;\">
+            <div class=\"brand\"><span class=\"logo\"></span><span>Stock Portfolio</span></div>
+            <div class=\"right\">
+              <span class=\"pill\">{email or ''}</span>
+            </div>
+          </div>
+        </div>""",
+    unsafe_allow_html=True,
+)
+
+# Account impersonation dropdown (delegated access)
+# Uses the same session key as the active account context setter: "account_selector"
+try:
+    if u is not None:
+        _ensure_user_preferences_row(u)
+        _activate_pending_invites(u)
+        accts_for_ui = _get_accessible_accounts(u)
+    else:
+        accts_for_ui = [{"label": "My Account", "owner_user_id": None, "role": "editor"}]
+except Exception:
+    accts_for_ui = [{"label": "My Account", "owner_user_id": None, "role": "editor"}]
+
+acct_labels = [a["label"] for a in accts_for_ui]
+cur_label = st.session_state.get("active_account_label") or acct_labels[0]
+if cur_label not in acct_labels:
+    cur_label = acct_labels[0]
+
+# Right-aligned control row under the top bar
+_sp1, _sp2, _ctl = st.columns([7, 2, 3])
+with _ctl:
+    st.selectbox(
+        "Account",
+        acct_labels,
+        index=acct_labels.index(cur_label),
+        key="account_selector",
+        label_visibility="collapsed",
+        help="Switch between your account and any delegated accounts you have access to.",
     )
+)
     # Navigation (horizontal)
     default_page = st.session_state.get("_selected_page", "Dashboard")
     if default_page not in pages:
