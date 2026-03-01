@@ -205,7 +205,7 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .kpi-watermark{
   font-size: 66px;
   line-height: 1;
-  opacity: .82;
+  opacity: .58;
   transform: translateY(2px);
   filter: saturate(1.35) drop-shadow(0 10px 22px rgba(2,6,23,.16));
 }
@@ -224,19 +224,6 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 }
 .kpi-cad{ font-size: 12px; font-weight: 800; color: rgba(17,24,39,.62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-
-.kpi-usd{ font-size: 12px; font-weight: 800; color: rgba(17,24,39,.62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kpi-grid-single{ display:block; }
-.ws-panel{
-  background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.98));
-  border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
-  box-shadow: var(--shadow);
-  padding: 16px 18px;
-  position: relative;
-  overflow: hidden;
-}
-.panel-title{ font-size: 14px; font-weight: 900; color: rgba(17,24,39,.72); margin-bottom: 8px; }
 /* Accent variants */
 .kpi-accent-stock:before{ background: radial-gradient(circle at 30% 30%, rgba(59,130,246,.18), transparent 60%); }
 .kpi-accent-leap:before{ background: radial-gradient(circle at 30% 30%, rgba(245,158,11,.18), transparent 60%); }
@@ -2541,6 +2528,59 @@ def dashboard_page(active_user, view: str = "summary"):
         except Exception:
             st.info("Total Profit & Analysis unavailable (an error occurred while computing).")
 
+
+
+    
+
+
+    # --- Holdings top summaries (premium KPI cards) ---
+    # These are visual-only and do not change any calculations / functionality.
+    try:
+        net_liq_usd = float(stock_value_usd) + float(leap_value_usd) + float(cash_usd) - float(itm_liability_usd)
+    except Exception:
+        net_liq_usd = 0.0
+
+    if view == "holdings":
+        # Premium KPI cards (mockup-inspired). Render each card in its own Streamlit column so
+        # the layout is stable across Streamlit/theme changes.
+                cards = []
+                try:
+                    # Match the numbers shown in the "Total Holdings" table below (includes option market value).
+                    kpi_stock_usd = 0.0
+                    kpi_leap_usd = 0.0
+
+                    if not stocks_df.empty:
+                        _mv = pd.to_numeric(stocks_df.get('market_value', 0), errors='coerce').fillna(0.0)
+                        kpi_stock_usd = float(_mv.sum())
+
+                    if not leaps_df.empty:
+                        _q = pd.to_numeric(leaps_df.get('quantity', 0), errors='coerce').fillna(0.0)
+                        _px = pd.to_numeric(leaps_df.get('current_price', leaps_df.get('last_price', 0)), errors='coerce').fillna(0.0)
+                        kpi_leap_usd = float((_q * 100.0 * _px).sum())
+
+                    # Total portfolio = table market value + cash (cash is not part of the table).
+                    kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + float(cash_usd or 0.0))
+
+                    cards = [
+                        ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
+                        ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
+                        ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
+                    ]
+                except Exception:
+                    cards = [
+                        ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)}", "CAD"),
+                        ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
+                        ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
+                    ]
+    
+    # (Holdings KPI cards are rendered later using the Total Holdings table totals so they always match.)
+
+    if view == "summary":
+        return
+
+
     # --------------------------------------------------------------------------------
     # Keep the remainder of the dashboard identical to Option Details for now (tables + contract management)
     # --------------------------------------------------------------------------------
@@ -2619,6 +2659,50 @@ def dashboard_page(active_user, view: str = "summary"):
                 out["% of Portfolio"] = 0.0
 
             out = out.sort_values("Ticker")
+
+
+            # --- Holdings KPI cards (must match the Total Holdings table totals) ---
+            if view == "holdings":
+                try:
+                    kpi_stock_usd = float(pd.to_numeric(out.get("Stock Value", 0), errors="coerce").fillna(0.0).sum())
+                    kpi_leap_usd  = float(pd.to_numeric(out.get("LEAP Value", 0), errors="coerce").fillna(0.0).sum())
+                    kpi_table_total_usd = float(pd.to_numeric(out.get("Total Market Value", 0), errors="coerce").fillna(0.0).sum())
+                    kpi_cash_usd = float(cash_usd or 0.0)
+                    kpi_total_usd = float(kpi_table_total_usd + kpi_cash_usd)
+
+                    cards = [
+                        ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
+                        ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(kpi_cash_usd), f"{_fmt_money(kpi_cash_usd * fx)}", "CAD"),
+                        ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
+                    ]
+
+                    cols = st.columns(4, gap="large")
+                    for i, (title, val, sub, chip) in enumerate(cards[:4]):
+                        with cols[i]:
+                            icon = ["📈","💡","💵","🧾"][i]
+                            accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i]
+                            st.markdown(
+                                f"""
+                                <div class="kpi-card {accent}">
+                                  <div class="kpi-left">
+                                    <div class="kpi-title">{title}</div>
+                                    <div class="kpi-value">{val}</div>
+                                    <div class="kpi-sub">
+                                      <span class="kpi-pill">CAD</span>
+                                      <span class="kpi-cad">{sub}</span>
+                                    </div>
+                                  </div>
+                                  <div class="kpi-right" aria-hidden="true">
+                                    <div class="kpi-watermark">{icon}</div>
+                                  </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+                    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                except Exception:
+                    pass
 
             total_html = "<table class='finance-table'><thead><tr>" \
                          "<th>Ticker</th><th>Shares</th><th>Stock Value</th><th>LEAP Contracts</th><th>LEAP Value</th>" \
@@ -2713,85 +2797,6 @@ def dashboard_page(active_user, view: str = "summary"):
             tot_stock_adj = float(tot_stock) + cash_stock + itm_stock
             tot_leap_val_adj = float(tot_leap_val) + cash_leap + itm_leap
             tot_mkt_adj = invested_val + float(cash_val) + float(itm_val)
-
-            # --- Holdings KPI cards (must match the Total Holdings table, incl. Cash + ITM allocations) ---
-            if view == "holdings":
-                try:
-                    # --- KPI cards (values align to the same totals used in the Total Holdings table) ---
-                    kpi_cards = [
-                        ("Stock Value", float(tot_stock_adj), "📈", "kpi-accent-stock"),
-                        ("LEAP Value", float(tot_leap_val_adj), "💡", "kpi-accent-leap"),
-                        ("Cash Balance", float(cash_val), "💵", "kpi-accent-cash"),
-                    ]
-                    if float(itm_val) != 0.0:
-                        kpi_cards.append(("In the Money", float(itm_val), "🧩", "kpi-accent-itm"))
-
-                    # Top row: the main KPI cards
-                    kpi_html = "<div class='kpi-grid'>"
-                    for title, usd_val, icon, accent in kpi_cards:
-                        cad_val = float(usd_val) * float(fx)
-                        kpi_html += (
-                            f"<div class='kpi-card {accent}'>"
-                            f"  <div class='kpi-left'>"
-                            f"    <div class='kpi-title'>{title}</div>"
-                            f"    <div class='kpi-value'>{_fmt_money(cad_val)}</div>"
-                            f"    <div class='kpi-sub'><span class='kpi-pill'>CAD</span><span class='kpi-usd'>{_fmt_money(usd_val)} USD</span></div>"
-                            f"  </div>"
-                            f"  <div class='kpi-right'><div class='kpi-watermark'>{icon}</div></div>"
-                            f"</div>"
-                        )
-                    kpi_html += "</div>"
-                    st.markdown(kpi_html, unsafe_allow_html=True)
-
-                    # Second row: Allocation pie + Total Portfolio
-                    # Pie uses CAD magnitudes (ITM shown as magnitude for visualization).
-                    alloc_labels = []
-                    alloc_vals = []
-                    for title, usd_val, icon, accent in kpi_cards:
-                        cad_val = float(usd_val) * float(fx)
-                        lbl = f"{title}"
-                        # If negative (e.g., ITM), keep the label honest
-                        if cad_val < 0:
-                            lbl = f"{title} ({_fmt_money(cad_val)})"
-                        alloc_labels.append(lbl)
-                        alloc_vals.append(abs(cad_val))
-
-                    total_port_usd = float(tot_mkt_adj)
-                    total_port_cad = total_port_usd * float(fx)
-
-                    c_left, c_right = st.columns([1.25, 1.0], gap="large")
-
-                    with c_left:
-                        st.markdown("<div class='ws-panel'><div class='panel-title'>Allocation</div>", unsafe_allow_html=True)
-                        try:
-                            import matplotlib.pyplot as plt
-                            fig, ax = plt.subplots(figsize=(4.8, 3.4))
-                            # Matplotlib default colors (no explicit palette)
-                            ax.pie(alloc_vals, labels=None, startangle=90)
-                            ax.axis("equal")
-                            ax.legend(alloc_labels, loc="center left", bbox_to_anchor=(1.0, 0.5), frameon=False)
-                            st.pyplot(fig, clear_figure=True, use_container_width=True)
-                        except Exception:
-                            st.caption("Allocation chart unavailable.")
-                        st.markdown("</div>", unsafe_allow_html=True)
-
-                    with c_right:
-                        total_html = (
-                            "<div class='kpi-grid kpi-grid-single'>"
-                            "  <div class='kpi-card kpi-accent-total'>"
-                            "    <div class='kpi-left'>"
-                            "      <div class='kpi-title'>Total Portfolio</div>"
-                            f"      <div class='kpi-value'>{_fmt_money(total_port_cad)}</div>"
-                            f"      <div class='kpi-sub'><span class='kpi-pill'>CAD</span><span class='kpi-usd'>{_fmt_money(total_port_usd)} USD</span></div>"
-                            "    </div>"
-                            "    <div class='kpi-right'><div class='kpi-watermark'>🧾</div></div>"
-                            "  </div>"
-                            "</div>"
-                        )
-                        st.markdown(total_html, unsafe_allow_html=True)
-
-                except Exception:
-                    pass
 
             total_html += (
                 f"<tr class='total-row'><td>Total</td>"
