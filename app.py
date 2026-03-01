@@ -186,7 +186,15 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
   transform: rotate(12deg);
 }
 .kpi-title{ font-size: 14px; font-weight: 800; color: var(--muted); letter-spacing: .2px; }
-.kpi-value{ font-size: clamp(26px, 2.1vw, 32px); font-weight: 900; margin-top: 6px; line-height: 1.08; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi-value{
+  font-size: clamp(22px, 1.7vw, 30px);
+  font-weight: 900;
+  margin-top: 6px;
+  line-height: 1.05;
+  letter-spacing: -0.3px;
+  white-space: nowrap;
+}
+
 .kpi-sub{ font-size: 12px; font-weight: 700; color: rgba(17,24,39,.55); margin-top: 6px; }
 .kpi-chip{ display:inline-block; margin-left: 8px; padding: 3px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(17,24,39,.04); font-size: 11px; font-weight: 800; color: rgba(17,24,39,.55); }
 
@@ -195,12 +203,13 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .kpi-left{ min-width:0; }
 .kpi-right{ display:flex; align-items:flex-start; justify-content:flex-end; width:72px; }
 .kpi-watermark{
-  font-size: 56px;
+  font-size: 66px;
   line-height: 1;
-  opacity: .34;
+  opacity: .58;
   transform: translateY(2px);
-  filter: saturate(1.25) drop-shadow(0 6px 18px rgba(2,6,23,.12));
+  filter: saturate(1.35) drop-shadow(0 10px 22px rgba(2,6,23,.16));
 }
+
 .kpi-sub{ display:flex; align-items:center; gap:10px; }
 .kpi-pill{
   display:inline-flex;
@@ -2555,60 +2564,32 @@ def dashboard_page(active_user, view: str = "summary"):
     # HOLDINGS KPI CARDS
     # =============================
     cols = st.columns(4, gap="large")
-
-    with cols[0]:
-        render_kpi_card(
-            title="Stock Value",
-            value=stock_value_from_table,
-            subtitle="CAD",
-            icon="📈"
-        )
-
-    with cols[1]:
-        render_kpi_card(
-            title="LEAP Value",
-            value=leap_value_from_table,
-            subtitle="CAD",
-            icon="💡"
-        )
-
-    with cols[2]:
-        render_kpi_card(
-            title="Cash Balance",
-            value=cash_balance,
-            subtitle="CAD",
-            icon="💵"
-        )
-
-    with cols[3]:
-        render_kpi_card(
-            title="Total Portfolio",
-            value=total_portfolio_value,
-            subtitle="CAD",
-            icon="🧾"
-        )        for i, (title, val, sub, chip) in enumerate(cards):
-            with cols[i]:
-                icon = ["📈","💡","💵","🧾"][i] if i < 4 else "💠"
-                accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i] if i < 4 else ""
-                st.markdown(
-                    f"""
-                    <div class="kpi-card {accent}">
-                      <div class="kpi-left">
-                        <div class="kpi-title">{title}</div>
-                        <div class="kpi-value">{val}</div>
-                        <div class="kpi-sub">
-                          <span class="kpi-pill">CAD</span>
-                          <span class="kpi-cad">{sub}</span>
-                        </div>
-                      </div>
-                      <div class="kpi-right" aria-hidden="true">
-                        <div class="kpi-watermark">{icon}</div>
-                      </div>
+    # 'cards' is computed above and intentionally matches the math used for the Total Holdings table below.
+    for i, (title, val, sub, chip) in enumerate(cards[:4]):
+        with cols[i]:
+            icon = ["📈","💡","💵","🧾"][i]
+            accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i]
+            st.markdown(
+                f"""
+                <div class="kpi-card {accent}">
+                  <div class="kpi-left">
+                    <div class="kpi-title">{title}</div>
+                    <div class="kpi-value">{val}</div>
+                    <div class="kpi-sub">
+                      <span class="kpi-pill">CAD</span>
+                      <span class="kpi-cad">{sub}</span>
                     </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                  </div>
+                  <div class="kpi-right" aria-hidden="true">
+                    <div class="kpi-watermark">{icon}</div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+
+
 
 
     if view == "summary":
