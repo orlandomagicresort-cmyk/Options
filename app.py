@@ -165,6 +165,30 @@ hr{ border-color: rgba(17,24,39,.10) !important; }
 div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="select"] > div{
   height: 44px;
 }
+
+/* --- KPI cards (premium summary blocks) --- */
+.kpi-grid{ display:flex; gap:16px; flex-wrap:wrap; margin: 10px 0 6px 0; }
+.kpi-card{
+  flex: 1 1 240px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.98));
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  position: relative;
+  overflow:hidden;
+}
+.kpi-card:before{
+  content:"";
+  position:absolute; inset:-120px -120px auto auto;
+  width:240px; height:240px;
+  background: radial-gradient(circle at 30% 30%, rgba(99,102,241,.16), transparent 60%);
+  transform: rotate(12deg);
+}
+.kpi-title{ font-size: 14px; font-weight: 800; color: var(--muted); letter-spacing: .2px; }
+.kpi-value{ font-size: 34px; font-weight: 900; margin-top: 4px; line-height: 1.05; }
+.kpi-sub{ font-size: 12px; font-weight: 700; color: rgba(17,24,39,.55); margin-top: 6px; }
+.kpi-chip{ display:inline-block; margin-left: 8px; padding: 3px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(17,24,39,.04); font-size: 11px; font-weight: 800; color: rgba(17,24,39,.55); }
 </style>
         """,
         unsafe_allow_html=True,
@@ -2450,6 +2474,36 @@ def dashboard_page(active_user, view: str = "summary"):
 
 
     
+
+
+    # --- Holdings top summaries (premium KPI cards) ---
+    # These are visual-only and do not change any calculations / functionality.
+    try:
+        net_liq_usd = float(stock_value_usd) + float(leap_value_usd) + float(cash_usd) - float(itm_liability_usd)
+    except Exception:
+        net_liq_usd = 0.0
+
+    if view == "holdings":
+        # Match the mockup-style summary blocks: Stock, LEAP, Cash, Total.
+        # Display is USD primary with CAD shown as contextual subtitle.
+        _cards = [
+            ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)} CAD", "USD"),
+            ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)} CAD", "USD"),
+            ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)} CAD", "USD"),
+            ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)} CAD", "USD"),
+        ]
+        kpi_html = "<div class='kpi-grid'>"
+        for title, val, sub, chip in _cards:
+            kpi_html += (
+                "<div class='kpi-card'>"
+                f"<div class='kpi-title'>{title}</div>"
+                f"<div class='kpi-value'>{val}</div>"
+                f"<div class='kpi-sub'>USD / CAD <span class='kpi-chip'>{chip}</span> &nbsp; {sub}</div>"
+                "</div>"
+            )
+        kpi_html += "</div>"
+        st.markdown(kpi_html, unsafe_allow_html=True)
+
 
     if view == "summary":
         return
