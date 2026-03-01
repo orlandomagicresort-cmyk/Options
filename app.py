@@ -2610,58 +2610,86 @@ def dashboard_page(active_user, view: str = "summary"):
             st.markdown("</div>", unsafe_allow_html=True)
 
         with alloc_right:
-            # Donut (allocation)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Allocation</div>", unsafe_allow_html=True)
+            # Donut (asset allocation) — premium look, no redundant title
+            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
+
+            pie_df = alloc_df.iloc[:-1].copy()
+            pie_df["USD_abs"] = pie_df["USD"].abs()
+            pie_labels = pie_df["Asset"].tolist()
+            pie_values = pie_df["USD_abs"].astype(float).tolist()
+
+            # Color palette (fintech, consistent)
+            _pal = ["#3b82f6", "#60a5fa", "#f59e0b", "#ef4444", "#8b5cf6", "#10b981"]
+            pie_colors = [_pal[i % len(_pal)] for i in range(len(pie_labels))]
+
+            def _legend_html(labels, colors):
+                chips = ""
+                for lab, col in zip(labels, colors):
+                    chips += f"""<div class='dash-legend-item'><span class='dot' style='background:{col}'></span><span>{lab}</span></div>"""
+                return f"""<div class='dash-legend'>{chips}</div>"""
+
+            # Preferred: Plotly donut. Fallback: pure CSS donut (always renders).
             try:
-                import plotly.express as px
+                import plotly.graph_objects as go
 
-                pie_df = alloc_df.iloc[:-1].copy()
-                # Keep cash negative values visible as absolute size but label still cash
-                pie_df["USD_abs"] = pie_df["USD"].abs()
-
-                fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
-                fig.update_traces(textinfo="none")
-                fig.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    height=300,
-                    showlegend=True,
-                    legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
+                fig = go.Figure(
+                    data=[
+                        go.Pie(
+                            labels=pie_labels,
+                            values=pie_values,
+                            hole=0.70,
+                            sort=False,
+                            direction="clockwise",
+                            marker=dict(colors=pie_colors, line=dict(color="rgba(255,255,255,.65)", width=2)),
+                            textinfo="none",
+                        )
+                    ]
                 )
-                # Center annotation
+                fig.update_layout(
+                    margin=dict(l=0, r=0, t=10, b=70),
+                    height=320,
+                    showlegend=False,
+                )
                 fig.add_annotation(
-                    text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
+                    text=f"<b>Total: {_fmt_money(net_liq_usd)}</b><br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
                     x=0.5,
                     y=0.5,
                     showarrow=False,
-                    font=dict(size=16),
                 )
                 st.plotly_chart(fig, use_container_width=True)
-            except Exception:
-                st.info("Allocation chart unavailable.")
-            st.markdown("</div>", unsafe_allow_html=True)
+                st.markdown(_legend_html(pie_labels, pie_colors), unsafe_allow_html=True)
 
-            # Equity trend (kept from previous UI)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
-            try:
-                hdf = hist.copy() if hist is not None else pd.DataFrame()
-                if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
-                    hdf["snapshot_date"] = pd.to_datetime(hdf["snapshot_date"], errors="coerce")
-                    hdf["total_equity"] = pd.to_numeric(hdf["total_equity"], errors="coerce")
-                    hdf = hdf.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date")
-                if hdf is None or hdf.empty:
-                    st.info("No equity history yet.")
-                else:
-                    try:
-                        import plotly.express as px
-                        fig2 = px.line(hdf, x="snapshot_date", y="total_equity")
-                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=240, showlegend=False)
-                        fig2.update_xaxes(title=None)
-                        fig2.update_yaxes(title=None)
-                        st.plotly_chart(fig2, use_container_width=True)
-                    except Exception:
-                        st.line_chart(hdf.set_index("snapshot_date")["total_equity"])
             except Exception:
-                st.info("No equity history yet.")
+                # CSS donut fallback using conic-gradient
+                total = float(sum(pie_values)) if pie_values else 0.0
+                parts = []
+                acc = 0.0
+                for v, col in zip(pie_values, pie_colors):
+                    frac = (float(v) / total) if total else 0.0
+                    a0 = acc * 100.0
+                    a1 = (acc + frac) * 100.0
+                    parts.append(f"{col} {a0:.3f}% {a1:.3f}%")
+                    acc += frac
+                grad = ", ".join(parts) if parts else "rgba(17,24,39,.08) 0% 100%"
+
+                st.markdown(
+                    f"""
+                    <div class="dash-donut-wrap">
+                      <div class="dash-donut" style="background: conic-gradient({grad});">
+                        <div class="dash-donut-hole">
+                          <div class="dash-donut-center">
+                            <div class="k">Total</div>
+                            <div class="v">{_fmt_money(net_liq_usd)}</div>
+                            <div class="k2">USD</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    {_legend_html(pie_labels, pie_colors)}
+                    """,
+                    unsafe_allow_html=True,
+                )
+
             st.markdown("</div>", unsafe_allow_html=True)
 
 
