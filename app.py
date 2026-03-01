@@ -2664,19 +2664,44 @@ def dashboard_page(active_user, view: str = "summary"):
             # --- Holdings KPI cards (must match the Total Holdings table totals) ---
             if view == "holdings":
                 try:
-                    kpi_stock_usd = float(pd.to_numeric(out.get("Stock Value", 0), errors="coerce").fillna(0.0).sum())
-                    kpi_leap_usd  = float(pd.to_numeric(out.get("LEAP Value", 0), errors="coerce").fillna(0.0).sum())
-                    kpi_table_total_usd = float(pd.to_numeric(out.get("Total Market Value", 0), errors="coerce").fillna(0.0).sum())
-                    kpi_cash_usd = float(cash_usd or 0.0)
-                    kpi_total_usd = float(kpi_table_total_usd + kpi_cash_usd)
+                    # Base totals from per-ticker rows (Stocks + Long LEAPs only)
+                    base_stock = float(pd.to_numeric(out.get("Stock Value", 0), errors="coerce").fillna(0.0).sum())
+                    base_leap  = float(pd.to_numeric(out.get("LEAP Value", 0), errors="coerce").fillna(0.0).sum())
+                    invested_val = float(base_stock + base_leap)
+
+                    # Cash (asset) and ITM (liability) must be reflected in the *Total* row.
+                    # The Total Holdings table allocates BOTH cash and ITM between Stock vs LEAP columns
+                    # based on their invested weights, so the KPI cards must mirror that allocation.
+                    cash_val = float(cash_usd or 0.0)
+
+                    try:
+                        itm_raw = float(itm_liability_usd) if ("itm_liability_usd" in locals() or "itm_liability_usd" in globals()) else 0.0
+                    except Exception:
+                        itm_raw = 0.0
+                    itm_val = -abs(itm_raw) if itm_raw != 0 else 0.0  # liability (negative)
+
+                    alloc_denom = invested_val if invested_val else 0.0
+                    w_stock = (float(base_stock) / alloc_denom) if alloc_denom else 0.0
+                    w_leap  = (float(base_leap)  / alloc_denom) if alloc_denom else 0.0
+
+                    # Allocate cash + ITM into Stock/LEAP columns to match the table TOTAL row
+                    cash_stock = float(cash_val) * w_stock
+                    cash_leap  = float(cash_val) * w_leap
+                    itm_stock  = float(itm_val)  * w_stock
+                    itm_leap   = float(itm_val)  * w_leap
+
+                    kpi_stock_usd = float(base_stock) + cash_stock + itm_stock
+                    kpi_leap_usd  = float(base_leap)  + cash_leap  + itm_leap
+
+                    # Total Portfolio should match the Total row's Total Market Value (tickers + cash + ITM)
+                    kpi_total_usd = float(invested_val + float(cash_val) + float(itm_val))
 
                     cards = [
                         ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
-                        ("Cash Balance", _fmt_money(kpi_cash_usd), f"{_fmt_money(kpi_cash_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_val), f"{_fmt_money(cash_val * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
-
                     cols = st.columns(4, gap="large")
                     for i, (title, val, sub, chip) in enumerate(cards[:4]):
                         with cols[i]:
