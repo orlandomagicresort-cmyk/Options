@@ -320,6 +320,17 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .dash-badge.neg{ background: rgba(239,68,68,.12); color: rgba(239,68,68,.98); border-color: rgba(239,68,68,.22); }
 
 .dash-section-title{ font-weight:950; font-size:20px; margin:0 0 12px 0; color: rgba(17,24,39,.92); }
+
+.dash-card-header{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding-bottom: 10px;
+  margin: 0 0 12px 0;
+  border-bottom: 1px solid rgba(17,24,39,.06);
+}
+.dash-card-header .dash-section-title{ margin:0; }
+
 .dash-muted{ color: rgba(17,24,39,.62); font-weight:800; }
 
 .dash-split{ display:grid; grid-template-columns: 1.15fr 0.85fr; gap:16px; align-items:center; }
@@ -2575,7 +2586,7 @@ def dashboard_page(active_user, view: str = "summary"):
             return "num"
 
         with alloc_left:
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Asset Allocation</div>", unsafe_allow_html=True)
+            st.markdown("<div class='dash-card'><div class='dash-card-header'><div class='dash-section-title'>Asset Allocation</div></div>", unsafe_allow_html=True)
 
             # HTML table (crisp + readable like mockup)
             rows_html = ""
@@ -2611,7 +2622,7 @@ def dashboard_page(active_user, view: str = "summary"):
 
         with alloc_right:
             # Donut (allocation)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Allocation</div>", unsafe_allow_html=True)
+            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
             try:
                 import plotly.express as px
 
@@ -2629,7 +2640,7 @@ def dashboard_page(active_user, view: str = "summary"):
                 )
                 # Center annotation
                 fig.add_annotation(
-                    text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
+                    text=f"<span style='font-size:12px;color:rgba(17,24,39,.62);font-weight:800;'>Distribution</span><br><span style='font-size:18px;font-weight:900;'>Total: {_fmt_money(net_liq_usd)}</span><br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
                     x=0.5,
                     y=0.5,
                     showarrow=False,
@@ -2638,30 +2649,6 @@ def dashboard_page(active_user, view: str = "summary"):
                 st.plotly_chart(fig, use_container_width=True)
             except Exception:
                 st.info("Allocation chart unavailable.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            # Equity trend (kept from previous UI)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
-            try:
-                hdf = hist.copy() if hist is not None else pd.DataFrame()
-                if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
-                    hdf["snapshot_date"] = pd.to_datetime(hdf["snapshot_date"], errors="coerce")
-                    hdf["total_equity"] = pd.to_numeric(hdf["total_equity"], errors="coerce")
-                    hdf = hdf.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date")
-                if hdf is None or hdf.empty:
-                    st.info("No equity history yet.")
-                else:
-                    try:
-                        import plotly.express as px
-                        fig2 = px.line(hdf, x="snapshot_date", y="total_equity")
-                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=240, showlegend=False)
-                        fig2.update_xaxes(title=None)
-                        fig2.update_yaxes(title=None)
-                        st.plotly_chart(fig2, use_container_width=True)
-                    except Exception:
-                        st.line_chart(hdf.set_index("snapshot_date")["total_equity"])
-            except Exception:
-                st.info("No equity history yet.")
             st.markdown("</div>", unsafe_allow_html=True)
 
 
@@ -2741,9 +2728,6 @@ def dashboard_page(active_user, view: str = "summary"):
                         loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
         except Exception:
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
-
-        # Compute derived KPIs
-        win_rate = (float(win_ct) / float(total_ct)) if total_ct else 0.0
 
         # Render (polished UI)
         
