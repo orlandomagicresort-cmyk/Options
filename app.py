@@ -2742,6 +2742,9 @@ def dashboard_page(active_user, view: str = "summary"):
         except Exception:
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
+        # Compute derived KPIs
+        win_rate = (float(win_ct) / float(total_ct)) if total_ct else 0.0
+
         # Render (polished UI)
         
         st.subheader("Win/Loss Analysis")
