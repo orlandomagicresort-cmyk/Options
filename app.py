@@ -299,6 +299,25 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .dash-delta{ font-weight:950; font-size:13px; }
 .dash-delta.pos{ color: rgba(16,185,129,.98); }
 .dash-delta.neg{ color: rgba(239,68,68,.98); }
+.dash-kpi-card{ min-height: 156px; }
+.dash-kpi-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.dash-kpi-icon{
+  font-size: 28px;
+  opacity: .28;
+  line-height: 1;
+  filter: drop-shadow(0 6px 12px rgba(17,24,39,.18));
+  transform: translateY(2px);
+}
+.dash-kpi-foot{ display:flex; align-items:center; justify-content:space-between; gap:12px; margin-top:12px; }
+.dash-badge{
+  display:inline-flex; align-items:center; justify-content:center;
+  padding: 6px 10px; border-radius: 999px;
+  border: 1px solid rgba(17,24,39,.10);
+  background: rgba(17,24,39,.04);
+  font-weight: 950; font-size: 12px;
+}
+.dash-badge.pos{ background: rgba(16,185,129,.12); color: rgba(16,185,129,.98); border-color: rgba(16,185,129,.22); }
+.dash-badge.neg{ background: rgba(239,68,68,.12); color: rgba(239,68,68,.98); border-color: rgba(239,68,68,.22); }
 
 .dash-section-title{ font-weight:950; font-size:20px; margin:0 0 12px 0; color: rgba(17,24,39,.92); }
 .dash-muted{ color: rgba(17,24,39,.62); font-weight:800; }
@@ -2394,35 +2413,23 @@ def dashboard_page(active_user, view: str = "summary"):
         net_exposure_usd = float(net_liq_usd or 0.0)
 
 
-        # Top cards (premium B)
+                # Top cards (premium B) - rebuilt to match mockup requirements
         c1, c2, c3, c4 = st.columns(4, gap="large")
 
-        def _dash_card(title: str, value: float, sub_usd: float | None = None, sub_cad: float | None = None,
-                       delta_usd: float | None = None, delta_pct: float | None = None):
-            # Delta text is rendered as plain text inside a styled div to avoid HTML fragments showing up.
-            dcls = ""
-            delta_text = ""
-            if delta_usd is not None or delta_pct is not None:
-                du = float(delta_usd or 0.0)
-                dcls = "pos" if du >= 0 else "neg"
-                ptxt = f" ({_fmt_pct(delta_pct)})" if delta_pct is not None else ""
-                delta_text = f"{_fmt_money(du)}{ptxt}"
-
-            sub_left = ""
-            if sub_usd is not None and sub_cad is not None:
-                # Match the mockup: small USD chip + CAD equivalent.
-                sub_left = f"""<span class='dash-chip'>USD</span><span class='dash-muted'>CA$ {_fmt_money(sub_cad).replace('$','')}</span>"""
-
-            d_right = f"""<div class='dash-delta {dcls}'>{delta_text}</div>""" if delta_text else ""
-
+        def _dash_kpi(title: str, value_usd: float, value_cad: float, icon: str,
+                      badge_text: str | None = None, badge_cls: str = ""):
+            badge_html = f"""<div class='dash-badge {badge_cls}'>{badge_text}</div>""" if badge_text else ""
             st.markdown(
                 f"""
-                <div class="dash-card">
-                  <div class="dash-kpi-title">{title}</div>
-                  <div class="dash-kpi-value">{_fmt_money(value)}</div>
-                  <div class="dash-kpi-sub">
-                    <div class="dash-kpi-sub-left">{sub_left}</div>
-                    {d_right}
+                <div class="dash-card dash-kpi-card">
+                  <div class="dash-kpi-head">
+                    <div class="dash-kpi-title">{title}</div>
+                    <div class="dash-kpi-icon">{icon}</div>
+                  </div>
+                  <div class="dash-kpi-value">{_fmt_money(value_usd)}</div>
+                  <div class="dash-kpi-foot">
+                    <div class="dash-kpi-sub"><span class='dash-chip'>USD</span><span class='dash-muted'>CA$ {_fmt_money(value_cad).replace('$','')}</span></div>
+                    {badge_html}
                   </div>
                 </div>
                 """,
@@ -2467,14 +2474,51 @@ def dashboard_page(active_user, view: str = "summary"):
             total_pl_pct = None
 
 
+                # Week / Month P&L from portfolio history (closest snapshot <= target date)
+        week_pl_usd, week_pl_pct = 0.0, None
+        month_pl_usd, month_pl_pct = 0.0, None
+        try:
+            if hist is not None and not hist.empty and "total_equity" in hist.columns and "snapshot_date" in hist.columns:
+                _h = hist.dropna(subset=["total_equity", "snapshot_date"]).copy()
+                _h = _h.sort_values("snapshot_date")
+                if len(_h) >= 2:
+                    last_eq = float(_h["total_equity"].iloc[-1])
+                    last_dt = pd.to_datetime(_h["snapshot_date"].iloc[-1], errors="coerce")
+                    def _pl_days(days: int):
+                        if last_dt is pd.NaT:
+                            return 0.0, None
+                        tgt = last_dt - pd.Timedelta(days=days)
+                        prior = _h[_h["snapshot_date"] <= tgt]
+                        if prior.empty:
+                            base_eq = float(_h["total_equity"].iloc[0])
+                        else:
+                            base_eq = float(prior["total_equity"].iloc[-1])
+                        pl = last_eq - base_eq
+                        pct = (pl / base_eq) if base_eq else None
+                        return pl, pct
+                    week_pl_usd, week_pl_pct = _pl_days(7)
+                    month_pl_usd, month_pl_pct = _pl_days(30)
+        except Exception:
+            week_pl_usd, week_pl_pct = 0.0, None
+            month_pl_usd, month_pl_pct = 0.0, None
+
+        def _badge(pl: float, pct: float | None):
+            cls = "pos" if pl >= 0 else "neg"
+            txt = _fmt_pct(pct) if pct is not None else ""
+            return txt, cls
+
+        btxt_w, bcls_w = _badge(week_pl_usd, week_pl_pct)
+        btxt_m, bcls_m = _badge(month_pl_usd, month_pl_pct)
+        btxt_t, bcls_t = _badge(total_pl_usd, total_pl_pct)
+
         with c1:
-            _dash_card("Total Portfolio Value", net_liq_usd, sub_usd=net_liq_usd, sub_cad=net_liq_cad)
+            _dash_kpi("Total Portfolio Value", net_liq_usd, net_liq_cad, icon="💼")
         with c2:
-            _dash_card("Latest P/L", float((_delta_usd or 0.0)), sub_usd=None, sub_cad=None, delta_usd=_delta_usd, delta_pct=_delta_pct)
+            _dash_kpi("Current Week P/L", week_pl_usd, week_pl_usd * fx, icon="📅", badge_text=btxt_w, badge_cls=bcls_w)
         with c3:
-            _dash_card("Total P/L", total_pl_usd, sub_usd=None, sub_cad=None, delta_usd=total_pl_usd, delta_pct=total_pl_pct)
+            _dash_kpi("Current Month P/L", month_pl_usd, month_pl_usd * fx, icon="🗓️", badge_text=btxt_m, badge_cls=bcls_m)
         with c4:
-            _dash_card("Cash Balance", cash_usd_v, sub_usd=None, sub_cad=cash_cad_v)
+            _dash_kpi("Total P/L", total_pl_usd, total_pl_usd * fx, icon="📈", badge_text=btxt_t, badge_cls=bcls_t)
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
@@ -2482,7 +2526,7 @@ def dashboard_page(active_user, view: str = "summary"):
         left, right = st.columns([2.2, 1], gap="large")
 
         with left:
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Portfolio Breakdown</div>", unsafe_allow_html=True)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Asset Allocation</div>", unsafe_allow_html=True)
 
             comp = [
                 ("Stocks", max(stock_usd_v, 0.0)),
@@ -2549,10 +2593,6 @@ def dashboard_page(active_user, view: str = "summary"):
                 f"""
                 <div class="dash-card">
                   <div class="dash-kv">
-                    <div class="k">Short Call Liability</div>
-                    <div class="val" style="color: rgba(239,68,68,.98);">{_fmt_money(-abs(short_liab_usd))}</div>
-                  </div>
-                  <div class="dash-kv">
                     <div class="k">Net Exposure</div>
                     <div class="val">{_fmt_money(net_exposure_usd)}</div>
                   </div>
@@ -2561,8 +2601,10 @@ def dashboard_page(active_user, view: str = "summary"):
                 unsafe_allow_html=True,
             )
 
+            
+
             # Equity trend
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
+            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
             try:
                 hdf = hist.copy() if hist is not None else pd.DataFrame()
                 if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
