@@ -330,6 +330,47 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .dot{ width:10px; height:10px; border-radius: 999px; display:inline-block; border:1px solid rgba(17,24,39,.10); }
 .dash-row .amt{ font-weight:950; }
 .dash-right-stack{ display:flex; flex-direction:column; gap:14px; }
+/* -------- Dashboard Tables -------- */
+.dash-table{
+  width:100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow:hidden;
+  border-radius: 14px;
+  border: 1px solid rgba(17,24,39,.08);
+  background: rgba(255,255,255,.70);
+}
+.dash-table th{
+  text-align:left;
+  font-weight:950;
+  font-size: 13px;
+  color: rgba(17,24,39,.72);
+  padding: 12px 14px;
+  background: rgba(17,24,39,.04);
+  border-bottom: 1px solid rgba(17,24,39,.08);
+}
+.dash-table td{
+  padding: 12px 14px;
+  font-weight: 800;
+  color: rgba(17,24,39,.86);
+  border-bottom: 1px solid rgba(17,24,39,.06);
+}
+.dash-table tr:last-child td{ border-bottom: 0; font-weight: 950; }
+.dash-table td.num, .dash-table th.num{ text-align:right; font-variant-numeric: tabular-nums; }
+.dash-table td.neg{ color: rgba(239,68,68,.98); }
+.dash-table td.pos{ color: rgba(16,185,129,.98); }
+
+/* -------- Win/Loss mini cards -------- */
+.dash-mini-grid{ display:grid; grid-template-columns: repeat(3, 1fr); gap:12px; }
+.dash-mini{
+  background: rgba(17,24,39,.03);
+  border: 1px solid rgba(17,24,39,.06);
+  border-radius: 14px;
+  padding: 14px;
+}
+.dash-mini .t{ font-weight: 900; color: rgba(17,24,39,.68); font-size: 12px; }
+.dash-mini .v{ font-weight: 950; font-size: 30px; margin-top:6px; }
+
 
 </style>
         """,
@@ -2497,74 +2538,110 @@ def dashboard_page(active_user, view: str = "summary"):
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
-        # Breakdown + right-side stack
-        left, right = st.columns([2.2, 1], gap="large")
+        # Asset Allocation (match mockup: table left, donut right)
+        alloc_left, alloc_right = st.columns([2.1, 1.2], gap="large")
 
-        with left:
+        # Build allocation values (USD)
+        _alloc = [
+            ("Stocks", float(stock_usd_v or 0.0)),
+            ("LEAP Equity", float(leap_usd_v or 0.0)),
+            ("Cash", float(cash_usd_v or 0.0)),
+            ("Short Exposure (ITM)", float(abs(short_liab_usd or 0.0))),
+        ]
+        alloc_df = pd.DataFrame(_alloc, columns=["Asset", "USD"])
+        alloc_df["USD"] = pd.to_numeric(alloc_df["USD"], errors="coerce").fillna(0.0)
+        alloc_df["CAD"] = alloc_df["USD"] * float(fx or 1.0)
+
+        # Total row
+        alloc_total_usd = float(alloc_df["USD"].sum())
+        alloc_total_cad = float(alloc_df["CAD"].sum())
+        alloc_df = pd.concat(
+            [
+                alloc_df,
+                pd.DataFrame([{"Asset": "Total", "USD": alloc_total_usd, "CAD": alloc_total_cad}]),
+            ],
+            ignore_index=True,
+        )
+
+        def _td_class(v: float) -> str:
+            try:
+                v = float(v)
+            except Exception:
+                v = 0.0
+            if v < 0:
+                return "num neg"
+            if v > 0:
+                return "num pos"
+            return "num"
+
+        with alloc_left:
             st.markdown("<div class='dash-card'><div class='dash-section-title'>Asset Allocation</div>", unsafe_allow_html=True)
 
-            comp = [
-                ("Stocks", max(stock_usd_v, 0.0)),
-                ("LEAP Equity", max(leap_usd_v, 0.0)),
-                ("Cash", cash_usd_v),
-                ("Short Exposure", abs(short_liab_usd)),
-            ]
-            bdf = pd.DataFrame(comp, columns=["Component", "USD"])
-            bdf["USD"] = pd.to_numeric(bdf["USD"], errors="coerce").fillna(0.0)
+            # HTML table (crisp + readable like mockup)
+            rows_html = ""
+            for _, r in alloc_df.iterrows():
+                usd_v = float(r["USD"] or 0.0)
+                cad_v = float(r["CAD"] or 0.0)
+                rows_html += f"""
+                  <tr>
+                    <td>{str(r['Asset'])}</td>
+                    <td class='{_td_class(usd_v)}'>{_fmt_money(usd_v)}</td>
+                    <td class='{_td_class(cad_v)}'>CA$ {_fmt_money(cad_v).replace('$','')}</td>
+                  </tr>
+                """
 
-            # Donut chart
+            st.markdown(
+                f"""
+                <table class="dash-table">
+                  <thead>
+                    <tr>
+                      <th>Asset</th>
+                      <th class="num">USD</th>
+                      <th class="num">CAD $</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows_html}
+                  </tbody>
+                </table>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with alloc_right:
+            # Donut (allocation)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Allocation</div>", unsafe_allow_html=True)
             try:
                 import plotly.express as px
-                fig = px.pie(bdf, names="Component", values="USD", hole=0.62)
-                fig.update_traces(textinfo="percent", textposition="inside")
+
+                pie_df = alloc_df.iloc[:-1].copy()
+                # Keep cash negative values visible as absolute size but label still cash
+                pie_df["USD_abs"] = pie_df["USD"].abs()
+
+                fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
+                fig.update_traces(textinfo="none")
                 fig.update_layout(
                     margin=dict(l=0, r=0, t=0, b=0),
-                    showlegend=False,
-                    height=280,
+                    height=300,
+                    showlegend=True,
+                    legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
+                )
+                # Center annotation
+                fig.add_annotation(
+                    text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(size=16),
                 )
                 st.plotly_chart(fig, use_container_width=True)
             except Exception:
-                # Fallback simple altair donut
-                try:
-                    import altair as alt
-                    _df = bdf.copy()
-                    _df["pct"] = (_df["USD"] / _df["USD"].sum()).fillna(0.0)
-                    chart = alt.Chart(_df).mark_arc(innerRadius=70).encode(
-                        theta=alt.Theta(field="USD", type="quantitative"),
-                        color=alt.Color(field="Component", type="nominal"),
-                        tooltip=["Component", alt.Tooltip("USD:Q", format=",.2f")]
-                    ).properties(height=280)
-                    st.altair_chart(chart, use_container_width=True)
-                except Exception:
-                    st.info("Breakdown chart unavailable.")
-
-            # Breakdown rows (USD + CAD)
-            rate = float(fx or 1.0)
-            dots = {
-                "Stocks": "dot",
-                "LEAP Equity": "dot",
-                "Cash": "dot",
-                "Short Exposure": "dot",
-            }
-            for name, usd_val in comp:
-                cad_val = usd_val * rate
-                st.markdown(
-                    f"""
-                    <div class="dash-row">
-                      <div class="lbl"><span class="dot"></span>{name}</div>
-                      <div class="amt">{_fmt_money(usd_val)} <span class="dash-muted" style="margin-left:10px;">CA$ {_fmt_money(cad_val).replace('$','')}</span></div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
-
+                st.info("Allocation chart unavailable.")
             st.markdown("</div>", unsafe_allow_html=True)
 
-        with right:
-            # Liability + Exposure
-            st.markdown("<div class='dash-right-stack'>", unsafe_allow_html=True)
-# Equity trend
-            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
+            # Equity trend (kept from previous UI)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
             try:
                 hdf = hist.copy() if hist is not None else pd.DataFrame()
                 if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
@@ -2577,7 +2654,7 @@ def dashboard_page(active_user, view: str = "summary"):
                     try:
                         import plotly.express as px
                         fig2 = px.line(hdf, x="snapshot_date", y="total_equity")
-                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=260, showlegend=False)
+                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=240, showlegend=False)
                         fig2.update_xaxes(title=None)
                         fig2.update_yaxes(title=None)
                         st.plotly_chart(fig2, use_container_width=True)
@@ -2587,7 +2664,6 @@ def dashboard_page(active_user, view: str = "summary"):
                 st.info("No equity history yet.")
             st.markdown("</div>", unsafe_allow_html=True)
 
-            st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
@@ -2667,73 +2743,110 @@ def dashboard_page(active_user, view: str = "summary"):
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
         # Render (polished UI)
-        st.subheader("Win/Loss Weeks")
+        
+        st.subheader("Win/Loss Analysis")
 
-        win_rate = (win_ct / total_ct) if total_ct else 0.0
-
-        c1, c2 = st.columns([1.25, 1])
-
-        with c1:
-            # Donut chart (Altair) with readable labels
-            try:
-                pie_df = pd.DataFrame({
-                    "Outcome": ["Wins", "Losses"],
-                    "Weeks": [int(win_ct), int(loss_ct)],
-                })
-
-                if int(pie_df["Weeks"].sum()) == 0:
-                    pie_df["Weeks"] = [1, 1]
-
-                pie_df["Pct"] = pie_df["Weeks"] / pie_df["Weeks"].sum()
-                pie_df["Label"] = pie_df.apply(lambda r: f"{r['Outcome']}  {r['Pct']*100:.0f}%", axis=1)
-
-                arc = (
-                    alt.Chart(pie_df)
-                    .mark_arc(innerRadius=95, outerRadius=165, cornerRadius=10)
-                    .encode(
-                        theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
-                        color=alt.Color(
-                            field="Outcome",
-                            type="nominal",
-                            scale=alt.Scale(scheme="tableau10"),
-                            legend=alt.Legend(orient="bottom", title=None),
-                        ),
-                        tooltip=[
-                            alt.Tooltip("Outcome:N"),
-                            alt.Tooltip("Weeks:Q"),
-                            alt.Tooltip("Pct:Q", format=".0%"),
-                        ],
-                    )
-                    .properties(height=360)
-                )
-
-                    
-
-                center = (
-                    alt.Chart(pd.DataFrame({"t": [0]}))
-                    .mark_text(size=26, fontWeight="bold", color="black")
-                    .encode(text=alt.value(f"{win_rate*100:.0f}% Win Rate"))
-                )
-
-                st.altair_chart(arc + center, use_container_width=True)
-            except Exception:
-                st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
-
-        with c2:
-            # Clean KPI grid
-            k1, k2 = st.columns(2)
-            with k1:
-                st.metric("Winning weeks", f"{win_ct}")
-                st.metric("Avg win return", f"{win_avg*100:.2f}%")
-            with k2:
-                st.metric("Losing weeks", f"{loss_ct}")
-                st.metric("Avg loss return", f"{loss_avg*100:.2f}%")
-
-            st.divider()
-            st.metric("Total weeks measured", f"{total_ct}")
+        # Polished container like the mockup
+        st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
 
         if _wk_stats_note:
-            st.caption(_wk_stats_note)
+            st.info(_wk_stats_note)
+
+        wl_left, wl_right = st.columns([1.35, 1], gap="large")
+
+        # Left: small summary table + KPI tiles
+        with wl_left:
+            # KPI tiles
+            st.markdown(
+                f"""
+                <div class="dash-mini-grid">
+                  <div class="dash-mini"><div class="t">Winning Weeks</div><div class="v">{int(win_ct)}</div></div>
+                  <div class="dash-mini"><div class="t">Losing Weeks</div><div class="v">{int(loss_ct)}</div></div>
+                  <div class="dash-mini"><div class="t">Avg loss return</div><div class="v">{_fmt_pct(loss_avg)}</div></div>
+                </div>
+                <div style="height:12px;"></div>
+                <div class="dash-mini-grid" style="grid-template-columns: repeat(3, 1fr);">
+                  <div class="dash-mini"><div class="t">Avg win return</div><div class="v">{_fmt_pct(win_avg)}</div></div>
+                  <div class="dash-mini"><div class="t">Win Rate</div><div class="v">{_fmt_pct(win_rate)}</div></div>
+                  <div class="dash-mini"><div class="t">Weeks tracked</div><div class="v">{int(total_ct)}</div></div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Compact table (readable like the mockup)
+            st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
+            table_rows = [
+                ("Winning Weeks", int(win_ct)),
+                ("Losing Weeks", int(loss_ct)),
+                ("Win Rate", _fmt_pct(win_rate)),
+                ("Avg Win Return", _fmt_pct(win_avg)),
+                ("Avg Loss Return", _fmt_pct(loss_avg)),
+            ]
+            tr_html = "".join([f"<tr><td>{k}</td><td class='num'>{v}</td></tr>" for k, v in table_rows])
+            st.markdown(
+                f"""
+                <table class="dash-table">
+                  <thead>
+                    <tr>
+                      <th>Metric</th>
+                      <th class="num">Value</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tr_html}
+                  </tbody>
+                </table>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # Right: donut chart
+        with wl_right:
+            try:
+                import plotly.express as px
+                pie_df = pd.DataFrame({"Outcome": ["Wins", "Losses"], "Weeks": [int(win_ct), int(loss_ct)]})
+                if int(pie_df["Weeks"].sum()) == 0:
+                    pie_df["Weeks"] = [1, 1]
+                fig = px.pie(pie_df, names="Outcome", values="Weeks", hole=0.64)
+                fig.update_traces(textinfo="none")
+                fig.update_layout(
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    height=330,
+                    showlegend=True,
+                    legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"),
+                )
+                fig.add_annotation(
+                    text=f"{win_rate*100:.0f}% Win Rate",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(size=18),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception:
+                try:
+                    pie_df = pd.DataFrame({"Outcome": ["Wins", "Losses"], "Weeks": [int(win_ct), int(loss_ct)]})
+                    arc = (
+                        alt.Chart(pie_df)
+                        .mark_arc(innerRadius=95, outerRadius=165, cornerRadius=10)
+                        .encode(
+                            theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
+                            color=alt.Color(field="Outcome", type="nominal", legend=alt.Legend(orient="bottom", title=None)),
+                        )
+                        .properties(height=330)
+                    )
+                    center = (
+                        alt.Chart(pd.DataFrame({"t": [0]}))
+                        .mark_text(size=24, fontWeight="bold", color="black")
+                        .encode(text=alt.value(f"{win_rate*100:.0f}% Win Rate"))
+                    )
+                    st.altair_chart(arc + center, use_container_width=True)
+                except Exception:
+                    st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
         # --- Total Profit & Analysis (moved from Option Details) ---
         st.subheader("Total Profit & Analysis")
         try:
