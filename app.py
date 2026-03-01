@@ -264,6 +264,52 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .dash-kv .k{ color: rgba(17,24,39,.70); font-weight:800; font-size:13px; }
 .dash-kv .val{ font-weight:900; font-size:16px; }
 
+
+/* -------- Executive Dashboard (Premium B) -------- */
+.dash-wrap{ display:block; margin-top:6px; }
+.dash-grid{ display:grid; grid-template-columns: repeat(12, 1fr); gap:18px; }
+.dash-card{
+  background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.86));
+  border: 1px solid rgba(17,24,39,.06);
+  border-radius: 18px;
+  box-shadow: 0 18px 40px rgba(17,24,39,.10);
+  padding: 18px 18px;
+  position: relative;
+  overflow: hidden;
+}
+.dash-card:before{
+  content:"";
+  position:absolute; inset:-80px -80px auto auto;
+  width: 220px; height: 220px;
+  background: radial-gradient(circle at 30% 30%, rgba(99,102,241,.18), rgba(99,102,241,0) 65%);
+  filter: blur(2px);
+}
+.dash-kpi-title{ font-weight:900; color: rgba(17,24,39,.72); letter-spacing:.2px; font-size:14px; }
+.dash-kpi-value{ font-weight:950; font-size:40px; line-height:1.05; margin-top:10px; color: rgba(17,24,39,.96); }
+.dash-kpi-sub{ display:flex; align-items:center; gap:10px; margin-top:12px; color: rgba(17,24,39,.68); font-weight:800; }
+.dash-chip{
+  display:inline-flex; align-items:center; justify-content:center;
+  padding: 5px 10px; border-radius: 999px;
+  background: rgba(17,24,39,.04);
+  border: 1px solid rgba(17,24,39,.10);
+  font-weight:900; font-size:12px; letter-spacing:.3px;
+}
+.dash-delta{ font-weight:950; font-size:13px; }
+.dash-delta.pos{ color: rgba(16,185,129,.98); }
+.dash-delta.neg{ color: rgba(239,68,68,.98); }
+
+.dash-section-title{ font-weight:950; font-size:20px; margin:0 0 12px 0; color: rgba(17,24,39,.92); }
+.dash-muted{ color: rgba(17,24,39,.62); font-weight:800; }
+
+.dash-split{ display:grid; grid-template-columns: 1.15fr 0.85fr; gap:16px; align-items:center; }
+.dash-breakdown{ display:flex; flex-direction:column; gap:10px; }
+.dash-row{ display:flex; justify-content:space-between; align-items:center; padding:10px 12px; border-radius: 12px;
+  background: rgba(17,24,39,.03); border: 1px solid rgba(17,24,39,.06); }
+.dash-row .lbl{ display:flex; gap:10px; align-items:center; font-weight:900; color: rgba(17,24,39,.82); }
+.dot{ width:10px; height:10px; border-radius: 999px; display:inline-block; border:1px solid rgba(17,24,39,.10); }
+.dash-row .amt{ font-weight:950; }
+.dash-right-stack{ display:flex; flex-direction:column; gap:14px; }
+
 </style>
         """,
         unsafe_allow_html=True,
@@ -2343,141 +2389,172 @@ def dashboard_page(active_user, view: str = "summary"):
         short_exposure_usd = abs(short_liab_usd)
         net_exposure_usd = float(net_liq_usd or 0.0)
 
-        # Top cards
+
+        # Top cards (premium B)
         c1, c2, c3, c4 = st.columns(4, gap="large")
 
-        def _render_dash_metric(title: str, main_value: float, sub_left: str, sub_right: str | None = None,
-                                delta_pct: float | None = None, delta_usd: float | None = None):
-            delta_html = ""
+        def _dash_card(title: str, value: float, sub_usd: float | None = None, sub_cad: float | None = None,
+                       delta_usd: float | None = None, delta_pct: float | None = None):
+            dcls = ""
+            dtext = ""
             if delta_usd is not None or delta_pct is not None:
-                _d = float(delta_usd or 0.0)
-                _p = delta_pct
-                _cls = "pos" if _d >= 0 else "neg"
-                _p_txt = f" ({_fmt_pct(_p)})" if _p is not None else ""
-                delta_html = f"<span class='dash-delta {_cls}'>{_fmt_money(_d)}{_p_txt}</span>"
-            sub_right_html = f"<span>{sub_right}</span>" if sub_right else ""
+                du = float(delta_usd or 0.0)
+                dcls = "pos" if du >= 0 else "neg"
+                ptxt = f" ({_fmt_pct(delta_pct)})" if delta_pct is not None else ""
+                dtext = f"<span class='dash-delta {dcls}'>{_fmt_money(du)}{ptxt}</span>"
+            sub_line = ""
+            if sub_usd is not None and sub_cad is not None:
+                sub_line = f"<span class='dash-chip'>USD</span><span class='dash-muted'>CA$ {_fmt_money(sub_cad).replace('$','')}</span>"
             st.markdown(
                 f"""
-                <div class="dash-metric">
-                  <div class="t">{title}</div>
-                  <div class="v">{_fmt_money(main_value)}</div>
-                  <div class="sub">
-                    <span class="dash-pill">{sub_left}</span>
-                    {sub_right_html}
-                    {delta_html}
+                <div class="dash-card">
+                  <div class="dash-kpi-title">{title}</div>
+                  <div class="dash-kpi-value">{_fmt_money(value)}</div>
+                  <div class="dash-kpi-sub">
+                    {sub_line}
+                    {dtext}
                   </div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
+        # Compute deltas from history (most recent vs prior snapshot) if available
+        _delta_usd = None
+        _delta_pct = None
+        try:
+            if hist is not None and not hist.empty and "total_equity" in hist.columns:
+                _h = hist.dropna(subset=["total_equity"]).copy()
+                if len(_h) >= 2:
+                    last = float(_h["total_equity"].iloc[-1])
+                    prev = float(_h["total_equity"].iloc[-2])
+                    _delta_usd = last - prev
+                    _delta_pct = (last - prev) / prev if prev else None
+        except Exception:
+            _delta_usd = None
+            _delta_pct = None
+
         with c1:
-            _render_dash_metric(
-                "Total Portfolio Value",
-                net_liq_usd,
-                "USD",
-                f"CA$ {_fmt_money(net_liq_cad).replace('$','')}",
-                None,
-                None,
-            )
+            _dash_card("Total Portfolio Value", net_liq_usd, sub_usd=net_liq_usd, sub_cad=net_liq_cad)
         with c2:
-            if latest_pl_usd is None:
-                _render_dash_metric("Latest P/L", 0.0, "USD", "Add snapshots to enable", None, None)
-            else:
-                _render_dash_metric("Latest P/L", latest_pl_usd, "USD", None, latest_pl_pct, latest_pl_usd)
+            _dash_card("Latest P/L", float((_delta_usd or 0.0)), sub_usd=None, sub_cad=None, delta_usd=_delta_usd, delta_pct=_delta_pct)
         with c3:
-            # Use Lifetime % as the closest "Total P/L" concept we have today
-            _render_dash_metric("Total P/L", life_profit, "USD", _fmt_pct(life_pct), life_pct, life_profit)
+            _dash_card("Total P/L", total_pl_usd, sub_usd=None, sub_cad=None, delta_usd=total_pl_usd, delta_pct=total_pl_pct)
         with c4:
-            _render_dash_metric("Cash Balance", cash_usd_v, "USD", f"CA$ {_fmt_money(cash_usd_v*fx).replace('$','')}", None, None)
-
-        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
-
-        # Breakdown + right-side cards
-        left, right = st.columns([2.1, 1], gap="large")
-
-        with left:
-            st.markdown("<div class='dash-panel'><h3>Portfolio Breakdown</h3>", unsafe_allow_html=True)
-            try:
-                bdf = pd.DataFrame([
-                    {"Component": "Stocks", "Value": max(stock_usd_v, 0.0)},
-                    {"Component": "LEAP Equity", "Value": max(leap_usd_v, 0.0)},
-                    {"Component": "Cash", "Value": max(cash_usd_v, 0.0)},
-                    {"Component": "Short Exposure", "Value": max(short_exposure_usd, 0.0)},
-                ])
-                bdf = bdf[bdf["Value"] > 0].copy()
-                if bdf.empty:
-                    st.info("No portfolio data to chart yet.")
-                else:
-                    donut = alt.Chart(bdf).mark_arc(innerRadius=55, outerRadius=90).encode(
-                        theta=alt.Theta(field="Value", type="quantitative"),
-                        color=alt.Color(field="Component", type="nominal", legend=alt.Legend(orient="right")),
-                        tooltip=["Component", alt.Tooltip("Value:Q", format=",.2f")],
-                    ).properties(height=220)
-                    st.altair_chart(donut, use_container_width=True)
-
-                    # table-like list (USD + CAD)
-                    bdf2 = bdf.copy()
-                    bdf2["USD"] = bdf2["Value"].map(_fmt_money)
-                    bdf2["CAD"] = (bdf2["Value"] * fx).map(lambda x: _fmt_money(x))
-                    st.dataframe(bdf2[["Component", "USD", "CAD"]], hide_index=True, use_container_width=True)
-            except Exception:
-                st.info("Breakdown chart unavailable.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with right:
-            st.markdown("<div class='dash-panel'>", unsafe_allow_html=True)
-            st.markdown(
-                f"""
-                <div class="dash-kv"><div class="k">Short Call Liability</div><div class="val neg-val">-{_fmt_money(short_exposure_usd)}</div></div>
-                <div class="dash-kv"><div class="k">Net Exposure</div><div class="val">{_fmt_money(net_exposure_usd)}</div></div>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
-
-            st.markdown("<div class='dash-panel'><h3>Equity Trend</h3>", unsafe_allow_html=True)
-            try:
-                h = get_portfolio_history(uid)
-                h = normalize_columns(h)
-                if h is not None and not h.empty and "snapshot_date" in h.columns and "total_equity" in h.columns:
-                    h = h[["snapshot_date", "total_equity"]].copy()
-                    h["snapshot_date"] = pd.to_datetime(h["snapshot_date"], errors="coerce")
-                    h["total_equity"] = pd.to_numeric(h["total_equity"], errors="coerce")
-                    h = h.dropna(subset=["snapshot_date","total_equity"]).sort_values("snapshot_date").tail(60)
-                    line = alt.Chart(h).mark_line().encode(
-                        x=alt.X("snapshot_date:T", title=""),
-                        y=alt.Y("total_equity:Q", title=""),
-                        tooltip=[alt.Tooltip("snapshot_date:T", title="Date"), alt.Tooltip("total_equity:Q", format=",.2f", title="Equity")],
-                    ).properties(height=170)
-                    st.altair_chart(line, use_container_width=True)
-                else:
-                    st.caption("Create Weekly Snapshots to populate this chart.")
-            except Exception:
-                st.caption("Create Weekly Snapshots to populate this chart.")
-            st.markdown("</div>", unsafe_allow_html=True)
+            _dash_card("Cash Balance", cash_usd_v, sub_usd=None, sub_cad=cash_cad_v)
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
-# -----------------------------------------
-        # Portfolio Value table (keep same components, now show USD and CAD)
-        # --------------------------------------------------------------------------------
-        st.subheader("Portfolio Value")
+        # Breakdown + right-side stack
+        left, right = st.columns([2.2, 1], gap="large")
 
-        pv_rows = [
-            ("Cash Balance", cash_usd, cash_usd * fx),
-            ("Stock Equity", stock_value_usd, stock_value_usd * fx),
-            ("LEAP Equity", leap_value_usd, leap_value_usd * fx),
-            ("ITM Call Liability (Deducted)", -itm_liability_usd, -itm_liability_usd * fx),
-        ]
+        with left:
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Portfolio Breakdown</div>", unsafe_allow_html=True)
 
-        pv_html = "<table class='finance-table'><thead><tr><th>Component</th><th>US$</th><th>CA$</th></tr></thead><tbody>"
-        for label, usd_v, cad_v in pv_rows:
-            pv_html += f"<tr><td>{label}</td><td>{_fmt_money(usd_v)}</td><td>{_fmt_money(cad_v)}</td></tr>"
-        pv_html += f"<tr class='total-row'><td>Total Portfolio Value</td><td>{_fmt_money(net_liq_usd)}</td><td>{_fmt_money(net_liq_cad)}</td></tr></tbody></table>"
-        st.markdown(pv_html, unsafe_allow_html=True)
+            comp = [
+                ("Stocks", max(stock_usd_v, 0.0)),
+                ("LEAP Equity", max(leap_usd_v, 0.0)),
+                ("Cash", cash_usd_v),
+                ("Short Exposure", abs(short_liab_usd)),
+            ]
+            bdf = pd.DataFrame(comp, columns=["Component", "USD"])
+            bdf["USD"] = pd.to_numeric(bdf["USD"], errors="coerce").fillna(0.0)
+
+            # Donut chart
+            try:
+                import plotly.express as px
+                fig = px.pie(bdf, names="Component", values="USD", hole=0.62)
+                fig.update_traces(textinfo="percent", textposition="inside")
+                fig.update_layout(
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    showlegend=False,
+                    height=280,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception:
+                # Fallback simple altair donut
+                try:
+                    import altair as alt
+                    _df = bdf.copy()
+                    _df["pct"] = (_df["USD"] / _df["USD"].sum()).fillna(0.0)
+                    chart = alt.Chart(_df).mark_arc(innerRadius=70).encode(
+                        theta=alt.Theta(field="USD", type="quantitative"),
+                        color=alt.Color(field="Component", type="nominal"),
+                        tooltip=["Component", alt.Tooltip("USD:Q", format=",.2f")]
+                    ).properties(height=280)
+                    st.altair_chart(chart, use_container_width=True)
+                except Exception:
+                    st.info("Breakdown chart unavailable.")
+
+            # Breakdown rows (USD + CAD)
+            rate = float(fx or 1.0)
+            dots = {
+                "Stocks": "dot",
+                "LEAP Equity": "dot",
+                "Cash": "dot",
+                "Short Exposure": "dot",
+            }
+            for name, usd_val in comp:
+                cad_val = usd_val * rate
+                st.markdown(
+                    f"""
+                    <div class="dash-row">
+                      <div class="lbl"><span class="dot"></span>{name}</div>
+                      <div class="amt">{_fmt_money(usd_val)} <span class="dash-muted" style="margin-left:10px;">CA$ {_fmt_money(cad_val).replace('$','')}</span></div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with right:
+            # Liability + Exposure
+            st.markdown("<div class='dash-right-stack'>", unsafe_allow_html=True)
+
+            st.markdown(
+                f"""
+                <div class="dash-card">
+                  <div class="dash-kv">
+                    <div class="k">Short Call Liability</div>
+                    <div class="val" style="color: rgba(239,68,68,.98);">{_fmt_money(-abs(short_liab_usd))}</div>
+                  </div>
+                  <div class="dash-kv">
+                    <div class="k">Net Exposure</div>
+                    <div class="val">{_fmt_money(net_exposure_usd)}</div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            # Equity trend
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
+            try:
+                hdf = hist.copy() if hist is not None else pd.DataFrame()
+                if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
+                    hdf["snapshot_date"] = pd.to_datetime(hdf["snapshot_date"], errors="coerce")
+                    hdf["total_equity"] = pd.to_numeric(hdf["total_equity"], errors="coerce")
+                    hdf = hdf.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date")
+                if hdf is None or hdf.empty:
+                    st.info("No equity history yet.")
+                else:
+                    try:
+                        import plotly.express as px
+                        fig2 = px.line(hdf, x="snapshot_date", y="total_equity")
+                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=260, showlegend=False)
+                        fig2.update_xaxes(title=None)
+                        fig2.update_yaxes(title=None)
+                        st.plotly_chart(fig2, use_container_width=True)
+                    except Exception:
+                        st.line_chart(hdf.set_index("snapshot_date")["total_equity"])
+            except Exception:
+                st.info("No equity history yet.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
         st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
         st.markdown(summ_html, unsafe_allow_html=True)
