@@ -956,6 +956,45 @@ def handle_auth():
             except Exception as e: st.error(f"Signup failed: {e}")
     return False
 
+
+def render_auth_main():
+    """
+    Render Login/Register UI in the MAIN page area (not just the sidebar).
+    This is important because the sidebar is often collapsed, which can make the
+    sign-in controls hard to find after sign-out.
+    """
+    if not supabase:
+        st.warning("⚠️ Database not connected.")
+        return
+
+    # Center a simple card-style login box
+    left, mid, right = st.columns([1, 2, 1])
+    with mid:
+        st.markdown("### Sign in")
+        tab1, tab2 = st.tabs(["Login", "Register"])
+        with tab1:
+            email = st.text_input("Email", key="main_login_email")
+            password = st.text_input("Password", type="password", key="main_login_pass")
+            if st.button("Sign In", type="primary", key="main_login_btn"):
+                try:
+                    res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                    st.session_state.user = res.user
+                    st.session_state.access_token = getattr(getattr(res, 'session', None), 'access_token', '') or ''
+                    ensure_supabase_auth()
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Login failed: {e}")
+        with tab2:
+            new_email = st.text_input("Email", key="main_reg_email")
+            new_pass = st.text_input("Password", type="password", key="main_reg_pass")
+            if st.button("Create Account", key="main_reg_btn"):
+                try:
+                    supabase.auth.sign_up({"email": new_email, "password": new_pass})
+                    st.success("Account created! Now log in from the Login tab.")
+                except Exception as e:
+                    st.error(f"Signup failed: {e}")
+
+
 # --------------------------------------------------------------------------------
 # 4. DATA HELPERS
 # --------------------------------------------------------------------------------
@@ -5650,7 +5689,9 @@ def main():
     
     force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
     
-    if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
+    if not handle_auth():
+        render_auth_main()
+        return
     st.sidebar.divider()
     pages = ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"]
     # Top bar (visual)
