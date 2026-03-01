@@ -593,15 +593,7 @@ def _set_active_account(user):
     if cur not in labels:
         cur = labels[0]
 
-    # Selector is rendered in the top header (key='account_selector').
-    # We still support older session values / deep links by defaulting safely.
-    if "account_selector" not in st.session_state:
-        st.session_state["account_selector"] = cur
-    sel = st.session_state.get("account_selector") or cur
-    if sel not in labels:
-        sel = labels[0]
-        st.session_state["account_selector"] = sel
-
+    sel = st.sidebar.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
     st.session_state["active_account_label"] = sel
     chosen = next(a for a in accts if a["label"] == sel)
 
@@ -2056,342 +2048,233 @@ def dashboard_page(active_user, view: str = "summary"):
         pv_html += f"<tr class='total-row'><td>Total Portfolio Value</td><td>{_fmt_money(net_liq_usd)}</td><td>{_fmt_money(net_liq_cad)}</td></tr></tbody></table>"
         st.markdown(pv_html, unsafe_allow_html=True)
 
-    # --- Visuals: Portfolio Breakdown + Portfolio Value History ---
-    try:
-        st.markdown("<div class='card'><div class='h3-title'>Portfolio Breakdown</div>", unsafe_allow_html=True)
-        c_left, c_right = st.columns([1.05, 1.25], gap="large")
+        st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
+        st.markdown(summ_html, unsafe_allow_html=True)
 
-        # Donut breakdown (Stocks / LEAPs / Cash / Short Liability)
-        with c_left:
-            try:
-                bdf = pd.DataFrame({
-                    "Category": ["Stocks", "LEAP Equity", "Cash", "Short Liability"],
-                    "Value": [
-                        float(max(stock_value_usd, 0.0)),
-                        float(max(leap_value_usd, 0.0)),
-                        float(max(cash_usd, 0.0)),
-                        float(max(itm_liability_usd, 0.0)),
-                    ],
-                })
-                # If everything is zero, render a neutral donut
-                if float(bdf["Value"].sum()) <= 0:
-                    bdf["Value"] = [1, 1, 1, 1]
+        # --- Win/Loss Weeks (from Weekly Snapshots) ---
+        # Always render the section; compute stats best-effort.
+        win_ct = 0
+        loss_ct = 0
+        total_ct = 0
+        win_avg = 0.0
+        loss_avg = 0.0
+        _wk_stats_note = None
 
-                bdf["Pct"] = bdf["Value"] / bdf["Value"].sum()
-                bdf["Label"] = bdf.apply(lambda r: f"{r['Category']}  {r['Pct']*100:.0f}%", axis=1)
+        try:
+            hist_df = get_portfolio_history(uid)
+            hist_df = normalize_columns(hist_df)
 
-                donut = (
-                    alt.Chart(bdf)
-                    .mark_arc(innerRadius=95, outerRadius=165, cornerRadius=10)
-                    .encode(
-                        theta=alt.Theta(field="Value", type="quantitative", stack=True),
-                        color=alt.Color(
-                            field="Category",
-                            type="nominal",
-                            scale=alt.Scale(scheme="tableau10"),
-                            legend=alt.Legend(orient="bottom", title=None),
-                        ),
-                        tooltip=[
-                            alt.Tooltip("Category:N"),
-                            alt.Tooltip("Value:Q", format=",.2f"),
-                            alt.Tooltip("Pct:Q", format=".1%"),
-                        ],
-                    )
-                    .properties(height=320)
-                )
-
-                st.altair_chart(donut, use_container_width=True)
-
-                # Small breakdown table beside / under donut
-                tdf = pd.DataFrame({
-                    "Component": ["Stocks", "LEAP Equity", "Cash", "ITM Call Liability"],
-                    "USD": [
-                        float(stock_value_usd),
-                        float(leap_value_usd),
-                        float(cash_usd),
-                        float(-itm_liability_usd),
-                    ],
-                    "CAD": [
-                        float(stock_value_usd * fx),
-                        float(leap_value_usd * fx),
-                        float(cash_usd * fx),
-                        float(-itm_liability_usd * fx),
-                    ],
-                })
-                tdf["USD"] = tdf["USD"].apply(_fmt_money)
-                tdf["CAD"] = tdf["CAD"].apply(_fmt_money)
-                st.dataframe(tdf, hide_index=True, use_container_width=True)
-            except Exception:
-                st.info("Portfolio breakdown chart unavailable (insufficient data).")
-
-        # Portfolio value history (weekly snapshots)
-        with c_right:
-            try:
-                hist_df = get_portfolio_history(uid)
-                hist_df = normalize_columns(hist_df) if hist_df is not None else pd.DataFrame()
-                if hist_df is None or hist_df.empty or "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
-                    raise ValueError("history_missing")
-
+            if hist_df is None or hist_df.empty:
+                _wk_stats_note = "No weekly snapshot history found yet. Create Weekly Snapshots to populate this section."
+            elif "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+                _wk_stats_note = "Weekly snapshot data is missing required fields."
+            else:
                 hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
                 hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
                 hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
                 hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
 
-                # Show last ~12 months if available
-                if not hist_df.empty:
-                    cutoff = pd.Timestamp.today() - pd.Timedelta(days=370)
-                    hist_df = hist_df[hist_df["snapshot_date"] >= cutoff]
+                if len(hist_df) < 2:
+                    _wk_stats_note = "Need at least 2 Weekly Snapshots to calculate win/loss weeks."
+                else:
+                    # Deposits/Withdrawals in USD for flow-normalized weekly returns (same logic as Weekly Snapshot page)
+                    tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+                        .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                    tx_df = pd.DataFrame(tx_res.data)
+                    if not tx_df.empty:
+                        tx_df = normalize_columns(tx_df)
+                        tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+                        tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
+                        if "currency" in tx_df.columns:
+                            tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+                    else:
+                        tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
 
-                line = (
-                    alt.Chart(hist_df)
-                    .mark_line()
+                    weekly_rows = []
+                    for i in range(1, len(hist_df)):
+                        prev_date = hist_df.iloc[i-1]["snapshot_date"]
+                        prev_eq = float(hist_df.iloc[i-1]["total_equity"] or 0.0)
+                        curr_date = hist_df.iloc[i]["snapshot_date"]
+                        curr_eq = float(hist_df.iloc[i]["total_equity"] or 0.0)
+
+                        net_flow = 0.0
+                        if not tx_df.empty:
+                            mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
+                            net_flow = float(tx_df.loc[mask, "amount"].sum())
+
+                        base_capital = prev_eq + net_flow
+                        weekly_profit = curr_eq - base_capital
+                        weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
+                        weekly_rows.append({"date": curr_date, "profit": weekly_profit, "ret": weekly_ret})
+
+                    if not weekly_rows:
+                        _wk_stats_note = "No weekly snapshot rows found to compute win/loss."
+                    else:
+                        wk = pd.DataFrame(weekly_rows)
+                        win_mask = wk["profit"] > 0
+                        loss_mask = wk["profit"] < 0
+
+                        win_ct = int(win_mask.sum())
+                        loss_ct = int(loss_mask.sum())
+                        total_ct = int(len(wk))
+
+                        win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
+                        loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
+        except Exception:
+            _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
+
+        # Render (polished UI)
+        st.subheader("Win/Loss Weeks")
+
+        win_rate = (win_ct / total_ct) if total_ct else 0.0
+
+        c1, c2 = st.columns([1.25, 1])
+
+        with c1:
+            # Donut chart (Altair) with readable labels
+            try:
+                pie_df = pd.DataFrame({
+                    "Outcome": ["Wins", "Losses"],
+                    "Weeks": [int(win_ct), int(loss_ct)],
+                })
+
+                if int(pie_df["Weeks"].sum()) == 0:
+                    pie_df["Weeks"] = [1, 1]
+
+                pie_df["Pct"] = pie_df["Weeks"] / pie_df["Weeks"].sum()
+                pie_df["Label"] = pie_df.apply(lambda r: f"{r['Outcome']}  {r['Pct']*100:.0f}%", axis=1)
+
+                arc = (
+                    alt.Chart(pie_df)
+                    .mark_arc(innerRadius=95, outerRadius=165, cornerRadius=10)
                     .encode(
-                        x=alt.X("snapshot_date:T", title=None),
-                        y=alt.Y("total_equity:Q", title=None),
+                        theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
+                        color=alt.Color(
+                            field="Outcome",
+                            type="nominal",
+                            scale=alt.Scale(scheme="tableau10"),
+                            legend=alt.Legend(orient="bottom", title=None),
+                        ),
                         tooltip=[
-                            alt.Tooltip("snapshot_date:T", title="Date"),
-                            alt.Tooltip("total_equity:Q", title="Total Equity", format=",.0f"),
+                            alt.Tooltip("Outcome:N"),
+                            alt.Tooltip("Weeks:Q"),
+                            alt.Tooltip("Pct:Q", format=".0%"),
                         ],
                     )
-                    .properties(height=360, title="Total Equity (Weekly Snapshots)")
+                    .properties(height=360)
                 )
-                st.altair_chart(line, use_container_width=True)
-            except Exception:
-                # Fallback: show a tiny sparkline based on current net liq only
-                st.info("Equity history chart will appear after you have weekly snapshots saved in portfolio_history.")
-
-        st.markdown("</div>", unsafe_allow_html=True)
-    except Exception:
-        # Charts should never block the dashboard
-        pass
-
-    st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
-    st.markdown(summ_html, unsafe_allow_html=True)
-
-    # --- Win/Loss Weeks (from Weekly Snapshots) ---
-    # Always render the section; compute stats best-effort.
-    win_ct = 0
-    loss_ct = 0
-    total_ct = 0
-    win_avg = 0.0
-    loss_avg = 0.0
-    _wk_stats_note = None
-
-    try:
-        hist_df = get_portfolio_history(uid)
-        hist_df = normalize_columns(hist_df)
-
-        if hist_df is None or hist_df.empty:
-            _wk_stats_note = "No weekly snapshot history found yet. Create Weekly Snapshots to populate this section."
-        elif "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
-            _wk_stats_note = "Weekly snapshot data is missing required fields."
-        else:
-            hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
-            hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
-            hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
-            hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
-
-            if len(hist_df) < 2:
-                _wk_stats_note = "Need at least 2 Weekly Snapshots to calculate win/loss weeks."
-            else:
-                # Deposits/Withdrawals in USD for flow-normalized weekly returns (same logic as Weekly Snapshot page)
-                tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
-                    .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
-                tx_df = pd.DataFrame(tx_res.data)
-                if not tx_df.empty:
-                    tx_df = normalize_columns(tx_df)
-                    tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
-                    tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce").fillna(0.0)
-                    if "currency" in tx_df.columns:
-                        tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
-                else:
-                    tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
-
-                weekly_rows = []
-                for i in range(1, len(hist_df)):
-                    prev_date = hist_df.iloc[i-1]["snapshot_date"]
-                    prev_eq = float(hist_df.iloc[i-1]["total_equity"] or 0.0)
-                    curr_date = hist_df.iloc[i]["snapshot_date"]
-                    curr_eq = float(hist_df.iloc[i]["total_equity"] or 0.0)
-
-                    net_flow = 0.0
-                    if not tx_df.empty:
-                        mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
-                        net_flow = float(tx_df.loc[mask, "amount"].sum())
-
-                    base_capital = prev_eq + net_flow
-                    weekly_profit = curr_eq - base_capital
-                    weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
-                    weekly_rows.append({"date": curr_date, "profit": weekly_profit, "ret": weekly_ret})
-
-                if not weekly_rows:
-                    _wk_stats_note = "No weekly snapshot rows found to compute win/loss."
-                else:
-                    wk = pd.DataFrame(weekly_rows)
-                    win_mask = wk["profit"] > 0
-                    loss_mask = wk["profit"] < 0
-
-                    win_ct = int(win_mask.sum())
-                    loss_ct = int(loss_mask.sum())
-                    total_ct = int(len(wk))
-
-                    win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
-                    loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
-    except Exception:
-        _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
-
-    # Render (polished UI)
-    st.subheader("Win/Loss Weeks")
-
-    win_rate = (win_ct / total_ct) if total_ct else 0.0
-
-    c1, c2 = st.columns([1.25, 1])
-
-    with c1:
-        # Donut chart (Altair) with readable labels
-        try:
-            pie_df = pd.DataFrame({
-                "Outcome": ["Wins", "Losses"],
-                "Weeks": [int(win_ct), int(loss_ct)],
-            })
-
-            if int(pie_df["Weeks"].sum()) == 0:
-                pie_df["Weeks"] = [1, 1]
-
-            pie_df["Pct"] = pie_df["Weeks"] / pie_df["Weeks"].sum()
-            pie_df["Label"] = pie_df.apply(lambda r: f"{r['Outcome']}  {r['Pct']*100:.0f}%", axis=1)
-
-            arc = (
-                alt.Chart(pie_df)
-                .mark_arc(innerRadius=95, outerRadius=165, cornerRadius=10)
-                .encode(
-                    theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
-                    color=alt.Color(
-                        field="Outcome",
-                        type="nominal",
-                        scale=alt.Scale(scheme="tableau10"),
-                        legend=alt.Legend(orient="bottom", title=None),
-                    ),
-                    tooltip=[
-                        alt.Tooltip("Outcome:N"),
-                        alt.Tooltip("Weeks:Q"),
-                        alt.Tooltip("Pct:Q", format=".0%"),
-                    ],
-                )
-                .properties(height=360)
-            )
 
                     
 
-            center = (
-                alt.Chart(pd.DataFrame({"t": [0]}))
-                .mark_text(size=26, fontWeight="bold", color="black")
-                .encode(text=alt.value(f"{win_rate*100:.0f}% Win Rate"))
-            )
+                center = (
+                    alt.Chart(pd.DataFrame({"t": [0]}))
+                    .mark_text(size=26, fontWeight="bold", color="black")
+                    .encode(text=alt.value(f"{win_rate*100:.0f}% Win Rate"))
+                )
 
-            st.altair_chart(arc + center, use_container_width=True)
+                st.altair_chart(arc + center, use_container_width=True)
+            except Exception:
+                st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
+
+        with c2:
+            # Clean KPI grid
+            k1, k2 = st.columns(2)
+            with k1:
+                st.metric("Winning weeks", f"{win_ct}")
+                st.metric("Avg win return", f"{win_avg*100:.2f}%")
+            with k2:
+                st.metric("Losing weeks", f"{loss_ct}")
+                st.metric("Avg loss return", f"{loss_avg*100:.2f}%")
+
+            st.divider()
+            st.metric("Total weeks measured", f"{total_ct}")
+
+        if _wk_stats_note:
+            st.caption(_wk_stats_note)
+        # --- Total Profit & Analysis (moved from Option Details) ---
+        st.subheader("Total Profit & Analysis")
+        try:
+            net_invested_cad = float(get_net_invested_cad(uid) or 0.0)
+            current_val_cad = float(net_liq_cad or 0.0)
+
+            lifetime_pl_cad = current_val_cad - net_invested_cad
+            lifetime_pl_pct = (lifetime_pl_cad / net_invested_cad) if net_invested_cad > 0 else 0.0
+            cls_life = "pos-val" if lifetime_pl_cad >= 0 else "neg-val"
+
+            prof_html = "<table class='finance-table'><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>"
+            prof_html += f"<tr><td><strong>Net Invested Capital (CAD)</strong></td><td><strong>${net_invested_cad:,.2f}</strong></td></tr>"
+            prof_html += f"<tr><td><strong>Lifetime P/L (CAD)</strong></td><td class='{cls_life}'><strong>${lifetime_pl_cad:,.2f} ({lifetime_pl_pct*100:.2f}%)</strong></td></tr>"
+            prof_html += "<tr><td colspan='2' style='background-color:#f0f2f6; text-align:center; font-size:0.85em; font-weight:bold;'>YTD Snapshot Analysis</td></tr>"
+
+            baseline = get_baseline_snapshot(uid)
+            if baseline:
+                start_date_str = baseline.get("snapshot_date")
+                start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date() if start_date_str else None
+
+                base_equity_usd = float(baseline.get("total_equity") or 0.0)
+                base_rate = float(baseline.get("exchange_rate", 1.0) or 1.0)
+
+                # Baseline value in CAD (baseline snapshot stores USD equity + an exchange_rate at snapshot time)
+                start_val_cad = base_equity_usd * base_rate
+
+                def _net_flows_cad(d0, d1):
+                    """Net DEPOSIT/WITHDRAWAL flows between (d0, d1], expressed in CAD."""
+                    try:
+                        tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+                            .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+                        tx = pd.DataFrame(tx_res.data)
+                        if tx.empty or d0 is None:
+                            return 0.0
+
+                        tx = normalize_columns(tx)
+                        tx["transaction_date"] = pd.to_datetime(tx["transaction_date"], errors="coerce")
+                        tx = tx[tx["transaction_date"].notna()]
+
+                        mask = (tx["transaction_date"] > pd.to_datetime(d0)) & (tx["transaction_date"] <= pd.to_datetime(d1))
+                        tx = tx.loc[mask].copy()
+                        if tx.empty:
+                            return 0.0
+
+                        if "currency" not in tx.columns:
+                            return float(pd.to_numeric(tx.get("amount", 0), errors="coerce").fillna(0).sum())
+
+                        cad_sum = float(pd.to_numeric(tx.loc[tx["currency"].astype(str).str.upper() == "CAD", "amount"], errors="coerce").fillna(0).sum())
+                        if cad_sum != 0.0:
+                            return cad_sum
+
+                        # Fallback: convert USD flows to CAD using current fx
+                        usd_sum = float(pd.to_numeric(tx.loc[tx["currency"].astype(str).str.upper() == "USD", "amount"], errors="coerce").fillna(0).sum())
+                        fx_now = float(fx or get_usd_to_cad_rate() or 1.0)
+                        return usd_sum * fx_now
+                    except Exception:
+                        return 0.0
+
+                net_flows = _net_flows_cad(start_date, date.today())
+                invest_base = start_val_cad + net_flows  # value with 0% return after net contributions
+                profit_dollar = current_val_cad - invest_base
+                profit_pct = (profit_dollar / invest_base) if invest_base else 0.0
+
+                today = date.today()
+                days_passed = (today - start_date).days if start_date else 0
+                if days_passed < 1:
+                    days_passed = 1
+
+                annualized_return = ((1 + profit_pct) ** (365.0 / days_passed)) - 1 if profit_pct > -1 else 0.0
+                cls_ytd = "pos-val" if profit_dollar >= 0 else "neg-val"
+
+                prof_html += f"<tr><td>Baseline Date (Start)</td><td>{start_date_str}</td></tr>"
+                prof_html += f"<tr><td>Baseline Value (CAD)</td><td>${start_val_cad:,.2f}</td></tr>"
+                prof_html += f"<tr><td>Net Deposits/Withdrawals Since Baseline (CAD)</td><td>${net_flows:,.2f}</td></tr>"
+                prof_html += f"<tr><td>YTD Profit ($) (CAD)</td><td class='{cls_ytd}'>${profit_dollar:,.2f}</td></tr>"
+                prof_html += f"<tr><td>YTD Profit (%)</td><td class='{cls_ytd}'>{profit_pct*100:.2f}%</td></tr>"
+                prof_html += f"<tr><td>FY Forecast (Annualized)</td><td>{annualized_return*100:.2f}%</td></tr>"
+            else:
+                prof_html += "<tr><td colspan='2'>No baseline snapshot found. Please create one.</td></tr>"
+
+            prof_html += "</tbody></table>"
+            st.markdown(prof_html, unsafe_allow_html=True)
         except Exception:
-            st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
-
-    with c2:
-        # Clean KPI grid
-        k1, k2 = st.columns(2)
-        with k1:
-            st.metric("Winning weeks", f"{win_ct}")
-            st.metric("Avg win return", f"{win_avg*100:.2f}%")
-        with k2:
-            st.metric("Losing weeks", f"{loss_ct}")
-            st.metric("Avg loss return", f"{loss_avg*100:.2f}%")
-
-        st.divider()
-        st.metric("Total weeks measured", f"{total_ct}")
-
-    if _wk_stats_note:
-        st.caption(_wk_stats_note)
-    # --- Total Profit & Analysis (moved from Option Details) ---
-    st.subheader("Total Profit & Analysis")
-    try:
-        net_invested_cad = float(get_net_invested_cad(uid) or 0.0)
-        current_val_cad = float(net_liq_cad or 0.0)
-
-        lifetime_pl_cad = current_val_cad - net_invested_cad
-        lifetime_pl_pct = (lifetime_pl_cad / net_invested_cad) if net_invested_cad > 0 else 0.0
-        cls_life = "pos-val" if lifetime_pl_cad >= 0 else "neg-val"
-
-        prof_html = "<table class='finance-table'><thead><tr><th>Metric</th><th>Value</th></tr></thead><tbody>"
-        prof_html += f"<tr><td><strong>Net Invested Capital (CAD)</strong></td><td><strong>${net_invested_cad:,.2f}</strong></td></tr>"
-        prof_html += f"<tr><td><strong>Lifetime P/L (CAD)</strong></td><td class='{cls_life}'><strong>${lifetime_pl_cad:,.2f} ({lifetime_pl_pct*100:.2f}%)</strong></td></tr>"
-        prof_html += "<tr><td colspan='2' style='background-color:#f0f2f6; text-align:center; font-size:0.85em; font-weight:bold;'>YTD Snapshot Analysis</td></tr>"
-
-        baseline = get_baseline_snapshot(uid)
-        if baseline:
-            start_date_str = baseline.get("snapshot_date")
-            start_date = datetime.strptime(start_date_str, "%Y-%m-%d").date() if start_date_str else None
-
-            base_equity_usd = float(baseline.get("total_equity") or 0.0)
-            base_rate = float(baseline.get("exchange_rate", 1.0) or 1.0)
-
-            # Baseline value in CAD (baseline snapshot stores USD equity + an exchange_rate at snapshot time)
-            start_val_cad = base_equity_usd * base_rate
-
-            def _net_flows_cad(d0, d1):
-                """Net DEPOSIT/WITHDRAWAL flows between (d0, d1], expressed in CAD."""
-                try:
-                    tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
-                        .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
-                    tx = pd.DataFrame(tx_res.data)
-                    if tx.empty or d0 is None:
-                        return 0.0
-
-                    tx = normalize_columns(tx)
-                    tx["transaction_date"] = pd.to_datetime(tx["transaction_date"], errors="coerce")
-                    tx = tx[tx["transaction_date"].notna()]
-
-                    mask = (tx["transaction_date"] > pd.to_datetime(d0)) & (tx["transaction_date"] <= pd.to_datetime(d1))
-                    tx = tx.loc[mask].copy()
-                    if tx.empty:
-                        return 0.0
-
-                    if "currency" not in tx.columns:
-                        return float(pd.to_numeric(tx.get("amount", 0), errors="coerce").fillna(0).sum())
-
-                    cad_sum = float(pd.to_numeric(tx.loc[tx["currency"].astype(str).str.upper() == "CAD", "amount"], errors="coerce").fillna(0).sum())
-                    if cad_sum != 0.0:
-                        return cad_sum
-
-                    # Fallback: convert USD flows to CAD using current fx
-                    usd_sum = float(pd.to_numeric(tx.loc[tx["currency"].astype(str).str.upper() == "USD", "amount"], errors="coerce").fillna(0).sum())
-                    fx_now = float(fx or get_usd_to_cad_rate() or 1.0)
-                    return usd_sum * fx_now
-                except Exception:
-                    return 0.0
-
-            net_flows = _net_flows_cad(start_date, date.today())
-            invest_base = start_val_cad + net_flows  # value with 0% return after net contributions
-            profit_dollar = current_val_cad - invest_base
-            profit_pct = (profit_dollar / invest_base) if invest_base else 0.0
-
-            today = date.today()
-            days_passed = (today - start_date).days if start_date else 0
-            if days_passed < 1:
-                days_passed = 1
-
-            annualized_return = ((1 + profit_pct) ** (365.0 / days_passed)) - 1 if profit_pct > -1 else 0.0
-            cls_ytd = "pos-val" if profit_dollar >= 0 else "neg-val"
-
-            prof_html += f"<tr><td>Baseline Date (Start)</td><td>{start_date_str}</td></tr>"
-            prof_html += f"<tr><td>Baseline Value (CAD)</td><td>${start_val_cad:,.2f}</td></tr>"
-            prof_html += f"<tr><td>Net Deposits/Withdrawals Since Baseline (CAD)</td><td>${net_flows:,.2f}</td></tr>"
-            prof_html += f"<tr><td>YTD Profit ($) (CAD)</td><td class='{cls_ytd}'>${profit_dollar:,.2f}</td></tr>"
-            prof_html += f"<tr><td>YTD Profit (%)</td><td class='{cls_ytd}'>{profit_pct*100:.2f}%</td></tr>"
-            prof_html += f"<tr><td>FY Forecast (Annualized)</td><td>{annualized_return*100:.2f}%</td></tr>"
-        else:
-            prof_html += "<tr><td colspan='2'>No baseline snapshot found. Please create one.</td></tr>"
-
-        prof_html += "</tbody></table>"
-        st.markdown(prof_html, unsafe_allow_html=True)
-    except Exception:
-        st.info("Total Profit & Analysis unavailable (an error occurred while computing).")
+            st.info("Total Profit & Analysis unavailable (an error occurred while computing).")
 
 
 
@@ -2400,7 +2283,7 @@ def dashboard_page(active_user, view: str = "summary"):
     if view == "summary":
         return
 
-    # --------------------------------------------------------------------------------
+# --------------------------------------------------------------------------------
     # Keep the remainder of the dashboard identical to Option Details for now (tables + contract management)
     # --------------------------------------------------------------------------------
     if view != "holdings":
@@ -5762,74 +5645,40 @@ def main():
     if not email and isinstance(u, dict):
         email = u.get("email")
     acct_label = st.session_state.get("active_account_label", "My Account")
-    # Top bar (visual + selectors)
-    u = st.session_state.get("user")
-    email = getattr(u, "email", None) if u is not None else None
-    if not email and isinstance(u, dict):
-        email = u.get("email")
-
-    # Keep a clean, static top bar background/brand; render interactive controls just below
     st.markdown(
         f"""<div class=\"topbar\">
               <div style=\"display:flex; justify-content:space-between; align-items:center; gap:12px;\">
                 <div class=\"brand\"><span class=\"logo\"></span><span>Stock Portfolio</span></div>
                 <div class=\"right\">
+                  <span class=\"pill\">USD</span>
+                  <span class=\"pill\">{acct_label}</span>
                   <span class=\"pill\">{email or ''}</span>
                 </div>
               </div>
             </div>""",
         unsafe_allow_html=True,
     )
+    # Navigation (horizontal)
+    default_page = st.session_state.get("_selected_page", "Dashboard")
+    if default_page not in pages:
+        default_page = "Dashboard"
+    page = st.radio("Menu", pages, index=pages.index(default_page), horizontal=True, key="_top_nav")
+    st.session_state["_selected_page"] = page
 
-    # Account impersonation dropdown (delegated access)
-    # Uses the same session key as the active account context setter: "account_selector"
-    try:
-        if u is not None:
-            _ensure_user_preferences_row(u)
-            _activate_pending_invites(u)
-            accts_for_ui = _get_accessible_accounts(u)
-        else:
-            accts_for_ui = [{"label": "My Account", "owner_user_id": None, "role": "editor"}]
-    except Exception:
-        accts_for_ui = [{"label": "My Account", "owner_user_id": None, "role": "editor"}]
-
-    acct_labels = [a["label"] for a in accts_for_ui]
-    cur_label = st.session_state.get("active_account_label") or acct_labels[0]
-    if cur_label not in acct_labels:
-        cur_label = acct_labels[0]
-
-    # Right-aligned control row under the top bar
-    _sp1, _sp2, _ctl = st.columns([7, 2, 3])
-    with _ctl:
-        st.selectbox(
-            "Account",
-            acct_labels,
-            index=acct_labels.index(cur_label),
-            key="account_selector",
-            label_visibility="collapsed",
-            help="Switch between your account and any delegated accounts you have access to.",
-        )
-        # Navigation (horizontal)
-        default_page = st.session_state.get("_selected_page", "Dashboard")
-        if default_page not in pages:
-            default_page = "Dashboard"
-        page = st.radio("Menu", pages, index=pages.index(default_page), horizontal=True, key="_top_nav")
-        st.session_state["_selected_page"] = page
-
-        user = st.session_state.user
-        active_user = _set_active_account(user)
-        if page == "Dashboard": dashboard_page(active_user, view="summary")
-        elif page == "Holdings": dashboard_page(active_user, view="holdings")
-        elif page == "Option Details": option_details_page(active_user)
-        elif page == "Update LEAP Prices": pricing_page(active_user)
-        elif page == "Weekly Snapshot": snapshot_page(active_user)
-        elif page == "Cash Management": cash_management_page(active_user)
-        elif page == "Enter Trade": trade_entry_page(active_user)
-        elif page == "Ledger": ledger_page(active_user)
-        elif page == "Import Data": import_page(active_user)
-        elif page == "Profile": account_sharing_page(active_user)
-        elif page == "Community": community_page(user)
-        elif page == "Settings": settings_page(user)
+    user = st.session_state.user
+    active_user = _set_active_account(user)
+    if page == "Dashboard": dashboard_page(active_user, view="summary")
+    elif page == "Holdings": dashboard_page(active_user, view="holdings")
+    elif page == "Option Details": option_details_page(active_user)
+    elif page == "Update LEAP Prices": pricing_page(active_user)
+    elif page == "Weekly Snapshot": snapshot_page(active_user)
+    elif page == "Cash Management": cash_management_page(active_user)
+    elif page == "Enter Trade": trade_entry_page(active_user)
+    elif page == "Ledger": ledger_page(active_user)
+    elif page == "Import Data": import_page(active_user)
+    elif page == "Profile": account_sharing_page(active_user)
+    elif page == "Community": community_page(user)
+    elif page == "Settings": settings_page(user)
 
 if __name__ == "__main__":
     main()
