@@ -20,32 +20,150 @@ def apply_global_ui_theme():
     st.markdown(
         """
         <style>
-        /* Typography + spacing (no hard-coded colors) */
-        .stApp {
-            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
-        }
-        [data-testid="stMainBlockContainer"] { padding-top: 1.25rem; padding-bottom: 2rem; }
+/* -------- Premium (B) Fintech UI Layer -------- */
+:root{
+  --bg0: #f3f5f9;
+  --bg1: #eef2f7;
+  --card: #ffffff;
+  --ink: rgba(17,24,39,1);
+  --muted: rgba(17,24,39,.62);
+  --border: rgba(17,24,39,.10);
+  --shadow: 0 10px 30px rgba(2,6,23,.10);
+  --shadow2: 0 6px 16px rgba(2,6,23,.08);
+  --radius-lg: 18px;
+  --radius-md: 14px;
+}
 
-        /* Consistent rounding */
-        .stButton button, button[kind="primary"], button[kind="secondary"],
-        .stTextInput input, .stNumberInput input, .stDateInput input,
-        .stTextArea textarea, [data-baseweb="select"] > div,
-        [data-testid="stDataFrame"], [data-testid="stMetric"], [data-testid="stExpander"] {
-            border-radius: 12px !important;
-        }
+.stApp{
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+  color: var(--ink);
+}
 
-        /* Dataframe readability */
-        [data-testid="stDataFrame"] thead tr th { font-weight: 700 !important; }
-        [data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
-        
-        /* P/L conditional formatting (requested) */
-        .finance-table td.pl-pos { color: #0a7d22; font-weight: 700; }
-        .finance-table td.pl-neg { color: #b00020; font-weight: 700; }
+/* App canvas */
+[data-testid="stAppViewContainer"]{
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(99,102,241,.15), transparent 60%),
+              radial-gradient(1200px 600px at 90% -10%, rgba(16,185,129,.12), transparent 60%),
+              linear-gradient(180deg, var(--bg1), var(--bg0));
+}
 
-        
-/* Header controls row (selectbox + sign out) */
-div[data-testid="stHorizontalBlock"] div[data-testid="column"] button[kind="secondary"] {
+/* Main paddings */
+[data-testid="stMainBlockContainer"]{
+  padding-top: 1.25rem;
+  padding-bottom: 2.25rem;
+  max-width: 1400px;
+}
+
+/* Hide Streamlit chrome bits that feel "dev" */
+#MainMenu, footer{ visibility: hidden; }
+header[data-testid="stHeader"]{ background: transparent; }
+
+/* --- Buttons: pill + subtle depth --- */
+.stButton > button, button[kind="primary"], button[kind="secondary"]{
   border-radius: 999px !important;
+  box-shadow: var(--shadow2);
+  border: 1px solid var(--border) !important;
+  font-weight: 700 !important;
+}
+button[kind="primary"]{
+  box-shadow: 0 12px 28px rgba(37,99,235,.22);
+}
+.stButton > button:hover{
+  transform: translateY(-1px);
+}
+
+/* --- Inputs / selects --- */
+.stTextInput input, .stNumberInput input, .stDateInput input, .stTextArea textarea,
+[data-baseweb="select"] > div{
+  border-radius: 999px !important;
+  border: 1px solid var(--border) !important;
+  background: rgba(255,255,255,.88) !important;
+  box-shadow: 0 10px 22px rgba(2,6,23,.06);
+}
+.stTextArea textarea{ border-radius: var(--radius-md) !important; }
+
+/* --- Cards: metrics + expanders + dataframes --- */
+[data-testid="stMetric"], [data-testid="stExpander"], [data-testid="stDataFrame"],
+div[data-testid="stContainer"] > div:has(> [data-testid="stMetric"]){
+  border-radius: var(--radius-lg) !important;
+}
+
+/* Make metric blocks look like cards */
+[data-testid="stMetric"]{
+  background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,1));
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  padding: 14px 16px;
+}
+[data-testid="stMetric"] label{
+  color: var(--muted) !important;
+  font-weight: 700 !important;
+  letter-spacing: .2px;
+}
+[data-testid="stMetricValue"]{
+  font-size: 34px !important;
+  font-weight: 800 !important;
+  line-height: 1.1 !important;
+}
+[data-testid="stMetricDelta"]{
+  font-weight: 800 !important;
+}
+
+/* Dataframe container polish */
+[data-testid="stDataFrame"]{
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+[data-testid="stDataFrame"] thead tr th{
+  font-weight: 800 !important;
+  color: rgba(17,24,39,.80) !important;
+  background: linear-gradient(180deg, rgba(248,250,252,1), rgba(241,245,249,1)) !important;
+}
+[data-testid="stDataFrame"] tbody tr td{
+  font-variant-numeric: tabular-nums;
+}
+[data-testid="stDataFrame"] tbody tr:nth-child(even) td{
+  background: rgba(2,6,23,.02);
+}
+
+/* Tabs: clean, pill-like */
+.stTabs [data-baseweb="tab-list"]{
+  gap: .35rem;
+  background: rgba(255,255,255,.55);
+  border: 1px solid var(--border);
+  padding: .35rem;
+  border-radius: 999px;
+  box-shadow: 0 10px 22px rgba(2,6,23,.06);
+}
+.stTabs [data-baseweb="tab"]{
+  border-radius: 999px !important;
+  font-weight: 800 !important;
+  padding: .35rem .85rem !important;
+}
+.stTabs [aria-selected="true"]{
+  background: rgba(255,255,255,1) !important;
+  box-shadow: 0 10px 22px rgba(2,6,23,.08) !important;
+}
+
+/* Headings: more "executive" */
+h1, h2, h3{
+  letter-spacing: -0.02em;
+}
+h1{ font-size: 44px !important; }
+h2{ font-size: 30px !important; }
+h3{ font-size: 22px !important; }
+
+/* Subtle section separators */
+hr{ border-color: rgba(17,24,39,.10) !important; }
+
+/* P/L conditional formatting (kept) */
+.finance-table td.pl-pos { color: #0a7d22; font-weight: 800; }
+.finance-table td.pl-neg { color: #b00020; font-weight: 800; }
+
+/* Small: make top-right controls row feel like chips */
+div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="select"] > div{
+  height: 44px;
 }
 </style>
         """,
