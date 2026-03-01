@@ -2551,8 +2551,42 @@ def dashboard_page(active_user, view: str = "summary"):
                         ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
                     ]
-                        cols = st.columns(4, gap="large")
-        for i, (title, val, sub, chip) in enumerate(cards):
+    # =============================
+    # HOLDINGS KPI CARDS
+    # =============================
+    cols = st.columns(4, gap="large")
+
+    with cols[0]:
+        render_kpi_card(
+            title="Stock Value",
+            value=stock_value_from_table,
+            subtitle="CAD",
+            icon="📈"
+        )
+
+    with cols[1]:
+        render_kpi_card(
+            title="LEAP Value",
+            value=leap_value_from_table,
+            subtitle="CAD",
+            icon="💡"
+        )
+
+    with cols[2]:
+        render_kpi_card(
+            title="Cash Balance",
+            value=cash_balance,
+            subtitle="CAD",
+            icon="💵"
+        )
+
+    with cols[3]:
+        render_kpi_card(
+            title="Total Portfolio",
+            value=total_portfolio_value,
+            subtitle="CAD",
+            icon="🧾"
+        )        for i, (title, val, sub, chip) in enumerate(cards):
             with cols[i]:
                 icon = ["📈","💡","💵","🧾"][i] if i < 4 else "💠"
                 accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i] if i < 4 else ""
