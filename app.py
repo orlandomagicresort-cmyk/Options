@@ -2428,7 +2428,7 @@ def dashboard_page(active_user, view: str = "summary"):
                   </div>
                   <div class="dash-kpi-value">{_fmt_money(value_usd)}</div>
                   <div class="dash-kpi-foot">
-                    <div class="dash-kpi-sub"><span class='dash-chip'>USD</span><span class='dash-muted'>CA$ {_fmt_money(value_cad).replace('$','')}</span></div>
+                    <div class="dash-kpi-sub"><span class='dash-chip'>CAD</span><span class='dash-muted'>{_fmt_money(value_cad)}</span></div>
                     {badge_html}
                   </div>
                 </div>
@@ -2472,35 +2472,10 @@ def dashboard_page(active_user, view: str = "summary"):
         except Exception:
             total_pl_usd = 0.0
             total_pl_pct = None
-
-
-                # Week / Month P&L from portfolio history (closest snapshot <= target date)
-        week_pl_usd, week_pl_pct = 0.0, None
-        month_pl_usd, month_pl_pct = 0.0, None
-        try:
-            if hist is not None and not hist.empty and "total_equity" in hist.columns and "snapshot_date" in hist.columns:
-                _h = hist.dropna(subset=["total_equity", "snapshot_date"]).copy()
-                _h = _h.sort_values("snapshot_date")
-                if len(_h) >= 2:
-                    last_eq = float(_h["total_equity"].iloc[-1])
-                    last_dt = pd.to_datetime(_h["snapshot_date"].iloc[-1], errors="coerce")
-                    def _pl_days(days: int):
-                        if last_dt is pd.NaT:
-                            return 0.0, None
-                        tgt = last_dt - pd.Timedelta(days=days)
-                        prior = _h[_h["snapshot_date"] <= tgt]
-                        if prior.empty:
-                            base_eq = float(_h["total_equity"].iloc[0])
-                        else:
-                            base_eq = float(prior["total_equity"].iloc[-1])
-                        pl = last_eq - base_eq
-                        pct = (pl / base_eq) if base_eq else None
-                        return pl, pct
-                    week_pl_usd, week_pl_pct = _pl_days(7)
-                    month_pl_usd, month_pl_pct = _pl_days(30)
-        except Exception:
-            week_pl_usd, week_pl_pct = 0.0, None
-            month_pl_usd, month_pl_pct = 0.0, None
+        # Week / Month P&L (match Performance Summary table below)
+        # These are the same US$ values shown for WTD / MTD in the summary table.
+        week_pl_usd, week_pl_pct = float(wtd_profit or 0.0), (float(wtd_pct) if wtd_pct is not None else None)
+        month_pl_usd, month_pl_pct = float(mtd_profit or 0.0), (float(mtd_pct) if mtd_pct is not None else None)
 
         def _badge(pl: float, pct: float | None):
             cls = "pos" if pl >= 0 else "neg"
@@ -2588,22 +2563,7 @@ def dashboard_page(active_user, view: str = "summary"):
         with right:
             # Liability + Exposure
             st.markdown("<div class='dash-right-stack'>", unsafe_allow_html=True)
-
-            st.markdown(
-                f"""
-                <div class="dash-card">
-                  <div class="dash-kv">
-                    <div class="k">Net Exposure</div>
-                    <div class="val">{_fmt_money(net_exposure_usd)}</div>
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-
-            
-
-            # Equity trend
+# Equity trend
             st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
             try:
                 hdf = hist.copy() if hist is not None else pd.DataFrame()
