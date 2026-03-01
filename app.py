@@ -42,7 +42,12 @@ def apply_global_ui_theme():
         .finance-table td.pl-pos { color: #0a7d22; font-weight: 700; }
         .finance-table td.pl-neg { color: #b00020; font-weight: 700; }
 
-        </style>
+        
+/* Header controls row (selectbox + sign out) */
+div[data-testid="stHorizontalBlock"] div[data-testid="column"] button[kind="secondary"] {
+  border-radius: 999px !important;
+}
+</style>
         """,
         unsafe_allow_html=True,
     )
@@ -593,7 +598,16 @@ def _set_active_account(user):
     if cur not in labels:
         cur = labels[0]
 
-    sel = st.sidebar.selectbox("Working on account", labels, index=labels.index(cur), key="account_selector")
+    
+    # Account selector is rendered in the top header (key='account_selector').
+    # Fallback safely if missing.
+    if "account_selector" not in st.session_state:
+        st.session_state["account_selector"] = cur
+    sel = st.session_state.get("account_selector") or cur
+    if sel not in labels:
+        sel = labels[0]
+        st.session_state["account_selector"] = sel
+
     st.session_state["active_account_label"] = sel
     chosen = next(a for a in accts if a["label"] == sel)
 
@@ -5650,7 +5664,6 @@ def main():
               <div style=\"display:flex; justify-content:space-between; align-items:center; gap:12px;\">
                 <div class=\"brand\"><span class=\"logo\"></span><span>Stock Portfolio</span></div>
                 <div class=\"right\">
-                  <span class=\"pill\">USD</span>
                   <span class=\"pill\">{acct_label}</span>
                   <span class=\"pill\">{email or ''}</span>
                 </div>
@@ -5658,6 +5671,56 @@ def main():
             </div>""",
         unsafe_allow_html=True,
     )
+
+    # Header controls (account dropdown + sign out)
+    # NOTE: Streamlit widgets can't live inside the HTML topbar, so we render them directly beneath it,
+    # aligned to the top-right to keep the same visual location.
+    try:
+        accts_for_header = _get_accessible_accounts(u) if u is not None else [{"label": acct_label, "owner_user_id": None, "role": "editor"}]
+        header_labels = [a["label"] for a in accts_for_header] or [acct_label]
+    except Exception:
+        header_labels = [acct_label]
+
+    # Ensure selector value exists and is valid
+    if "account_selector" not in st.session_state:
+        st.session_state["account_selector"] = st.session_state.get("active_account_label", header_labels[0])
+    if st.session_state.get("account_selector") not in header_labels:
+        st.session_state["account_selector"] = header_labels[0]
+
+    _sp, _hdr = st.columns([7, 3])
+    with _hdr:
+        _c1, _c2 = st.columns([3, 1])
+        with _c1:
+            sel_hdr = st.selectbox(
+                "Working on account",
+                header_labels,
+                index=header_labels.index(st.session_state.get("account_selector")),
+                key="account_selector",
+                label_visibility="collapsed",
+            )
+            st.session_state["active_account_label"] = sel_hdr
+
+        with _c2:
+            if st.button("Sign out", key="header_sign_out"):
+                try:
+                    supabase.auth.sign_out()
+                except Exception:
+                    pass
+                # Clear session keys used by auth + multi-account
+                for _k in [
+                    "user",
+                    "access_token",
+                    "active_account_label",
+                    "account_selector",
+                    "active_user_id",
+                    "active_role",
+                    "read_only",
+                    "active_account_display_name",
+                ]:
+                    if _k in st.session_state:
+                        del st.session_state[_k]
+                st.rerun()
+
     # Navigation (horizontal)
     default_page = st.session_state.get("_selected_page", "Dashboard")
     if default_page not in pages:
