@@ -2484,25 +2484,28 @@ def dashboard_page(active_user, view: str = "summary"):
         net_liq_usd = 0.0
 
     if view == "holdings":
-        # Match the mockup-style summary blocks: Stock, LEAP, Cash, Total.
-        # Display is USD primary with CAD shown as contextual subtitle.
-        _cards = [
+        # Premium KPI cards (mockup-inspired). Render each card in its own Streamlit column so
+        # the layout is stable across Streamlit/theme changes.
+        cards = [
             ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)} CAD", "USD"),
             ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)} CAD", "USD"),
             ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)} CAD", "USD"),
             ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)} CAD", "USD"),
         ]
-        kpi_html = "<div class='kpi-grid'>"
-        for title, val, sub, chip in _cards:
-            kpi_html += (
-                "<div class='kpi-card'>"
-                f"<div class='kpi-title'>{title}</div>"
-                f"<div class='kpi-value'>{val}</div>"
-                f"<div class='kpi-sub'>USD / CAD <span class='kpi-chip'>{chip}</span> &nbsp; {sub}</div>"
-                "</div>"
-            )
-        kpi_html += "</div>"
-        st.markdown(kpi_html, unsafe_allow_html=True)
+        cols = st.columns(4, gap="large")
+        for i, (title, val, sub, chip) in enumerate(cards):
+            with cols[i]:
+                st.markdown(
+                    f"""
+                    <div class="kpi-card">
+                      <div class="kpi-title">{title}</div>
+                      <div class="kpi-value">{val}</div>
+                      <div class="kpi-sub">USD / CAD <span class="kpi-chip">{chip}</span> &nbsp; {sub}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
 
 
     if view == "summary":
@@ -5858,8 +5861,7 @@ def settings_page(user):
 
 def main():
     # page config already set at top
-    
-    force_light_mode()  # <--- CALL THE NEW FUNCTION HERE
+    # Premium UI layer already enforces light theme.
     
     if not handle_auth():
         render_auth_main()
