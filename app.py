@@ -2433,6 +2433,29 @@ def dashboard_page(active_user, view: str = "summary"):
         except Exception:
             _delta_usd = None
             _delta_pct = None
+        # Total P/L (lifetime) from snapshots, flow-adjusted for deposits/withdrawals when possible
+        total_pl_usd = 0.0
+        total_pl_pct = None
+        try:
+            if hist is not None and not hist.empty and "total_equity" in hist.columns:
+                _h = hist.dropna(subset=["total_equity"]).copy()
+                if len(_h) >= 1:
+                    first_eq = float(_h["total_equity"].iloc[0])
+                    last_eq = float(_h["total_equity"].iloc[-1])
+                    # Adjust for net flows between first and last snapshot dates (USD only)
+                    d0 = _h["snapshot_date"].iloc[0].date() if "snapshot_date" in _h.columns else None
+                    d1 = _h["snapshot_date"].iloc[-1].date() if "snapshot_date" in _h.columns else None
+                    flows = _net_flows_usd(d0, d1) if (d0 and d1) else 0.0
+                    total_pl_usd = (last_eq - first_eq) - flows
+                    total_pl_pct = (total_pl_usd / first_eq) if first_eq else None
+                else:
+                    # Fallback to current net liquidation if history is empty
+                    total_pl_usd = 0.0
+                    total_pl_pct = None
+        except Exception:
+            total_pl_usd = 0.0
+            total_pl_pct = None
+
 
         with c1:
             _dash_card("Total Portfolio Value", net_liq_usd, sub_usd=net_liq_usd, sub_cad=net_liq_cad)
