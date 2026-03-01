@@ -319,18 +319,7 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .dash-badge.pos{ background: rgba(16,185,129,.12); color: rgba(16,185,129,.98); border-color: rgba(16,185,129,.22); }
 .dash-badge.neg{ background: rgba(239,68,68,.12); color: rgba(239,68,68,.98); border-color: rgba(239,68,68,.22); }
 
-.dash-section-title{ font-weight:950; font-size:20px; margin:0 0 12px 0; color: rgba(17,24,39,.92); }
-
-.dash-card-header{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  padding-bottom: 10px;
-  margin: 0 0 12px 0;
-  border-bottom: 1px solid rgba(17,24,39,.06);
-}
-.dash-card-header .dash-section-title{ margin:0; }
-
+.dash-section-title{font-size:18px;font-weight:800;letter-spacing:-.01em;color:rgba(17,24,39,.92);margin:0 0 12px 0;}
 .dash-muted{ color: rgba(17,24,39,.62); font-weight:800; }
 
 .dash-split{ display:grid; grid-template-columns: 1.15fr 0.85fr; gap:16px; align-items:center; }
@@ -2586,7 +2575,7 @@ def dashboard_page(active_user, view: str = "summary"):
             return "num"
 
         with alloc_left:
-            st.markdown("<div class='dash-card'><div class='dash-card-header'><div class='dash-section-title'>Asset Allocation</div></div>", unsafe_allow_html=True)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Asset Allocation</div>", unsafe_allow_html=True)
 
             # HTML table (crisp + readable like mockup)
             rows_html = ""
@@ -2622,36 +2611,100 @@ def dashboard_page(active_user, view: str = "summary"):
 
         with alloc_right:
             # Donut (allocation)
-            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Distribution</div>", unsafe_allow_html=True)
             try:
-                import plotly.express as px
-
+                # Prefer Plotly if available; otherwise fall back to a pure HTML/CSS donut
                 pie_df = alloc_df.iloc[:-1].copy()
-                # Keep cash negative values visible as absolute size but label still cash
                 pie_df["USD_abs"] = pie_df["USD"].abs()
 
-                fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
-                fig.update_traces(textinfo="none")
-                fig.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    height=300,
-                    showlegend=True,
-                    legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
-                )
-                # Center annotation
-                fig.add_annotation(
-                    text=f"<span style='font-size:12px;color:rgba(17,24,39,.62);font-weight:800;'>Distribution</span><br><span style='font-size:18px;font-weight:900;'>Total: {_fmt_money(net_liq_usd)}</span><br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
-                    x=0.5,
-                    y=0.5,
-                    showarrow=False,
-                    font=dict(size=16),
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                try:
+                    import plotly.express as px  # type: ignore
+
+                    fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
+                    fig.update_traces(textinfo="none")
+                    fig.update_layout(
+                        margin=dict(l=0, r=0, t=0, b=0),
+                        height=300,
+                        showlegend=True,
+                        legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
+                    )
+                    fig.add_annotation(
+                        text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
+                        x=0.5,
+                        y=0.5,
+                        showarrow=False,
+                        font=dict(size=16),
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception:
+                    # HTML/CSS donut (no external libs)
+                    palette = [
+                        "#3b82f6", "#f59e0b", "#ef4444", "#10b981", "#8b5cf6", "#06b6d4", "#f97316",
+                    ]
+                    vals = pie_df["USD_abs"].tolist()
+                    labels = pie_df["Asset"].tolist()
+                    total = float(sum(vals)) if vals else 0.0
+
+                    if total <= 0:
+                        st.info("No allocation data to chart.")
+                    else:
+                        acc = 0.0
+                        stops = []
+                        legend_items = []
+                        for i, (lab, v) in enumerate(zip(labels, vals)):
+                            pct = (float(v) / total) * 100.0
+                            c = palette[i % len(palette)]
+                            start = acc
+                            end = acc + pct
+                            stops.append(f"{c} {start:.4f}% {end:.4f}%")
+                            acc = end
+                            legend_items.append(
+                                f"<div class='donut-legend-item'><span class='sw' style='background:{c}'></span><span class='lb'>{lab}</span></div>"
+                            )
+
+                        donut_css = f"""
+                        <style>
+                          .donut-wrap{{display:flex;gap:18px;align-items:center;justify-content:space-between;}}
+                          .donut{{width:280px;max-width:100%;aspect-ratio:1;border-radius:50%;
+                                background:conic-gradient({','.join(stops)});
+                                position:relative;box-shadow:0 18px 40px rgba(2,6,23,.10), inset 0 0 0 1px rgba(255,255,255,.35);}}
+                          .donut:after{{content:'';position:absolute;inset:18%;border-radius:50%;
+                                background:rgba(255,255,255,.88);backdrop-filter: blur(6px);
+                                box-shadow: inset 0 0 0 1px rgba(2,6,23,.06);}}
+                          .donut-center{{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+                                z-index:2;text-align:center;padding:14px;}}
+                          .donut-center .t{{font-size:12px;color:rgba(17,24,39,.62);font-weight:700;letter-spacing:.08em;text-transform:uppercase;}}
+                          .donut-center .v{{font-size:20px;font-weight:800;color:rgba(17,24,39,.92);margin-top:6px;}}
+                          .donut-legend{{display:flex;flex-direction:column;gap:10px;min-width:150px;}}
+                          .donut-legend-item{{display:flex;align-items:center;gap:10px;font-size:13px;color:rgba(17,24,39,.78);}}
+                          .donut-legend-item .sw{{width:12px;height:12px;border-radius:6px;box-shadow: inset 0 0 0 1px rgba(255,255,255,.45);}} 
+                          .donut-legend-item .lb{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;}}
+                          @media (max-width: 900px){{.donut-wrap{{flex-direction:column;align-items:flex-start}}.donut-legend{{width:100%}}}}
+                        </style>
+                        """
+
+                        st.markdown(
+                            donut_css
+                            + f"""
+                            <div class='donut-wrap'>
+                              <div class='donut'>
+                                <div class='donut-center'>
+                                  <div class='t'>Distribution</div>
+                                  <div class='v'>{_fmt_money(net_liq_usd)}</div>
+                                </div>
+                              </div>
+                              <div class='donut-legend'>
+                                {''.join(legend_items)}
+                              </div>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
             except Exception:
                 st.info("Allocation chart unavailable.")
             st.markdown("</div>", unsafe_allow_html=True)
 
-
+            
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
         st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
@@ -2726,6 +2779,9 @@ def dashboard_page(active_user, view: str = "summary"):
 
                         win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
                         loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
+        
+
+                        win_rate = (float(win_ct) / float(total_ct)) if total_ct else 0.0
         except Exception:
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
