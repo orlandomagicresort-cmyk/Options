@@ -285,8 +285,10 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
   filter: blur(2px);
 }
 .dash-kpi-title{ font-weight:900; color: rgba(17,24,39,.72); letter-spacing:.2px; font-size:14px; }
-.dash-kpi-value{ font-weight:950; font-size:40px; line-height:1.05; margin-top:10px; color: rgba(17,24,39,.96); }
-.dash-kpi-sub{ display:flex; align-items:center; gap:10px; margin-top:12px; color: rgba(17,24,39,.68); font-weight:800; }
+.dash-kpi-value{ font-weight:950; font-size:38px; line-height:1.05; margin-top:10px; color: rgba(17,24,39,.96); }
+.dash-kpi-sub{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:12px; color: rgba(17,24,39,.68); font-weight:800; }
+.dash-kpi-sub-left{ display:flex; align-items:center; gap:10px; }
+
 .dash-chip{
   display:inline-flex; align-items:center; justify-content:center;
   padding: 5px 10px; border-radius: 999px;
@@ -1899,6 +1901,8 @@ def dashboard_page(active_user, view: str = "summary"):
 
     # --- Data Loading ---
     cash_usd = float(get_cash_balance(uid) or 0.0)
+    cash_usd_v = float(cash_usd or 0.0)
+    cash_cad_v = float(cash_usd_v * fx)
     assets, options = get_portfolio_data(uid)
 
     # Normalize asset types
@@ -2395,24 +2399,30 @@ def dashboard_page(active_user, view: str = "summary"):
 
         def _dash_card(title: str, value: float, sub_usd: float | None = None, sub_cad: float | None = None,
                        delta_usd: float | None = None, delta_pct: float | None = None):
+            # Delta text is rendered as plain text inside a styled div to avoid HTML fragments showing up.
             dcls = ""
-            dtext = ""
+            delta_text = ""
             if delta_usd is not None or delta_pct is not None:
                 du = float(delta_usd or 0.0)
                 dcls = "pos" if du >= 0 else "neg"
                 ptxt = f" ({_fmt_pct(delta_pct)})" if delta_pct is not None else ""
-                dtext = f"<span class='dash-delta {dcls}'>{_fmt_money(du)}{ptxt}</span>"
-            sub_line = ""
+                delta_text = f"{_fmt_money(du)}{ptxt}"
+
+            sub_left = ""
             if sub_usd is not None and sub_cad is not None:
-                sub_line = f"<span class='dash-chip'>USD</span><span class='dash-muted'>CA$ {_fmt_money(sub_cad).replace('$','')}</span>"
+                # Match the mockup: small USD chip + CAD equivalent.
+                sub_left = f"""<span class='dash-chip'>USD</span><span class='dash-muted'>CA$ {_fmt_money(sub_cad).replace('$','')}</span>"""
+
+            d_right = f"""<div class='dash-delta {dcls}'>{delta_text}</div>""" if delta_text else ""
+
             st.markdown(
                 f"""
                 <div class="dash-card">
                   <div class="dash-kpi-title">{title}</div>
                   <div class="dash-kpi-value">{_fmt_money(value)}</div>
                   <div class="dash-kpi-sub">
-                    {sub_line}
-                    {dtext}
+                    <div class="dash-kpi-sub-left">{sub_left}</div>
+                    {d_right}
                   </div>
                 </div>
                 """,
