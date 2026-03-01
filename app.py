@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 # --- Session state defaults ---
@@ -372,6 +373,10 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .dash-mini .v{ font-weight: 950; font-size: 30px; margin-top:6px; }
 
 
+
+/* Plotly inside HTML cards */
+.dash-plotly-wrap{ width:100%; }
+.dash-plotly-wrap .plot-container, .dash-plotly-wrap .js-plotly-plot{ width:100% !important; }
 </style>
         """,
         unsafe_allow_html=True,
@@ -2536,7 +2541,9 @@ def dashboard_page(active_user, view: str = "summary"):
         with c4:
             _dash_kpi("Total P/L", total_pl_usd, total_pl_usd * fx, icon="📈", badge_text=btxt_t, badge_cls=bcls_t)
 
-        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+        st.markdown(\"<div style='height:18px'></div>\", unsafe_allow_html=True)
+
+        st.subheader(\"Asset Allocation\")
 
         # Asset Allocation (match mockup: table left, donut right)
         alloc_left, alloc_right = st.columns([2.1, 1.2], gap="large")
@@ -2575,7 +2582,7 @@ def dashboard_page(active_user, view: str = "summary"):
             return "num"
 
         with alloc_left:
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Asset Allocation</div>", unsafe_allow_html=True)
+            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
 
             # HTML table (crisp + readable like mockup)
             rows_html = ""
@@ -2610,9 +2617,7 @@ def dashboard_page(active_user, view: str = "summary"):
             st.markdown("</div>", unsafe_allow_html=True)
 
         with alloc_right:
-            # Donut (asset allocation) — premium look, no redundant title
-            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
-
+            # Donut (asset allocation) — render inside an HTML card so layout is stable (Streamlit doesn't nest elements inside markdown divs)
             pie_df = alloc_df.iloc[:-1].copy()
             pie_df["USD_abs"] = pie_df["USD"].abs()
             pie_labels = pie_df["Asset"].tolist()
@@ -2640,24 +2645,33 @@ def dashboard_page(active_user, view: str = "summary"):
                             hole=0.70,
                             sort=False,
                             direction="clockwise",
-                            marker=dict(colors=pie_colors, line=dict(color="rgba(255,255,255,.65)", width=2)),
+                            marker=dict(colors=pie_colors, line=dict(color="rgba(255,255,255,.70)", width=2)),
                             textinfo="none",
                         )
                     ]
                 )
                 fig.update_layout(
-                    margin=dict(l=0, r=0, t=10, b=70),
-                    height=320,
+                    margin=dict(l=10, r=10, t=10, b=10),
+                    height=300,
                     showlegend=False,
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
                 )
                 fig.add_annotation(
-                    text=f"<b>Total: {_fmt_money(net_liq_usd)}</b><br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
+                    text=f"<b>Total</b><br><span style='font-size:24px'>{_fmt_money(net_liq_usd)}</span><br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
                     x=0.5,
                     y=0.5,
                     showarrow=False,
                 )
-                st.plotly_chart(fig, use_container_width=True)
-                st.markdown(_legend_html(pie_labels, pie_colors), unsafe_allow_html=True)
+
+                plot_html = fig.to_html(include_plotlyjs="cdn", full_html=False, config={"displayModeBar": False})
+                card_html = f"""
+                <div class='dash-card'>
+                  <div class='dash-plotly-wrap'>{plot_html}</div>
+                  {_legend_html(pie_labels, pie_colors)}
+                </div>
+                """
+                components.html(card_html, height=380, scrolling=False)
 
             except Exception:
                 # CSS donut fallback using conic-gradient
@@ -2672,25 +2686,26 @@ def dashboard_page(active_user, view: str = "summary"):
                     acc += frac
                 grad = ", ".join(parts) if parts else "rgba(17,24,39,.08) 0% 100%"
 
-                st.markdown(
-                    f"""
-                    <div class="dash-donut-wrap">
-                      <div class="dash-donut" style="background: conic-gradient({grad});">
-                        <div class="dash-donut-hole">
-                          <div class="dash-donut-center">
-                            <div class="k">Total</div>
-                            <div class="v">{_fmt_money(net_liq_usd)}</div>
-                            <div class="k2">USD</div>
-                          </div>
+                card_html = f"""
+                <div class='dash-card'>
+                  <div class="dash-donut-wrap">
+                    <div class="dash-donut" style="background: conic-gradient({grad});">
+                      <div class="dash-donut-hole">
+                        <div class="dash-donut-center">
+                          <div class="k">Total</div>
+                          <div class="v">{_fmt_money(net_liq_usd)}</div>
+                          <div class="k2">USD</div>
                         </div>
                       </div>
                     </div>
-                    {_legend_html(pie_labels, pie_colors)}
-                    """,
-                    unsafe_allow_html=True,
-                )
+                  </div>
+                  {_legend_html(pie_labels, pie_colors)}
+                </div>
+                """
+                components.html(card_html, height=380, scrolling=False)
 
-            st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
