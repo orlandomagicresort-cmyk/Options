@@ -372,9 +372,11 @@ def force_light_mode():
     """, unsafe_allow_html=True)
 
 
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 # 0. CREDENTIALS
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 import os
 import streamlit as st
 
@@ -400,9 +402,11 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.stop()
 
 
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 # 1. APP CONFIGURATION
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 st.set_page_config(
     page_title="Pro Options Tracker",
     layout="wide",
@@ -613,9 +617,11 @@ div[data-testid="stRadio"] div[role="radiogroup"] span {
 ''', unsafe_allow_html=True)
 
 
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 # 2. SUPABASE CONNECTION
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 @st.cache_resource
 def init_connection():
     try:
@@ -639,9 +645,11 @@ def ensure_supabase_auth():
             pass
 
 
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 # 2B. MULTI-ACCOUNT (DELEGATED ACCESS) + COMMUNITY SHARING
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 from types import SimpleNamespace
 
 def _mask_name_before_at(name: str) -> str:
@@ -1180,9 +1188,11 @@ def render_auth_main():
                     st.error(f"Signup failed: {e}")
 
 
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 # 4. DATA HELPERS
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 def _iso_date(d_val):
     if d_val is None or (isinstance(d_val, float) and pd.isna(d_val)):
         return ""
@@ -1566,9 +1576,11 @@ def log_transaction(user_id, description, amount, trade_type, symbol, date_obj, 
         st.error(f"Failed to record transaction (DB insert): {e}")
         raise
 
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 # 5. CORE LOGIC
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 def update_asset_position(user_id, symbol, quantity, price, action, date_obj, asset_type="STOCK", expiration=None, strike=None, fees=0.0, txg: str | None = None):
     if st.session_state.get("read_only"):
         st.error("Read-only access: you don't have permission to modify this account.")
@@ -1774,9 +1786,11 @@ def get_open_short_call_contracts(user_id, symbol):
     except:
         return 0
 
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 # 6. DASHBOARD & PAGES
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
 
 def dashboard_page(active_user, view: str = "summary"):
     uid = _active_user_id(active_user)
@@ -2560,42 +2574,14 @@ def dashboard_page(active_user, view: str = "summary"):
                         ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
                     ]
-    # =============================
-    # HOLDINGS KPI CARDS
-    # =============================
-    cols = st.columns(4, gap="large")
-    # 'cards' is computed above and intentionally matches the math used for the Total Holdings table below.
-    for i, (title, val, sub, chip) in enumerate(cards[:4]):
-        with cols[i]:
-            icon = ["📈","💡","💵","🧾"][i]
-            accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i]
-            st.markdown(
-                f"""
-                <div class="kpi-card {accent}">
-                  <div class="kpi-left">
-                    <div class="kpi-title">{title}</div>
-                    <div class="kpi-value">{val}</div>
-                    <div class="kpi-sub">
-                      <span class="kpi-pill">CAD</span>
-                      <span class="kpi-cad">{sub}</span>
-                    </div>
-                  </div>
-                  <div class="kpi-right" aria-hidden="true">
-                    <div class="kpi-watermark">{icon}</div>
-                  </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-
-
-
+    
+    # (Holdings KPI cards are rendered later using the Total Holdings table totals so they always match.)
 
     if view == "summary":
         return
 
-# --------------------------------------------------------------------------------
+
+    # --------------------------------------------------------------------------------
     # Keep the remainder of the dashboard identical to Option Details for now (tables + contract management)
     # --------------------------------------------------------------------------------
     if view != "holdings":
@@ -2673,6 +2659,50 @@ def dashboard_page(active_user, view: str = "summary"):
                 out["% of Portfolio"] = 0.0
 
             out = out.sort_values("Ticker")
+
+
+            # --- Holdings KPI cards (must match the Total Holdings table totals) ---
+            if view == "holdings":
+                try:
+                    kpi_stock_usd = float(pd.to_numeric(out.get("Stock Value", 0), errors="coerce").fillna(0.0).sum())
+                    kpi_leap_usd  = float(pd.to_numeric(out.get("LEAP Value", 0), errors="coerce").fillna(0.0).sum())
+                    kpi_table_total_usd = float(pd.to_numeric(out.get("Total Market Value", 0), errors="coerce").fillna(0.0).sum())
+                    kpi_cash_usd = float(cash_usd or 0.0)
+                    kpi_total_usd = float(kpi_table_total_usd + kpi_cash_usd)
+
+                    cards = [
+                        ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
+                        ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(kpi_cash_usd), f"{_fmt_money(kpi_cash_usd * fx)}", "CAD"),
+                        ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
+                    ]
+
+                    cols = st.columns(4, gap="large")
+                    for i, (title, val, sub, chip) in enumerate(cards[:4]):
+                        with cols[i]:
+                            icon = ["📈","💡","💵","🧾"][i]
+                            accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i]
+                            st.markdown(
+                                f"""
+                                <div class="kpi-card {accent}">
+                                  <div class="kpi-left">
+                                    <div class="kpi-title">{title}</div>
+                                    <div class="kpi-value">{val}</div>
+                                    <div class="kpi-sub">
+                                      <span class="kpi-pill">CAD</span>
+                                      <span class="kpi-cad">{sub}</span>
+                                    </div>
+                                  </div>
+                                  <div class="kpi-right" aria-hidden="true">
+                                    <div class="kpi-watermark">{icon}</div>
+                                  </div>
+                                </div>
+                                """,
+                                unsafe_allow_html=True,
+                            )
+                    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                except Exception:
+                    pass
 
             total_html = "<table class='finance-table'><thead><tr>" \
                          "<th>Ticker</th><th>Shares</th><th>Stock Value</th><th>LEAP Contracts</th><th>LEAP Value</th>" \
