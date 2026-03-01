@@ -2743,7 +2743,8 @@ def dashboard_page(active_user, view: str = "summary"):
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
         # Render (polished UI)
-        
+        win_rate = (float(win_ct) / float(total_ct)) if total_ct else 0.0
+
         st.subheader("Win/Loss Analysis")
 
         # Polished container like the mockup
