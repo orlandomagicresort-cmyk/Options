@@ -216,56 +216,212 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 st.set_page_config(
     page_title="Pro Options Tracker",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 
 
 
-st.markdown("""
-    <style>
-    .stDataFrame { border: 1px solid #f0f2f6; }
-    div[data-testid="stMetric"] { background-color: #f9f9f9; padding: 10px; border-radius: 5px; }
-    
-    /* Custom Table Styling */
-    .finance-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        font-size: 0.95rem;
-        margin-bottom: 20px;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-    }
-    .finance-table th {
-        background-color: #f0f2f6;
-        text-align: right;
-        padding: 10px 12px;
-        font-weight: 600;
-        border-bottom: 2px solid #d1d5db;
-        color: #31333F;
-    }
-    .finance-table th:first-child, .finance-table td:first-child {
-        text-align: left;
-    }
-    .finance-table td {
-        padding: 10px 12px;
-        text-align: right;
-        border-bottom: 1px solid #f0f2f6;
-        color: #31333F;
-    }
-    .finance-table tr:nth-child(even) { background-color: #f8f9fb; }
-    .finance-table tr:hover { background-color: #eef2f6; }
-    .finance-table .total-row {
-        font-weight: bold;
-        background-color: #e8f0fe !important;
-        border-top: 2px solid #aecbfa;
-    }
-    .finance-table .total-row td { font-size: 1.05rem; color: #1a73e8; }
-    .pos-val { color: #00703c; font-weight: 500; }
-    .neg-val { color: #d93025; font-weight: 500; }
-    .liability-alert { color: #d93025; font-weight: bold; }
-    </style>
-    """, unsafe_allow_html=True)
+st.markdown(r'''
+<style>
+/* ---------- Global app look ---------- */
+:root {
+  --bg: #f5f7fb;
+  --card: #ffffff;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: rgba(15, 23, 42, 0.10);
+  --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --shadow2: 0 6px 18px rgba(15, 23, 42, 0.08);
+  --pos: #0a7d22;
+  --neg: #b00020;
+  --navy: #0b1b3a;
+  --navy2: #0f2a57;
+  --pill: rgba(15, 23, 42, 0.06);
+}
+
+.stApp {
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+/* Reduce top whitespace */
+[data-testid="stMainBlockContainer"] { padding-top: 0.75rem; padding-bottom: 2rem; max-width: 1400px; }
+
+/* Hide Streamlit chrome */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+header { visibility: hidden; }
+
+/* Consistent rounding */
+.stButton button, button[kind="primary"], button[kind="secondary"],
+.stTextInput input, .stNumberInput input, .stDateInput input,
+.stTextArea textarea, [data-baseweb="select"] > div,
+[data-testid="stDataFrame"], [data-testid="stMetric"], [data-testid="stExpander"] {
+  border-radius: 16px !important;
+}
+
+/* Buttons */
+.stButton button {
+  border: 1px solid var(--border) !important;
+  box-shadow: none !important;
+}
+.stButton button[kind="primary"], button[kind="primary"] {
+  background: var(--navy2) !important;
+  border: 1px solid rgba(255,255,255,0.10) !important;
+}
+
+/* KPI / metric cards */
+div[data-testid="stMetric"] {
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow2);
+  padding: 14px 16px;
+}
+
+/* Dataframes */
+[data-testid="stDataFrame"] {
+  background: var(--card);
+  border: 1px solid var(--border) !important;
+  box-shadow: var(--shadow2);
+}
+[data-testid="stDataFrame"] thead tr th { font-weight: 800 !important; }
+[data-testid="stDataFrame"] tbody tr td { font-variant-numeric: tabular-nums; }
+
+/* Section headers helpers */
+.h2-title {
+  font-size: 1.6rem;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  margin: 0.25rem 0 0.6rem 0;
+}
+.h3-title {
+  font-size: 1.05rem;
+  font-weight: 800;
+  margin: 0.4rem 0 0.35rem 0;
+  color: var(--text);
+}
+.muted { color: var(--muted); }
+
+/* Top bar (static) */
+.topbar {
+  background: linear-gradient(180deg, var(--navy), #07142c);
+  border: 1px solid rgba(255,255,255,0.10);
+  box-shadow: var(--shadow);
+  border-radius: 18px;
+  padding: 14px 16px;
+  margin: 0.25rem 0 0.85rem 0;
+}
+.topbar .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  font-size: 1.05rem;
+}
+.topbar .brand .logo {
+  width: 26px;
+  height: 26px;
+  border-radius: 9px;
+  background: radial-gradient(circle at 30% 30%, #ffd77a, #d8a52c);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.25);
+}
+.topbar .right {
+  text-align: right;
+  color: rgba(255,255,255,0.85);
+  font-size: 0.9rem;
+}
+.topbar .right .pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255,255,255,0.10);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 999px;
+  padding: 6px 10px;
+  margin-left: 8px;
+}
+
+/* Horizontal nav radio (pill tabs) */
+div[data-testid="stRadio"] > label { display: none; }
+div[data-testid="stRadio"] div[role="radiogroup"] {
+  flex-direction: row !important;
+  gap: 8px !important;
+  flex-wrap: wrap;
+  background: rgba(255,255,255,0.35);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow2);
+  padding: 10px 10px;
+  border-radius: 18px;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 8px 12px;
+  margin: 0 !important;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label:hover { background: var(--pill); }
+div[data-testid="stRadio"] div[role="radiogroup"] input:checked + div {
+  background: rgba(15, 42, 87, 0.12);
+  border: 1px solid rgba(15, 42, 87, 0.20);
+  border-radius: 999px;
+  padding: 8px 12px;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] span {
+  font-weight: 700 !important;
+  color: var(--text) !important;
+}
+
+/* Finance table HTML styling (used across pages) */
+.finance-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+  margin-bottom: 20px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: var(--shadow2);
+}
+.finance-table th {
+  background: rgba(15, 23, 42, 0.04);
+  text-align: right;
+  padding: 10px 12px;
+  font-weight: 800;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+.finance-table th:first-child, .finance-table td:first-child { text-align: left; }
+.finance-table td {
+  padding: 10px 12px;
+  text-align: right;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+  color: var(--text);
+}
+.finance-table tr:nth-child(even) { background: rgba(15, 23, 42, 0.02); }
+.finance-table tr:hover { background: rgba(15, 23, 42, 0.04); }
+.finance-table .total-row {
+  font-weight: 900;
+  background: rgba(15, 42, 87, 0.08) !important;
+  border-top: 2px solid rgba(15, 42, 87, 0.18);
+}
+.finance-table .total-row td { font-size: 1.05rem; color: var(--navy2); }
+.pos-val { color: var(--pos); font-weight: 700; }
+.neg-val { color: var(--neg); font-weight: 700; }
+.liability-alert { color: var(--neg); font-weight: 900; }
+
+/* P/L conditional formatting (HTML tables that use these classes) */
+.finance-table td.pl-pos { color: var(--pos); font-weight: 800; }
+.finance-table td.pl-neg { color: var(--neg); font-weight: 800; }
+
+</style>
+''', unsafe_allow_html=True)
+
 
 # --------------------------------------------------------------------------------
 # 2. SUPABASE CONNECTION
@@ -5482,7 +5638,33 @@ def main():
     
     if not handle_auth(): st.markdown("<br><h3 style='text-align:center;'>👈 Please log in.</h3>", unsafe_allow_html=True); return
     st.sidebar.divider()
-    page = st.sidebar.radio("Menu", ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"])
+    pages = ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"]
+    # Top bar (visual)
+    u = st.session_state.get("user")
+    email = getattr(u, "email", None) if u is not None else None
+    if not email and isinstance(u, dict):
+        email = u.get("email")
+    acct_label = st.session_state.get("active_account_label", "My Account")
+    st.markdown(
+        f"""<div class=\"topbar\">
+              <div style=\"display:flex; justify-content:space-between; align-items:center; gap:12px;\">
+                <div class=\"brand\"><span class=\"logo\"></span><span>Stock Portfolio</span></div>
+                <div class=\"right\">
+                  <span class=\"pill\">USD</span>
+                  <span class=\"pill\">{acct_label}</span>
+                  <span class=\"pill\">{email or ''}</span>
+                </div>
+              </div>
+            </div>""",
+        unsafe_allow_html=True,
+    )
+    # Navigation (horizontal)
+    default_page = st.session_state.get("_selected_page", "Dashboard")
+    if default_page not in pages:
+        default_page = "Dashboard"
+    page = st.radio("Menu", pages, index=pages.index(default_page), horizontal=True, key="_top_nav")
+    st.session_state["_selected_page"] = page
+
     user = st.session_state.user
     active_user = _set_active_account(user)
     if page == "Dashboard": dashboard_page(active_user, view="summary")
