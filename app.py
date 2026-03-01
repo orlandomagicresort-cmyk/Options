@@ -2551,7 +2551,7 @@ def dashboard_page(active_user, view: str = "summary"):
                         ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
                     ]
-                    cols = st.columns(4, gap="large")
+                        cols = st.columns(4, gap="large")
         for i, (title, val, sub, chip) in enumerate(cards):
             with cols[i]:
                 icon = ["📈","💡","💵","🧾"][i] if i < 4 else "💠"
