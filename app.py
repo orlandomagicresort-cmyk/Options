@@ -186,7 +186,7 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
   transform: rotate(12deg);
 }
 .kpi-title{ font-size: 14px; font-weight: 800; color: var(--muted); letter-spacing: .2px; }
-.kpi-value{ font-size: 34px; font-weight: 900; margin-top: 4px; line-height: 1.05; }
+.kpi-value{ font-size: clamp(26px, 2.1vw, 32px); font-weight: 900; margin-top: 6px; line-height: 1.08; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .kpi-sub{ font-size: 12px; font-weight: 700; color: rgba(17,24,39,.55); margin-top: 6px; }
 .kpi-chip{ display:inline-block; margin-left: 8px; padding: 3px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(17,24,39,.04); font-size: 11px; font-weight: 800; color: rgba(17,24,39,.55); }
 
@@ -195,11 +195,11 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .kpi-left{ min-width:0; }
 .kpi-right{ display:flex; align-items:flex-start; justify-content:flex-end; width:72px; }
 .kpi-watermark{
-  font-size: 44px;
+  font-size: 56px;
   line-height: 1;
-  opacity: .18;
+  opacity: .34;
   transform: translateY(2px);
-  filter: saturate(1.15);
+  filter: saturate(1.25) drop-shadow(0 6px 18px rgba(2,6,23,.12));
 }
 .kpi-sub{ display:flex; align-items:center; gap:10px; }
 .kpi-pill{
@@ -2520,13 +2520,37 @@ def dashboard_page(active_user, view: str = "summary"):
     if view == "holdings":
         # Premium KPI cards (mockup-inspired). Render each card in its own Streamlit column so
         # the layout is stable across Streamlit/theme changes.
-        cards = [
-            ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)} CAD", "USD"),
-            ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)} CAD", "USD"),
-            ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)} CAD", "USD"),
-            ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)} CAD", "USD"),
-        ]
-        cols = st.columns(4, gap="large")
+                cards = []
+                try:
+                    # Match the numbers shown in the "Total Holdings" table below (includes option market value).
+                    kpi_stock_usd = 0.0
+                    kpi_leap_usd = 0.0
+
+                    if not stocks_df.empty:
+                        _mv = pd.to_numeric(stocks_df.get('market_value', 0), errors='coerce').fillna(0.0)
+                        kpi_stock_usd = float(_mv.sum())
+
+                    if not leaps_df.empty:
+                        _q = pd.to_numeric(leaps_df.get('quantity', 0), errors='coerce').fillna(0.0)
+                        _px = pd.to_numeric(leaps_df.get('current_price', leaps_df.get('last_price', 0)), errors='coerce').fillna(0.0)
+                        kpi_leap_usd = float((_q * 100.0 * _px).sum())
+
+                    # Total portfolio = table market value + cash (cash is not part of the table).
+                    kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + float(cash_usd or 0.0))
+
+                    cards = [
+                        ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
+                        ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
+                        ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
+                    ]
+                except Exception:
+                    cards = [
+                        ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)}", "CAD"),
+                        ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
+                        ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
+                    ]cols = st.columns(4, gap="large")
         for i, (title, val, sub, chip) in enumerate(cards):
             with cols[i]:
                 icon = ["📈","💡","💵","🧾"][i] if i < 4 else "💠"
@@ -2538,7 +2562,7 @@ def dashboard_page(active_user, view: str = "summary"):
                         <div class="kpi-title">{title}</div>
                         <div class="kpi-value">{val}</div>
                         <div class="kpi-sub">
-                          <span class="kpi-pill">USD / CAD</span>
+                          <span class="kpi-pill">CAD</span>
                           <span class="kpi-cad">{sub}</span>
                         </div>
                       </div>
