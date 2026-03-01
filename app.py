@@ -189,6 +189,40 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .kpi-value{ font-size: 34px; font-weight: 900; margin-top: 4px; line-height: 1.05; }
 .kpi-sub{ font-size: 12px; font-weight: 700; color: rgba(17,24,39,.55); margin-top: 6px; }
 .kpi-chip{ display:inline-block; margin-left: 8px; padding: 3px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(17,24,39,.04); font-size: 11px; font-weight: 800; color: rgba(17,24,39,.55); }
+
+/* --- KPI polish (mockup-style) --- */
+.kpi-card{ display:flex; align-items:flex-start; justify-content:space-between; gap:14px; min-height:118px; }
+.kpi-left{ min-width:0; }
+.kpi-right{ display:flex; align-items:flex-start; justify-content:flex-end; width:72px; }
+.kpi-watermark{
+  font-size: 44px;
+  line-height: 1;
+  opacity: .18;
+  transform: translateY(2px);
+  filter: saturate(1.15);
+}
+.kpi-sub{ display:flex; align-items:center; gap:10px; }
+.kpi-pill{
+  display:inline-flex;
+  align-items:center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(17,24,39,.04);
+  font-size: 11px;
+  font-weight: 800;
+  color: rgba(17,24,39,.62);
+}
+.kpi-cad{ font-size: 12px; font-weight: 800; color: rgba(17,24,39,.62); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Accent variants */
+.kpi-accent-stock:before{ background: radial-gradient(circle at 30% 30%, rgba(59,130,246,.18), transparent 60%); }
+.kpi-accent-leap:before{ background: radial-gradient(circle at 30% 30%, rgba(245,158,11,.18), transparent 60%); }
+.kpi-accent-cash:before{ background: radial-gradient(circle at 30% 30%, rgba(16,185,129,.18), transparent 60%); }
+.kpi-accent-total:before{ background: radial-gradient(circle at 30% 30%, rgba(99,102,241,.18), transparent 60%); }
+
+/* Make KPI cards align with Streamlit columns */
+.kpi-card{ width:100%; }
 </style>
         """,
         unsafe_allow_html=True,
@@ -2495,12 +2529,22 @@ def dashboard_page(active_user, view: str = "summary"):
         cols = st.columns(4, gap="large")
         for i, (title, val, sub, chip) in enumerate(cards):
             with cols[i]:
+                icon = ["📈","💡","💵","🧾"][i] if i < 4 else "💠"
+                accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i] if i < 4 else ""
                 st.markdown(
                     f"""
-                    <div class="kpi-card">
-                      <div class="kpi-title">{title}</div>
-                      <div class="kpi-value">{val}</div>
-                      <div class="kpi-sub">USD / CAD <span class="kpi-chip">{chip}</span> &nbsp; {sub}</div>
+                    <div class="kpi-card {accent}">
+                      <div class="kpi-left">
+                        <div class="kpi-title">{title}</div>
+                        <div class="kpi-value">{val}</div>
+                        <div class="kpi-sub">
+                          <span class="kpi-pill">USD / CAD</span>
+                          <span class="kpi-cad">{sub}</span>
+                        </div>
+                      </div>
+                      <div class="kpi-right" aria-hidden="true">
+                        <div class="kpi-watermark">{icon}</div>
+                      </div>
                     </div>
                     """,
                     unsafe_allow_html=True,
@@ -5860,6 +5904,7 @@ def settings_page(user):
             if c2.button("Cancel"): st.session_state.confirm_reset = False; st.rerun()
 
 def main():
+    apply_global_ui_theme()
     # page config already set at top
     # Premium UI layer already enforces light theme.
     
