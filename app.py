@@ -2461,7 +2461,7 @@ def dashboard_page(active_user, view: str = "summary"):
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
------------------------------------------
+# -----------------------------------------
         # Portfolio Value table (keep same components, now show USD and CAD)
         # --------------------------------------------------------------------------------
         st.subheader("Portfolio Value")
