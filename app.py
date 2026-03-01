@@ -319,7 +319,7 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .dash-badge.pos{ background: rgba(16,185,129,.12); color: rgba(16,185,129,.98); border-color: rgba(16,185,129,.22); }
 .dash-badge.neg{ background: rgba(239,68,68,.12); color: rgba(239,68,68,.98); border-color: rgba(239,68,68,.22); }
 
-.dash-section-title{font-size:18px;font-weight:800;letter-spacing:-.01em;color:rgba(17,24,39,.92);margin:0 0 12px 0;}
+.dash-section-title{ font-weight:950; font-size:20px; margin:0 0 12px 0; color: rgba(17,24,39,.92); }
 .dash-muted{ color: rgba(17,24,39,.62); font-weight:800; }
 
 .dash-split{ display:grid; grid-template-columns: 1.15fr 0.85fr; gap:16px; align-items:center; }
@@ -2611,100 +2611,60 @@ def dashboard_page(active_user, view: str = "summary"):
 
         with alloc_right:
             # Donut (allocation)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Distribution</div>", unsafe_allow_html=True)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Allocation</div>", unsafe_allow_html=True)
             try:
-                # Prefer Plotly if available; otherwise fall back to a pure HTML/CSS donut
+                import plotly.express as px
+
                 pie_df = alloc_df.iloc[:-1].copy()
+                # Keep cash negative values visible as absolute size but label still cash
                 pie_df["USD_abs"] = pie_df["USD"].abs()
 
-                try:
-                    import plotly.express as px  # type: ignore
-
-                    fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
-                    fig.update_traces(textinfo="none")
-                    fig.update_layout(
-                        margin=dict(l=0, r=0, t=0, b=0),
-                        height=300,
-                        showlegend=True,
-                        legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
-                    )
-                    fig.add_annotation(
-                        text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
-                        x=0.5,
-                        y=0.5,
-                        showarrow=False,
-                        font=dict(size=16),
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                except Exception:
-                    # HTML/CSS donut (no external libs)
-                    palette = [
-                        "#3b82f6", "#f59e0b", "#ef4444", "#10b981", "#8b5cf6", "#06b6d4", "#f97316",
-                    ]
-                    vals = pie_df["USD_abs"].tolist()
-                    labels = pie_df["Asset"].tolist()
-                    total = float(sum(vals)) if vals else 0.0
-
-                    if total <= 0:
-                        st.info("No allocation data to chart.")
-                    else:
-                        acc = 0.0
-                        stops = []
-                        legend_items = []
-                        for i, (lab, v) in enumerate(zip(labels, vals)):
-                            pct = (float(v) / total) * 100.0
-                            c = palette[i % len(palette)]
-                            start = acc
-                            end = acc + pct
-                            stops.append(f"{c} {start:.4f}% {end:.4f}%")
-                            acc = end
-                            legend_items.append(
-                                f"<div class='donut-legend-item'><span class='sw' style='background:{c}'></span><span class='lb'>{lab}</span></div>"
-                            )
-
-                        donut_css = f"""
-                        <style>
-                          .donut-wrap{{display:flex;gap:18px;align-items:center;justify-content:space-between;}}
-                          .donut{{width:280px;max-width:100%;aspect-ratio:1;border-radius:50%;
-                                background:conic-gradient({','.join(stops)});
-                                position:relative;box-shadow:0 18px 40px rgba(2,6,23,.10), inset 0 0 0 1px rgba(255,255,255,.35);}}
-                          .donut:after{{content:'';position:absolute;inset:18%;border-radius:50%;
-                                background:rgba(255,255,255,.88);backdrop-filter: blur(6px);
-                                box-shadow: inset 0 0 0 1px rgba(2,6,23,.06);}}
-                          .donut-center{{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
-                                z-index:2;text-align:center;padding:14px;}}
-                          .donut-center .t{{font-size:12px;color:rgba(17,24,39,.62);font-weight:700;letter-spacing:.08em;text-transform:uppercase;}}
-                          .donut-center .v{{font-size:20px;font-weight:800;color:rgba(17,24,39,.92);margin-top:6px;}}
-                          .donut-legend{{display:flex;flex-direction:column;gap:10px;min-width:150px;}}
-                          .donut-legend-item{{display:flex;align-items:center;gap:10px;font-size:13px;color:rgba(17,24,39,.78);}}
-                          .donut-legend-item .sw{{width:12px;height:12px;border-radius:6px;box-shadow: inset 0 0 0 1px rgba(255,255,255,.45);}} 
-                          .donut-legend-item .lb{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;}}
-                          @media (max-width: 900px){{.donut-wrap{{flex-direction:column;align-items:flex-start}}.donut-legend{{width:100%}}}}
-                        </style>
-                        """
-
-                        st.markdown(
-                            donut_css
-                            + f"""
-                            <div class='donut-wrap'>
-                              <div class='donut'>
-                                <div class='donut-center'>
-                                  <div class='t'>Distribution</div>
-                                  <div class='v'>{_fmt_money(net_liq_usd)}</div>
-                                </div>
-                              </div>
-                              <div class='donut-legend'>
-                                {''.join(legend_items)}
-                              </div>
-                            </div>
-                            """,
-                            unsafe_allow_html=True,
-                        )
+                fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
+                fig.update_traces(textinfo="none")
+                fig.update_layout(
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    height=300,
+                    showlegend=True,
+                    legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
+                )
+                # Center annotation
+                fig.add_annotation(
+                    text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(size=16),
+                )
+                st.plotly_chart(fig, use_container_width=True)
             except Exception:
                 st.info("Allocation chart unavailable.")
             st.markdown("</div>", unsafe_allow_html=True)
 
-            
+            # Equity trend (kept from previous UI)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
+            try:
+                hdf = hist.copy() if hist is not None else pd.DataFrame()
+                if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
+                    hdf["snapshot_date"] = pd.to_datetime(hdf["snapshot_date"], errors="coerce")
+                    hdf["total_equity"] = pd.to_numeric(hdf["total_equity"], errors="coerce")
+                    hdf = hdf.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date")
+                if hdf is None or hdf.empty:
+                    st.info("No equity history yet.")
+                else:
+                    try:
+                        import plotly.express as px
+                        fig2 = px.line(hdf, x="snapshot_date", y="total_equity")
+                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=240, showlegend=False)
+                        fig2.update_xaxes(title=None)
+                        fig2.update_yaxes(title=None)
+                        st.plotly_chart(fig2, use_container_width=True)
+                    except Exception:
+                        st.line_chart(hdf.set_index("snapshot_date")["total_equity"])
+            except Exception:
+                st.info("No equity history yet.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
         st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
@@ -2779,9 +2739,6 @@ def dashboard_page(active_user, view: str = "summary"):
 
                         win_avg = float(wk.loc[win_mask, "ret"].mean()) if win_ct else 0.0
                         loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
-        
-
-                        win_rate = (float(win_ct) / float(total_ct)) if total_ct else 0.0
         except Exception:
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
@@ -2819,30 +2776,7 @@ def dashboard_page(active_user, view: str = "summary"):
 
             # Compact table (readable like the mockup)
             st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
-            table_rows = [
-                ("Winning Weeks", int(win_ct)),
-                ("Losing Weeks", int(loss_ct)),
-                ("Win Rate", _fmt_pct(win_rate)),
-                ("Avg Win Return", _fmt_pct(win_avg)),
-                ("Avg Loss Return", _fmt_pct(loss_avg)),
-            ]
-            tr_html = "".join([f"<tr><td>{k}</td><td class='num'>{v}</td></tr>" for k, v in table_rows])
-            st.markdown(
-                f"""
-                <table class="dash-table">
-                  <thead>
-                    <tr>
-                      <th>Metric</th>
-                      <th class="num">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tr_html}
-                  </tbody>
-                </table>
-                """,
-                unsafe_allow_html=True,
-            )
+            # (Removed redundant metrics table below the KPI tiles)
 
         # Right: donut chart
         with wl_right:
@@ -2854,10 +2788,17 @@ def dashboard_page(active_user, view: str = "summary"):
                 fig = px.pie(pie_df, names="Outcome", values="Weeks", hole=0.64)
                 fig.update_traces(textinfo="none")
                 fig.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=0),
+                    margin=dict(l=0, r=0, t=0, b=80),
                     height=330,
                     showlegend=True,
-                    legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"),
+                    legend=dict(
+                        orientation="h",
+                        yanchor="top",
+                        y=-0.20,
+                        xanchor="center",
+                        x=0.5,
+                        title=None,
+                    ),
                 )
                 fig.add_annotation(
                     text=f"{win_rate*100:.0f}% Win Rate",
