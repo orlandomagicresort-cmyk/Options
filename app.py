@@ -5763,73 +5763,73 @@ def main():
         email = u.get("email")
     acct_label = st.session_state.get("active_account_label", "My Account")
     # Top bar (visual + selectors)
-u = st.session_state.get("user")
-email = getattr(u, "email", None) if u is not None else None
-if not email and isinstance(u, dict):
-    email = u.get("email")
+    u = st.session_state.get("user")
+    email = getattr(u, "email", None) if u is not None else None
+    if not email and isinstance(u, dict):
+        email = u.get("email")
 
-# Keep a clean, static top bar background/brand; render interactive controls just below
-st.markdown(
-    f"""<div class=\"topbar\">
-          <div style=\"display:flex; justify-content:space-between; align-items:center; gap:12px;\">
-            <div class=\"brand\"><span class=\"logo\"></span><span>Stock Portfolio</span></div>
-            <div class=\"right\">
-              <span class=\"pill\">{email or ''}</span>
-            </div>
-          </div>
-        </div>""",
-    unsafe_allow_html=True,
-)
-
-# Account impersonation dropdown (delegated access)
-# Uses the same session key as the active account context setter: "account_selector"
-try:
-    if u is not None:
-        _ensure_user_preferences_row(u)
-        _activate_pending_invites(u)
-        accts_for_ui = _get_accessible_accounts(u)
-    else:
-        accts_for_ui = [{"label": "My Account", "owner_user_id": None, "role": "editor"}]
-except Exception:
-    accts_for_ui = [{"label": "My Account", "owner_user_id": None, "role": "editor"}]
-
-acct_labels = [a["label"] for a in accts_for_ui]
-cur_label = st.session_state.get("active_account_label") or acct_labels[0]
-if cur_label not in acct_labels:
-    cur_label = acct_labels[0]
-
-# Right-aligned control row under the top bar
-_sp1, _sp2, _ctl = st.columns([7, 2, 3])
-with _ctl:
-    st.selectbox(
-        "Account",
-        acct_labels,
-        index=acct_labels.index(cur_label),
-        key="account_selector",
-        label_visibility="collapsed",
-        help="Switch between your account and any delegated accounts you have access to.",
+    # Keep a clean, static top bar background/brand; render interactive controls just below
+    st.markdown(
+        f"""<div class=\"topbar\">
+              <div style=\"display:flex; justify-content:space-between; align-items:center; gap:12px;\">
+                <div class=\"brand\"><span class=\"logo\"></span><span>Stock Portfolio</span></div>
+                <div class=\"right\">
+                  <span class=\"pill\">{email or ''}</span>
+                </div>
+              </div>
+            </div>""",
+        unsafe_allow_html=True,
     )
-    # Navigation (horizontal)
-    default_page = st.session_state.get("_selected_page", "Dashboard")
-    if default_page not in pages:
-        default_page = "Dashboard"
-    page = st.radio("Menu", pages, index=pages.index(default_page), horizontal=True, key="_top_nav")
-    st.session_state["_selected_page"] = page
 
-    user = st.session_state.user
-    active_user = _set_active_account(user)
-    if page == "Dashboard": dashboard_page(active_user, view="summary")
-    elif page == "Holdings": dashboard_page(active_user, view="holdings")
-    elif page == "Option Details": option_details_page(active_user)
-    elif page == "Update LEAP Prices": pricing_page(active_user)
-    elif page == "Weekly Snapshot": snapshot_page(active_user)
-    elif page == "Cash Management": cash_management_page(active_user)
-    elif page == "Enter Trade": trade_entry_page(active_user)
-    elif page == "Ledger": ledger_page(active_user)
-    elif page == "Import Data": import_page(active_user)
-    elif page == "Profile": account_sharing_page(active_user)
-    elif page == "Community": community_page(user)
-    elif page == "Settings": settings_page(user)
+    # Account impersonation dropdown (delegated access)
+    # Uses the same session key as the active account context setter: "account_selector"
+    try:
+        if u is not None:
+            _ensure_user_preferences_row(u)
+            _activate_pending_invites(u)
+            accts_for_ui = _get_accessible_accounts(u)
+        else:
+            accts_for_ui = [{"label": "My Account", "owner_user_id": None, "role": "editor"}]
+    except Exception:
+        accts_for_ui = [{"label": "My Account", "owner_user_id": None, "role": "editor"}]
+
+    acct_labels = [a["label"] for a in accts_for_ui]
+    cur_label = st.session_state.get("active_account_label") or acct_labels[0]
+    if cur_label not in acct_labels:
+        cur_label = acct_labels[0]
+
+    # Right-aligned control row under the top bar
+    _sp1, _sp2, _ctl = st.columns([7, 2, 3])
+    with _ctl:
+        st.selectbox(
+            "Account",
+            acct_labels,
+            index=acct_labels.index(cur_label),
+            key="account_selector",
+            label_visibility="collapsed",
+            help="Switch between your account and any delegated accounts you have access to.",
+        )
+        # Navigation (horizontal)
+        default_page = st.session_state.get("_selected_page", "Dashboard")
+        if default_page not in pages:
+            default_page = "Dashboard"
+        page = st.radio("Menu", pages, index=pages.index(default_page), horizontal=True, key="_top_nav")
+        st.session_state["_selected_page"] = page
+
+        user = st.session_state.user
+        active_user = _set_active_account(user)
+        if page == "Dashboard": dashboard_page(active_user, view="summary")
+        elif page == "Holdings": dashboard_page(active_user, view="holdings")
+        elif page == "Option Details": option_details_page(active_user)
+        elif page == "Update LEAP Prices": pricing_page(active_user)
+        elif page == "Weekly Snapshot": snapshot_page(active_user)
+        elif page == "Cash Management": cash_management_page(active_user)
+        elif page == "Enter Trade": trade_entry_page(active_user)
+        elif page == "Ledger": ledger_page(active_user)
+        elif page == "Import Data": import_page(active_user)
+        elif page == "Profile": account_sharing_page(active_user)
+        elif page == "Community": community_page(user)
+        elif page == "Settings": settings_page(user)
 
 if __name__ == "__main__":
     main()
