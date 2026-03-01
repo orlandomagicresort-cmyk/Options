@@ -232,6 +232,38 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 
 /* Make KPI cards align with Streamlit columns */
 .kpi-card{ width:100%; }
+
+/* -------- Executive Dashboard Mockup Layer -------- */
+.dash-metric{
+  background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.85));
+  border: 1px solid rgba(17,24,39,.08);
+  border-radius: 16px;
+  box-shadow: var(--shadow2);
+  padding: 16px 16px 14px 16px;
+  min-height: 108px;
+}
+.dash-metric .t{ font-weight: 800; color: rgba(17,24,39,.72); font-size: 14px; }
+.dash-metric .v{ font-weight: 900; font-size: 34px; letter-spacing: -0.02em; margin-top: 6px; }
+.dash-metric .sub{ margin-top: 6px; color: rgba(17,24,39,.55); font-weight: 700; font-size: 12px; display:flex; gap:10px; align-items:center;}
+.dash-pill{ display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px; background: rgba(17,24,39,.06); border:1px solid rgba(17,24,39,.10); font-weight:800; font-size:11px; }
+.dash-delta.pos{ color: rgba(16,185,129,1); }
+.dash-delta.neg{ color: rgba(239,68,68,1); }
+
+.dash-panel{
+  background: rgba(255,255,255,.88);
+  border: 1px solid rgba(17,24,39,.08);
+  border-radius: 18px;
+  box-shadow: var(--shadow2);
+  padding: 16px;
+}
+.dash-panel h3{
+  margin:0 0 10px 0; font-size:16px; font-weight:900; color: rgba(17,24,39,.86);
+}
+.dash-kv{ display:flex; justify-content:space-between; align-items:baseline; padding:8px 0; border-bottom:1px solid rgba(17,24,39,.06); }
+.dash-kv:last-child{ border-bottom:0; }
+.dash-kv .k{ color: rgba(17,24,39,.70); font-weight:800; font-size:13px; }
+.dash-kv .val{ font-weight:900; font-size:16px; }
+
 </style>
         """,
         unsafe_allow_html=True,
@@ -2282,7 +2314,154 @@ def dashboard_page(active_user, view: str = "summary"):
     summ_html += "</tbody></table>"
 
     if view != "holdings":
-        # --------------------------------------------------------------------------------
+        # ---------------------------------------
+        # --- Executive Dashboard (Mockup Layout) ---
+        # Top metric cards + portfolio breakdown panel (best-effort; preserves existing tables below)
+        latest_pl_usd = None
+        latest_pl_pct = None
+        try:
+            _hist = get_portfolio_history(uid)
+            _hist = normalize_columns(_hist)
+            if _hist is not None and not _hist.empty and "snapshot_date" in _hist.columns and "total_equity" in _hist.columns:
+                _hist = _hist[["snapshot_date", "total_equity"]].copy()
+                _hist["snapshot_date"] = pd.to_datetime(_hist["snapshot_date"], errors="coerce")
+                _hist = _hist.dropna(subset=["snapshot_date"]).sort_values("snapshot_date")
+                if len(_hist) >= 2:
+                    _last = _hist.iloc[-1]
+                    _prev = _hist.iloc[-2]
+                    _flows = _net_flows_usd(_prev["snapshot_date"].date(), _last["snapshot_date"].date())
+                    latest_pl_usd = float(_last["total_equity"]) - float(_prev["total_equity"]) - float(_flows or 0.0)
+                    _den = float(_prev["total_equity"])
+                    latest_pl_pct = (latest_pl_usd / _den) if _den else None
+        except Exception:
+            pass
+
+        stock_usd_v = float(stock_value_usd or 0.0)
+        leap_usd_v = float(leap_value_usd or 0.0)
+        cash_usd_v = float(cash_usd or 0.0)
+        short_liab_usd = float(itm_liability_usd or 0.0)  # positive number representing liability amount
+        short_exposure_usd = abs(short_liab_usd)
+        net_exposure_usd = float(net_liq_usd or 0.0)
+
+        # Top cards
+        c1, c2, c3, c4 = st.columns(4, gap="large")
+
+        def _render_dash_metric(title: str, main_value: float, sub_left: str, sub_right: str | None = None,
+                                delta_pct: float | None = None, delta_usd: float | None = None):
+            delta_html = ""
+            if delta_usd is not None or delta_pct is not None:
+                _d = float(delta_usd or 0.0)
+                _p = delta_pct
+                _cls = "pos" if _d >= 0 else "neg"
+                _p_txt = f" ({_fmt_pct(_p)})" if _p is not None else ""
+                delta_html = f"<span class='dash-delta {_cls}'>{_fmt_money(_d)}{_p_txt}</span>"
+            sub_right_html = f"<span>{sub_right}</span>" if sub_right else ""
+            st.markdown(
+                f"""
+                <div class="dash-metric">
+                  <div class="t">{title}</div>
+                  <div class="v">{_fmt_money(main_value)}</div>
+                  <div class="sub">
+                    <span class="dash-pill">{sub_left}</span>
+                    {sub_right_html}
+                    {delta_html}
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        with c1:
+            _render_dash_metric(
+                "Total Portfolio Value",
+                net_liq_usd,
+                "USD",
+                f"CA$ {_fmt_money(net_liq_cad).replace('$','')}",
+                None,
+                None,
+            )
+        with c2:
+            if latest_pl_usd is None:
+                _render_dash_metric("Latest P/L", 0.0, "USD", "Add snapshots to enable", None, None)
+            else:
+                _render_dash_metric("Latest P/L", latest_pl_usd, "USD", None, latest_pl_pct, latest_pl_usd)
+        with c3:
+            # Use Lifetime % as the closest "Total P/L" concept we have today
+            _render_dash_metric("Total P/L", life_profit, "USD", _fmt_pct(life_pct), life_pct, life_profit)
+        with c4:
+            _render_dash_metric("Cash Balance", cash_usd_v, "USD", f"CA$ {_fmt_money(cash_usd_v*fx).replace('$','')}", None, None)
+
+        st.markdown("<div style='height:14px'></div>", unsafe_allow_html=True)
+
+        # Breakdown + right-side cards
+        left, right = st.columns([2.1, 1], gap="large")
+
+        with left:
+            st.markdown("<div class='dash-panel'><h3>Portfolio Breakdown</h3>", unsafe_allow_html=True)
+            try:
+                bdf = pd.DataFrame([
+                    {"Component": "Stocks", "Value": max(stock_usd_v, 0.0)},
+                    {"Component": "LEAP Equity", "Value": max(leap_usd_v, 0.0)},
+                    {"Component": "Cash", "Value": max(cash_usd_v, 0.0)},
+                    {"Component": "Short Exposure", "Value": max(short_exposure_usd, 0.0)},
+                ])
+                bdf = bdf[bdf["Value"] > 0].copy()
+                if bdf.empty:
+                    st.info("No portfolio data to chart yet.")
+                else:
+                    donut = alt.Chart(bdf).mark_arc(innerRadius=55, outerRadius=90).encode(
+                        theta=alt.Theta(field="Value", type="quantitative"),
+                        color=alt.Color(field="Component", type="nominal", legend=alt.Legend(orient="right")),
+                        tooltip=["Component", alt.Tooltip("Value:Q", format=",.2f")],
+                    ).properties(height=220)
+                    st.altair_chart(donut, use_container_width=True)
+
+                    # table-like list (USD + CAD)
+                    bdf2 = bdf.copy()
+                    bdf2["USD"] = bdf2["Value"].map(_fmt_money)
+                    bdf2["CAD"] = (bdf2["Value"] * fx).map(lambda x: _fmt_money(x))
+                    st.dataframe(bdf2[["Component", "USD", "CAD"]], hide_index=True, use_container_width=True)
+            except Exception:
+                st.info("Breakdown chart unavailable.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        with right:
+            st.markdown("<div class='dash-panel'>", unsafe_allow_html=True)
+            st.markdown(
+                f"""
+                <div class="dash-kv"><div class="k">Short Call Liability</div><div class="val neg-val">-{_fmt_money(short_exposure_usd)}</div></div>
+                <div class="dash-kv"><div class="k">Net Exposure</div><div class="val">{_fmt_money(net_exposure_usd)}</div></div>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+            st.markdown("<div class='dash-panel'><h3>Equity Trend</h3>", unsafe_allow_html=True)
+            try:
+                h = get_portfolio_history(uid)
+                h = normalize_columns(h)
+                if h is not None and not h.empty and "snapshot_date" in h.columns and "total_equity" in h.columns:
+                    h = h[["snapshot_date", "total_equity"]].copy()
+                    h["snapshot_date"] = pd.to_datetime(h["snapshot_date"], errors="coerce")
+                    h["total_equity"] = pd.to_numeric(h["total_equity"], errors="coerce")
+                    h = h.dropna(subset=["snapshot_date","total_equity"]).sort_values("snapshot_date").tail(60)
+                    line = alt.Chart(h).mark_line().encode(
+                        x=alt.X("snapshot_date:T", title=""),
+                        y=alt.Y("total_equity:Q", title=""),
+                        tooltip=[alt.Tooltip("snapshot_date:T", title="Date"), alt.Tooltip("total_equity:Q", format=",.2f", title="Equity")],
+                    ).properties(height=170)
+                    st.altair_chart(line, use_container_width=True)
+                else:
+                    st.caption("Create Weekly Snapshots to populate this chart.")
+            except Exception:
+                st.caption("Create Weekly Snapshots to populate this chart.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
+-----------------------------------------
         # Portfolio Value table (keep same components, now show USD and CAD)
         # --------------------------------------------------------------------------------
         st.subheader("Portfolio Value")
