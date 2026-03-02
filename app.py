@@ -284,6 +284,14 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
   background: radial-gradient(circle at 30% 30%, rgba(99,102,241,.18), rgba(99,102,241,0) 65%);
   filter: blur(2px);
 }
+
+.dash-card-tight{
+  padding: 0 !important;
+}
+.dash-card-tight:before{
+  display:none !important;
+  content:none !important;
+}
 .dash-kpi-title{ font-weight:900; color: rgba(17,24,39,.72); letter-spacing:.2px; font-size:14px; }
 .dash-kpi-value{ font-weight:950; font-size:38px; line-height:1.05; margin-top:10px; color: rgba(17,24,39,.96); }
 .dash-kpi-sub{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:12px; color: rgba(17,24,39,.68); font-weight:800; }
@@ -2538,14 +2546,16 @@ def dashboard_page(active_user, view: str = "summary"):
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
-        # Asset Allocation (match mockup: table left, donut right)
-        alloc_left, alloc_right = st.columns([2.1, 1.2], gap="large")
+        
+        # Asset Allocation (full-width table; chart removed)
+        st.subheader("Asset Allocation")
 
-        # Build allocation values (USD)
+        # Build allocation values (USD) - keep consistent with totals above
         _alloc = [
             ("Stocks", float(stock_usd_v or 0.0)),
             ("LEAP Equity", float(leap_usd_v or 0.0)),
             ("Cash", float(cash_usd_v or 0.0)),
+            # ITM is a liability against portfolio value
             ("In-The-Money Amount", -float(itm_liability_usd or 0.0)),
         ]
         alloc_df = pd.DataFrame(_alloc, columns=["Asset", "USD"])
@@ -2564,110 +2574,49 @@ def dashboard_page(active_user, view: str = "summary"):
         )
 
         def _td_class(v: float) -> str:
-            try:
-                v = float(v)
-            except Exception:
-                v = 0.0
             if v < 0:
-                return "num neg"
+                return "neg"
             if v > 0:
-                return "num pos"
+                return "pos"
             return "num"
 
-        with alloc_left:
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Asset Allocation</div>", unsafe_allow_html=True)
+        # Table card (no decorative top bar)
+        st.markdown("<div class='dash-card dash-card-tight'>", unsafe_allow_html=True)
 
-            # HTML table (crisp + readable like mockup)
-            rows_html = ""
-            for _, r in alloc_df.iterrows():
-                usd_v = float(r["USD"] or 0.0)
-                cad_v = float(r["CAD"] or 0.0)
-                rows_html += f"""
-                  <tr>
-                    <td>{str(r['Asset'])}</td>
-                    <td class='{_td_class(usd_v)}'>{_fmt_money(usd_v)}</td>
-                    <td class='{_td_class(cad_v)}'>CA$ {_fmt_money(cad_v).replace('$','')}</td>
-                  </tr>
-                """
+        rows_html = ""
+        for _, r in alloc_df.iterrows():
+            usd_v = float(r["USD"] or 0.0)
+            cad_v = float(r["CAD"] or 0.0)
+            rows_html += f"""
+              <tr>
+                <td>{str(r['Asset'])}</td>
+                <td class='{_td_class(usd_v)}'>{_fmt_money(usd_v)}</td>
+                <td class='{_td_class(cad_v)}'>CA$ {_fmt_money(cad_v).replace('$','')}</td>
+              </tr>
+            """
 
-            st.markdown(
-                f"""
-                <table class="dash-table">
-                  <thead>
-                    <tr>
-                      <th>Asset</th>
-                      <th class="num">USD</th>
-                      <th class="num">CAD $</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows_html}
-                  </tbody>
-                </table>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with alloc_right:
-            # Donut (allocation)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Allocation</div>", unsafe_allow_html=True)
-            try:
-                import plotly.express as px
-
-                pie_df = alloc_df.iloc[:-1].copy()
-                # Keep cash negative values visible as absolute size but label still cash
-                pie_df["USD_abs"] = pie_df["USD"].abs()
-
-                fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
-                fig.update_traces(textinfo="none")
-                fig.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    height=300,
-                    showlegend=True,
-                    legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
-                )
-                # Center annotation
-                fig.add_annotation(
-                    text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
-                    x=0.5,
-                    y=0.5,
-                    showarrow=False,
-                    font=dict(size=16),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception:
-                st.info("Allocation chart unavailable.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            # Equity trend (kept from previous UI)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
-            try:
-                hdf = hist.copy() if hist is not None else pd.DataFrame()
-                if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
-                    hdf["snapshot_date"] = pd.to_datetime(hdf["snapshot_date"], errors="coerce")
-                    hdf["total_equity"] = pd.to_numeric(hdf["total_equity"], errors="coerce")
-                    hdf = hdf.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date")
-                if hdf is None or hdf.empty:
-                    st.info("No equity history yet.")
-                else:
-                    try:
-                        import plotly.express as px
-                        fig2 = px.line(hdf, x="snapshot_date", y="total_equity")
-                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=240, showlegend=False)
-                        fig2.update_xaxes(title=None)
-                        fig2.update_yaxes(title=None)
-                        st.plotly_chart(fig2, use_container_width=True)
-                    except Exception:
-                        st.line_chart(hdf.set_index("snapshot_date")["total_equity"])
-            except Exception:
-                st.info("No equity history yet.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
+        st.markdown(
+            f"""
+            <table class="dash-table">
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th class="num">USD</th>
+                  <th class="num">CAD $</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows_html}
+              </tbody>
+            </table>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
-        st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
+        # Performance Summary (Excluding Deposits/Withdrawals)")
         st.markdown(summ_html, unsafe_allow_html=True)
 
         # --- Win/Loss Weeks (from Weekly Snapshots) ---
@@ -2741,6 +2690,8 @@ def dashboard_page(active_user, view: str = "summary"):
                         loss_avg = float(wk.loc[loss_mask, "ret"].mean()) if loss_ct else 0.0
         except Exception:
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
+
+        win_rate = (float(win_ct) / float(total_ct)) if total_ct else 0.0
 
         # Render (polished UI)
         
