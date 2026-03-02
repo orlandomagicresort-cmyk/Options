@@ -277,6 +277,8 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
   position: relative;
   overflow: hidden;
 }
+.dash-card-tight{padding:0 !important;}
+.dash-card-tight:before{display:none;}
 .dash-card:before{
   content:"";
   position:absolute; inset:-80px -80px auto auto;
@@ -2540,20 +2542,21 @@ def dashboard_page(active_user, view: str = "summary"):
 
         # Asset Allocation (match mockup: table left, donut right)
         st.subheader("Asset Allocation")
-        alloc_left, alloc_right = st.columns([2.1, 1.2], gap="large")
+        # Single wide allocation table (pie removed per request)
+        alloc_col = st.container()
 
         # Build allocation values (USD)
         _alloc = [
             ("Stocks", float(stock_usd_v or 0.0)),
             ("LEAP Equity", float(leap_usd_v or 0.0)),
             ("Cash", float(cash_usd_v or 0.0)),
-            ("Short Exposure (ITM)", float(abs(short_liab_usd or 0.0))),
+            ("Short Exposure (ITM)", float(short_liab_usd or 0.0)),
         ]
         alloc_df = pd.DataFrame(_alloc, columns=["Asset", "USD"])
         alloc_df["USD"] = pd.to_numeric(alloc_df["USD"], errors="coerce").fillna(0.0)
         alloc_df["CAD"] = alloc_df["USD"] * float(fx or 1.0)
 
-        # Total row
+        # Total row (matches net portfolio value when Short Exposure is a liability)
         alloc_total_usd = float(alloc_df["USD"].sum())
         alloc_total_cad = float(alloc_df["CAD"].sum())
         alloc_df = pd.concat(
@@ -2574,10 +2577,11 @@ def dashboard_page(active_user, view: str = "summary"):
             if v > 0:
                 return "num pos"
             return "num"
-        with alloc_left:
-            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
 
-            # HTML table (crisp + readable like mockup)
+        with alloc_col:
+            # Tight card removes the empty "white bar" padding at top
+            st.markdown("<div class='dash-card dash-card-tight'>", unsafe_allow_html=True)
+
             rows_html = ""
             for _, r in alloc_df.iterrows():
                 usd_v = float(r["USD"] or 0.0)
@@ -2608,73 +2612,6 @@ def dashboard_page(active_user, view: str = "summary"):
                 unsafe_allow_html=True,
             )
             st.markdown("</div>", unsafe_allow_html=True)
-
-        with alloc_right:
-            # Donut (asset allocation) — premium look, no redundant title
-            st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
-
-            pie_df = alloc_df.iloc[:-1].copy()
-            pie_df["USD_abs"] = pie_df["USD"].abs()
-            pie_labels = pie_df["Asset"].tolist()
-            pie_values = pie_df["USD_abs"].astype(float).tolist()
-
-            # Color palette (fintech, consistent)
-            _pal = ["#3b82f6", "#60a5fa", "#f59e0b", "#ef4444", "#8b5cf6", "#10b981"]
-            pie_colors = [_pal[i % len(_pal)] for i in range(len(pie_labels))]
-
-            def _legend_html(labels, colors):
-                chips = ""
-                for lab, col in zip(labels, colors):
-                    chips += f"""<div class='dash-legend-item'><span class='dot' style='background:{col}'></span><span>{lab}</span></div>"""
-                return f"""<div class='dash-legend'>{chips}</div>"""
-
-            
-            # Allocation donut (CSS conic-gradient) — reliable on Streamlit Cloud
-            total = float(sum(pie_values)) if pie_values else 0.0
-            parts = []
-            acc = 0.0
-            for v, col in zip(pie_values, pie_colors):
-                frac = (float(v) / total) if total else 0.0
-                a0 = acc * 100.0
-                a1 = (acc + frac) * 100.0
-                parts.append(f"{col} {a0:.3f}% {a1:.3f}%")
-                acc += frac
-            grad = ", ".join(parts) if parts else "rgba(17,24,39,.10) 0% 100%"
-
-            center_total = _fmt_money(net_liq_usd)
-            donut_html = f"""
-            <div style="width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;">
-              <div style="
-                   width:min(360px, 100%);
-                   aspect-ratio:1/1;
-                   border-radius:999px;
-                   background: conic-gradient({grad});
-                   position:relative;
-                   box-shadow: 0 18px 40px rgba(2,6,23,.10);
-                   border: 1px solid rgba(17,24,39,.08);
-                   ">
-                <div style="
-                     position:absolute;inset:18%;
-                     border-radius:999px;
-                     background: rgba(255,255,255,.92);
-                     backdrop-filter: blur(10px);
-                     display:flex;flex-direction:column;
-                     align-items:center;justify-content:center;
-                     text-align:center;
-                     border: 1px solid rgba(17,24,39,.08);
-                     ">
-                  <div style="font-weight:800;font-size:18px;line-height:1.15;color:rgba(17,24,39,1);">
-                    Total: {center_total}
-                  </div>
-                  <div style="margin-top:6px;font-size:12px;font-weight:700;color:rgba(17,24,39,.55);letter-spacing:.06em;">
-                    USD
-                  </div>
-                </div>
-              </div>
-              {_legend_html(pie_labels, pie_colors)}
-            </div>
-            """
-            st.markdown(donut_html, unsafe_allow_html=True)
         win_ct = 0
         loss_ct = 0
         total_ct = 0
