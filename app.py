@@ -2675,7 +2675,9 @@ def dashboard_page(active_user, view: str = "summary"):
             </div>
             """
             st.markdown(donut_html, unsafe_allow_html=True)
-_ct = 0
+        win_ct = 0
+        loss_ct = 0
+        total_ct = 0
         win_avg = 0.0
         loss_avg = 0.0
         _wk_stats_note = None
