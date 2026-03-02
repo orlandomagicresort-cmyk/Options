@@ -2648,11 +2648,12 @@ def dashboard_page(active_user, view: str = "summary"):
                     ]
                 )
                 fig.update_layout(
-                    margin=dict(l=0, r=0, t=10, b=60),
-                    height=320,
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    height=380,
                     showlegend=False,
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
+                    autosize=True,
                 )
                 fig.add_annotation(
                     text=f"<b>Total: {_fmt_money(net_liq_usd)}</b><br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
@@ -2667,7 +2668,7 @@ def dashboard_page(active_user, view: str = "summary"):
                     full_html=False,
                     config={"displayModeBar": False, "responsive": True},
                 )
-                components.html(html, height=340)
+                components.html(f"<div style='height:390px;width:100%;'>{html}</div>", height=410, scrolling=False)
                 st.markdown(_legend_html(pie_labels, pie_colors), unsafe_allow_html=True)
 
             except Exception:
