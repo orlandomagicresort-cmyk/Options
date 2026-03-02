@@ -277,8 +277,6 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
   position: relative;
   overflow: hidden;
 }
-.dash-card-tight{padding:0 !important;}
-.dash-card-tight:before{display:none;}
 .dash-card:before{
   content:"";
   position:absolute; inset:-80px -80px auto auto;
@@ -2541,22 +2539,20 @@ def dashboard_page(active_user, view: str = "summary"):
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
         # Asset Allocation (match mockup: table left, donut right)
-        st.subheader("Asset Allocation")
-        # Single wide allocation table (pie removed per request)
-        alloc_col = st.container()
+        alloc_left, alloc_right = st.columns([2.1, 1.2], gap="large")
 
         # Build allocation values (USD)
         _alloc = [
             ("Stocks", float(stock_usd_v or 0.0)),
             ("LEAP Equity", float(leap_usd_v or 0.0)),
             ("Cash", float(cash_usd_v or 0.0)),
-            ("Short Exposure (ITM)", float(short_liab_usd or 0.0)),
+            ("In-The-Money Amount", -float(itm_liability_usd or 0.0)),
         ]
         alloc_df = pd.DataFrame(_alloc, columns=["Asset", "USD"])
         alloc_df["USD"] = pd.to_numeric(alloc_df["USD"], errors="coerce").fillna(0.0)
         alloc_df["CAD"] = alloc_df["USD"] * float(fx or 1.0)
 
-        # Total row (matches net portfolio value when Short Exposure is a liability)
+        # Total row
         alloc_total_usd = float(alloc_df["USD"].sum())
         alloc_total_cad = float(alloc_df["CAD"].sum())
         alloc_df = pd.concat(
@@ -2578,10 +2574,10 @@ def dashboard_page(active_user, view: str = "summary"):
                 return "num pos"
             return "num"
 
-        with alloc_col:
-            # Tight card removes the empty "white bar" padding at top
-            st.markdown("<div class='dash-card dash-card-tight'>", unsafe_allow_html=True)
+        with alloc_left:
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Asset Allocation</div>", unsafe_allow_html=True)
 
+            # HTML table (crisp + readable like mockup)
             rows_html = ""
             for _, r in alloc_df.iterrows():
                 usd_v = float(r["USD"] or 0.0)
@@ -2612,6 +2608,70 @@ def dashboard_page(active_user, view: str = "summary"):
                 unsafe_allow_html=True,
             )
             st.markdown("</div>", unsafe_allow_html=True)
+
+        with alloc_right:
+            # Donut (allocation)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Allocation</div>", unsafe_allow_html=True)
+            try:
+                import plotly.express as px
+
+                pie_df = alloc_df.iloc[:-1].copy()
+                # Keep cash negative values visible as absolute size but label still cash
+                pie_df["USD_abs"] = pie_df["USD"].abs()
+
+                fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
+                fig.update_traces(textinfo="none")
+                fig.update_layout(
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    height=300,
+                    showlegend=True,
+                    legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
+                )
+                # Center annotation
+                fig.add_annotation(
+                    text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
+                    x=0.5,
+                    y=0.5,
+                    showarrow=False,
+                    font=dict(size=16),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception:
+                st.info("Allocation chart unavailable.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+            # Equity trend (kept from previous UI)
+            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
+            try:
+                hdf = hist.copy() if hist is not None else pd.DataFrame()
+                if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
+                    hdf["snapshot_date"] = pd.to_datetime(hdf["snapshot_date"], errors="coerce")
+                    hdf["total_equity"] = pd.to_numeric(hdf["total_equity"], errors="coerce")
+                    hdf = hdf.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date")
+                if hdf is None or hdf.empty:
+                    st.info("No equity history yet.")
+                else:
+                    try:
+                        import plotly.express as px
+                        fig2 = px.line(hdf, x="snapshot_date", y="total_equity")
+                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=240, showlegend=False)
+                        fig2.update_xaxes(title=None)
+                        fig2.update_yaxes(title=None)
+                        st.plotly_chart(fig2, use_container_width=True)
+                    except Exception:
+                        st.line_chart(hdf.set_index("snapshot_date")["total_equity"])
+            except Exception:
+                st.info("No equity history yet.")
+            st.markdown("</div>", unsafe_allow_html=True)
+
+
+        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
+
+        st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
+        st.markdown(summ_html, unsafe_allow_html=True)
+
+        # --- Win/Loss Weeks (from Weekly Snapshots) ---
+        # Always render the section; compute stats best-effort.
         win_ct = 0
         loss_ct = 0
         total_ct = 0
@@ -2683,12 +2743,10 @@ def dashboard_page(active_user, view: str = "summary"):
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
         # Render (polished UI)
-        win_rate = (float(win_ct) / float(total_ct)) if total_ct else 0.0
-
+        
         st.subheader("Win/Loss Analysis")
 
         # Polished container like the mockup
-        st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
 
         if _wk_stats_note:
             st.info(_wk_stats_note)
@@ -2715,10 +2773,6 @@ def dashboard_page(active_user, view: str = "summary"):
                 unsafe_allow_html=True,
             )
 
-            # Compact table (readable like the mockup)
-            st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
-            # (Removed redundant metrics table below the KPI tiles)
-
         # Right: donut chart
         with wl_right:
             try:
@@ -2729,17 +2783,10 @@ def dashboard_page(active_user, view: str = "summary"):
                 fig = px.pie(pie_df, names="Outcome", values="Weeks", hole=0.64)
                 fig.update_traces(textinfo="none")
                 fig.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=80),
+                    margin=dict(l=0, r=0, t=0, b=0),
                     height=330,
                     showlegend=True,
-                    legend=dict(
-                        orientation="h",
-                        yanchor="top",
-                        y=-0.20,
-                        xanchor="center",
-                        x=0.5,
-                        title=None,
-                    ),
+                    legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"),
                 )
                 fig.add_annotation(
                     text=f"{win_rate*100:.0f}% Win Rate",
@@ -2770,7 +2817,6 @@ def dashboard_page(active_user, view: str = "summary"):
                 except Exception:
                     st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
 
-        st.markdown("</div>", unsafe_allow_html=True)
 
         # --- Total Profit & Analysis (moved from Option Details) ---
         st.subheader("Total Profit & Analysis")
