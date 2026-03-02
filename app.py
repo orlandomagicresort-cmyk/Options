@@ -2628,92 +2628,54 @@ def dashboard_page(active_user, view: str = "summary"):
                     chips += f"""<div class='dash-legend-item'><span class='dot' style='background:{col}'></span><span>{lab}</span></div>"""
                 return f"""<div class='dash-legend'>{chips}</div>"""
 
-            # Preferred: Plotly donut rendered via components.html (stable inside card). Fallback: pure CSS donut.
-            try:
-                import plotly.graph_objects as go
-                import plotly.io as pio
-                import streamlit.components.v1 as components
+            
+            # Allocation donut (CSS conic-gradient) — reliable on Streamlit Cloud
+            total = float(sum(pie_values)) if pie_values else 0.0
+            parts = []
+            acc = 0.0
+            for v, col in zip(pie_values, pie_colors):
+                frac = (float(v) / total) if total else 0.0
+                a0 = acc * 100.0
+                a1 = (acc + frac) * 100.0
+                parts.append(f"{col} {a0:.3f}% {a1:.3f}%")
+                acc += frac
+            grad = ", ".join(parts) if parts else "rgba(17,24,39,.10) 0% 100%"
 
-                fig = go.Figure(
-                    data=[
-                        go.Pie(
-                            labels=pie_labels,
-                            values=pie_values,
-                            hole=0.70,
-                            sort=False,
-                            direction="clockwise",
-                            marker=dict(colors=pie_colors, line=dict(color="rgba(255,255,255,.65)", width=2)),
-                            textinfo="none",
-                        )
-                    ]
-                )
-                fig.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    height=380,
-                    showlegend=False,
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    autosize=True,
-                )
-                fig.add_annotation(
-                    text=f"<b>Total: {_fmt_money(net_liq_usd)}</b><br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
-                    x=0.5,
-                    y=0.5,
-                    showarrow=False,
-                )
-
-                html = pio.to_html(
-                    fig,
-                    include_plotlyjs="cdn",
-                    full_html=False,
-                    config={"displayModeBar": False, "responsive": True},
-                )
-                components.html(f"<div style='height:390px;width:100%;'>{html}</div>", height=410, scrolling=False)
-                st.markdown(_legend_html(pie_labels, pie_colors), unsafe_allow_html=True)
-
-            except Exception:
-                # CSS donut fallback using conic-gradient
-                total = float(sum(pie_values)) if pie_values else 0.0
-                parts = []
-                acc = 0.0
-                for v, col in zip(pie_values, pie_colors):
-                    frac = (float(v) / total) if total else 0.0
-                    a0 = acc * 100.0
-                    a1 = (acc + frac) * 100.0
-                    parts.append(f"{col} {a0:.3f}% {a1:.3f}%")
-                    acc += frac
-                grad = ", ".join(parts) if parts else "rgba(17,24,39,.08) 0% 100%"
-
-                st.markdown(
-                    f"""
-                    <div class="dash-donut-wrap">
-                      <div class="dash-donut" style="background: conic-gradient({grad});">
-                        <div class="dash-donut-hole">
-                          <div class="dash-donut-center">
-                            <div class="k">Total</div>
-                            <div class="v">{_fmt_money(net_liq_usd)}</div>
-                            <div class="k2">USD</div>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                    {_legend_html(pie_labels, pie_colors)}
-                    """,
-                    unsafe_allow_html=True,
-                )
-
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
-
-        st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
-        st.markdown(summ_html, unsafe_allow_html=True)
-
-        # --- Win/Loss Weeks (from Weekly Snapshots) ---
-        # Always render the section; compute stats best-effort.
-        win_ct = 0
-        loss_ct = 0
-        total_ct = 0
+            center_total = _fmt_money(net_liq_usd)
+            donut_html = f"""
+            <div style="width:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;">
+              <div style="
+                   width:min(360px, 100%);
+                   aspect-ratio:1/1;
+                   border-radius:999px;
+                   background: conic-gradient({grad});
+                   position:relative;
+                   box-shadow: 0 18px 40px rgba(2,6,23,.10);
+                   border: 1px solid rgba(17,24,39,.08);
+                   ">
+                <div style="
+                     position:absolute;inset:18%;
+                     border-radius:999px;
+                     background: rgba(255,255,255,.92);
+                     backdrop-filter: blur(10px);
+                     display:flex;flex-direction:column;
+                     align-items:center;justify-content:center;
+                     text-align:center;
+                     border: 1px solid rgba(17,24,39,.08);
+                     ">
+                  <div style="font-weight:800;font-size:18px;line-height:1.15;color:rgba(17,24,39,1);">
+                    Total: {center_total}
+                  </div>
+                  <div style="margin-top:6px;font-size:12px;font-weight:700;color:rgba(17,24,39,.55);letter-spacing:.06em;">
+                    USD
+                  </div>
+                </div>
+              </div>
+              {_legend_html(pie_labels, pie_colors)}
+            </div>
+            """
+            st.markdown(donut_html, unsafe_allow_html=True)
+_ct = 0
         win_avg = 0.0
         loss_avg = 0.0
         _wk_stats_note = None
