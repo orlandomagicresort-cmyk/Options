@@ -2963,20 +2963,20 @@ def dashboard_page(active_user, view: str = "summary"):
                         kpi_leap_usd = float((_q * 100.0 * _px).sum())
 
                     # Total portfolio = table market value + cash (cash is not part of the table).
-                    kpi_cash_itm_usd = float(float(cash_usd or 0.0) + float(itm_liability_usd or 0.0))
+                    kpi_cash_itm_usd = float(float(cash_usd or 0.0) - float(itm_liability_usd or 0.0))
                     kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + kpi_cash_itm_usd)
 
                     cards = [
                         ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
-                        ("Cash & ITM Balance", _fmt_money(float(cash_usd or 0.0) + float(itm_liability_usd or 0.0)), f"{_fmt_money((float(cash_usd or 0.0) + float(itm_liability_usd or 0.0)) * fx)}", "CAD"),
+                        ("Cash & ITM Balance", _fmt_money(float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)), f"{_fmt_money((float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)) * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
                 except Exception:
                     cards = [
                         ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)}", "CAD"),
-                        ("Cash & ITM Balance", _fmt_money(float(cash_usd or 0.0) + float(itm_liability_usd or 0.0)), f"{_fmt_money((float(cash_usd or 0.0) + float(itm_liability_usd or 0.0)) * fx)}", "CAD"),
+                        ("Cash & ITM Balance", _fmt_money(float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)), f"{_fmt_money((float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)) * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
                     ]
     
