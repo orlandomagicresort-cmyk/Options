@@ -2976,7 +2976,7 @@ def dashboard_page(active_user, view: str = "summary"):
                     cards = [
                         ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)}", "CAD"),
-                        ("Cash & ITM Balance", _fmt_money(kpi_cash_itm_usd), f"{_fmt_money(kpi_cash_itm_usd * fx)}", "CAD"),
+                        ("Cash & ITM Balance", _fmt_money(float(cash_usd or 0.0) + float(itm_liability_usd or 0.0)), f"{_fmt_money((float(cash_usd or 0.0) + float(itm_liability_usd or 0.0)) * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
                     ]
     
