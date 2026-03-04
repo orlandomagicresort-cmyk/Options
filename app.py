@@ -196,6 +196,7 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 }
 
 .kpi-sub{ font-size: 12px; font-weight: 700; color: rgba(17,24,39,.55); margin-top: 6px; }
+.kpi-meta{ font-size: 12px; font-weight: 750; color: rgba(17,24,39,.60); margin-top: 8px; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
 .kpi-chip{ display:inline-block; margin-left: 8px; padding: 3px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(17,24,39,.04); font-size: 11px; font-weight: 800; color: rgba(17,24,39,.55); }
 
 /* --- KPI polish (mockup-style) --- */
@@ -3094,7 +3095,7 @@ def dashboard_page(active_user, view: str = "summary"):
                     cards = [
                         ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
-                        ("Cash Balance", _fmt_money(cash_val), f"{_fmt_money(cash_val * fx)}", "CAD"),
+                        ("Cash & ITM Balance", _fmt_money(float(cash_val) + float(itm_val)), f"{_fmt_money((float(cash_val) + float(itm_val)) * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
                     cols = st.columns(4, gap="large")
@@ -3102,6 +3103,9 @@ def dashboard_page(active_user, view: str = "summary"):
                         with cols[i]:
                             icon = ["📈","💡","💵","🧾"][i]
                             accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i]
+                            meta = ""
+                            if i == 2:
+                                meta = f"<div class='kpi-meta'>Cash: {_fmt_money(cash_val)} &nbsp;|&nbsp; ITM: {_fmt_money(itm_val)}</div>"
                             st.markdown(
                                 f"""
                                 <div class="kpi-card {accent}">
@@ -3112,6 +3116,7 @@ def dashboard_page(active_user, view: str = "summary"):
                                       <span class="kpi-pill">CAD</span>
                                       <span class="kpi-cad">{sub}</span>
                                     </div>
+                                    {meta}
                                   </div>
                                   <div class="kpi-right" aria-hidden="true">
                                     <div class="kpi-watermark">{icon}</div>
