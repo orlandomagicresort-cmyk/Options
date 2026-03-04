@@ -3104,8 +3104,6 @@ def dashboard_page(active_user, view: str = "summary"):
                             icon = ["📈","💡","💵","🧾"][i]
                             accent = ["kpi-accent-stock","kpi-accent-leap","kpi-accent-cash","kpi-accent-total"][i]
                             meta = ""
-                            if i == 2:
-                                meta = f"<div class='kpi-meta'>Cash: {_fmt_money(cash_val)} &nbsp;|&nbsp; ITM: {_fmt_money(itm_val)}</div>"
                             st.markdown(
                                 f"""
                                 <div class="kpi-card {accent}">
