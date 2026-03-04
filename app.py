@@ -196,7 +196,6 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 }
 
 .kpi-sub{ font-size: 12px; font-weight: 700; color: rgba(17,24,39,.55); margin-top: 6px; }
-.kpi-meta{ font-size: 12px; font-weight: 750; color: rgba(17,24,39,.60); margin-top: 8px; white-space: nowrap; overflow:hidden; text-overflow: ellipsis; }
 .kpi-chip{ display:inline-block; margin-left: 8px; padding: 3px 10px; border-radius: 999px; border:1px solid var(--border); background: rgba(17,24,39,.04); font-size: 11px; font-weight: 800; color: rgba(17,24,39,.55); }
 
 /* --- KPI polish (mockup-style) --- */
@@ -285,6 +284,14 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
   background: radial-gradient(circle at 30% 30%, rgba(99,102,241,.18), rgba(99,102,241,0) 65%);
   filter: blur(2px);
 }
+
+.dash-card-tight{
+  padding: 0 !important;
+}
+.dash-card-tight:before{
+  display:none !important;
+  content:none !important;
+}
 .dash-kpi-title{ font-weight:900; color: rgba(17,24,39,.72); letter-spacing:.2px; font-size:14px; }
 .dash-kpi-value{ font-weight:950; font-size:38px; line-height:1.05; margin-top:10px; color: rgba(17,24,39,.96); }
 .dash-kpi-sub{ display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:12px; color: rgba(17,24,39,.68); font-weight:800; }
@@ -372,6 +379,74 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 .dash-mini .t{ font-weight: 900; color: rgba(17,24,39,.68); font-size: 12px; }
 .dash-mini .v{ font-weight: 950; font-size: 30px; margin-top:6px; }
 
+
+
+/* --- Win/Loss Analysis (mockup-like) --- */
+.wl-grid{
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.wl-tile{
+  background: rgba(255,255,255,.58);
+  border: 1px solid rgba(255,255,255,.55);
+  box-shadow: 0 14px 34px rgba(2,6,23,.10);
+  border-radius: 18px;
+  padding: 18px 18px 16px 18px;
+  backdrop-filter: blur(10px);
+}
+.wl-tile .k{ font-size: 15px; font-weight: 650; color: rgba(17,24,39,.70); margin-bottom: 8px; }
+.wl-tile .val{ font-size: 48px; font-weight: 800; letter-spacing: -0.02em; color: rgba(17,24,39,1); line-height: 1.05; }
+.wl-tile .val.sm{ font-size: 44px; }
+.wl-arrow{
+  display:inline-flex; align-items:center; justify-content:center;
+  margin-left: 10px; font-size: 20px; font-weight: 900;
+  transform: translateY(-3px);
+}
+.wl-up{ color: rgba(34,197,94,1); }
+.wl-down{ color: rgba(239,68,68,1); }
+
+.wl-donut-card{
+  background: radial-gradient(700px 380px at 35% 25%, rgba(251,191,36,.18), transparent 60%),
+              radial-gradient(700px 380px at 70% 70%, rgba(99,102,241,.14), transparent 60%),
+              rgba(255,255,255,.55);
+  border: 1px solid rgba(255,255,255,.55);
+  box-shadow: 0 18px 42px rgba(2,6,23,.12);
+  border-radius: 22px;
+  padding: 22px 22px 18px 22px;
+  backdrop-filter: blur(12px);
+}
+.wl-donut{
+  width: 360px; height: 360px;
+  margin: 6px auto 10px auto;
+  border-radius: 50%;
+  position: relative;
+  box-shadow: 0 0 0 10px rgba(255,255,255,.25) inset,
+              0 24px 50px rgba(2,6,23,.18);
+}
+.wl-donut::after{
+  content:"";
+  position:absolute; inset: 70px;
+  background: rgba(243,245,249,.80);
+  border-radius: 50%;
+  box-shadow: 0 0 0 10px rgba(255,255,255,.30) inset;
+}
+.wl-center{
+  position:absolute; inset:0;
+  display:flex; flex-direction:column;
+  align-items:center; justify-content:center;
+  z-index: 2;
+  text-align:center;
+}
+.wl-center .big{
+  font-size: 32px; font-weight: 850; letter-spacing: -0.02em;
+}
+.wl-legend{
+  display:flex; justify-content:center; gap: 34px;
+  font-size: 16px; font-weight: 650; color: rgba(17,24,39,.72);
+  margin-top: 8px;
+}
+.wl-dot{ width: 14px; height: 14px; border-radius: 50%; display:inline-block; margin-right: 8px; transform: translateY(2px); }
 
 </style>
         """,
@@ -2539,15 +2614,17 @@ def dashboard_page(active_user, view: str = "summary"):
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
-        # Asset Allocation (match mockup: table left, donut right)
-        alloc_left, alloc_right = st.columns([2.1, 1.2], gap="large")
+        
+        # Asset Allocation (full-width table; chart removed)
+        st.subheader("Asset Allocation")
 
-        # Build allocation values (USD)
+        # Build allocation values (USD) - keep consistent with totals above
         _alloc = [
             ("Stocks", float(stock_usd_v or 0.0)),
             ("LEAP Equity", float(leap_usd_v or 0.0)),
             ("Cash", float(cash_usd_v or 0.0)),
-            ("Short Exposure (ITM)", float(abs(short_liab_usd or 0.0))),
+            # ITM is a liability against portfolio value
+            ("In-The-Money Amount", -float(itm_liability_usd or 0.0)),
         ]
         alloc_df = pd.DataFrame(_alloc, columns=["Asset", "USD"])
         alloc_df["USD"] = pd.to_numeric(alloc_df["USD"], errors="coerce").fillna(0.0)
@@ -2565,110 +2642,49 @@ def dashboard_page(active_user, view: str = "summary"):
         )
 
         def _td_class(v: float) -> str:
-            try:
-                v = float(v)
-            except Exception:
-                v = 0.0
             if v < 0:
-                return "num neg"
+                return "neg"
             if v > 0:
-                return "num pos"
+                return "pos"
             return "num"
 
-        with alloc_left:
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Asset Allocation</div>", unsafe_allow_html=True)
+        # Table card (no decorative top bar)
+        st.markdown("<div class='dash-card dash-card-tight'>", unsafe_allow_html=True)
 
-            # HTML table (crisp + readable like mockup)
-            rows_html = ""
-            for _, r in alloc_df.iterrows():
-                usd_v = float(r["USD"] or 0.0)
-                cad_v = float(r["CAD"] or 0.0)
-                rows_html += f"""
-                  <tr>
-                    <td>{str(r['Asset'])}</td>
-                    <td class='{_td_class(usd_v)}'>{_fmt_money(usd_v)}</td>
-                    <td class='{_td_class(cad_v)}'>CA$ {_fmt_money(cad_v).replace('$','')}</td>
-                  </tr>
-                """
+        rows_html = ""
+        for _, r in alloc_df.iterrows():
+            usd_v = float(r["USD"] or 0.0)
+            cad_v = float(r["CAD"] or 0.0)
+            rows_html += f"""
+              <tr>
+                <td>{str(r['Asset'])}</td>
+                <td class='{_td_class(usd_v)}'>{_fmt_money(usd_v)}</td>
+                <td class='{_td_class(cad_v)}'>CA$ {_fmt_money(cad_v).replace('$','')}</td>
+              </tr>
+            """
 
-            st.markdown(
-                f"""
-                <table class="dash-table">
-                  <thead>
-                    <tr>
-                      <th>Asset</th>
-                      <th class="num">USD</th>
-                      <th class="num">CAD $</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rows_html}
-                  </tbody>
-                </table>
-                """,
-                unsafe_allow_html=True,
-            )
-            st.markdown("</div>", unsafe_allow_html=True)
-
-        with alloc_right:
-            # Donut (allocation)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Allocation</div>", unsafe_allow_html=True)
-            try:
-                import plotly.express as px
-
-                pie_df = alloc_df.iloc[:-1].copy()
-                # Keep cash negative values visible as absolute size but label still cash
-                pie_df["USD_abs"] = pie_df["USD"].abs()
-
-                fig = px.pie(pie_df, names="Asset", values="USD_abs", hole=0.64)
-                fig.update_traces(textinfo="none")
-                fig.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    height=300,
-                    showlegend=True,
-                    legend=dict(orientation="v", y=0.5, yanchor="middle", x=1.02, xanchor="left"),
-                )
-                # Center annotation
-                fig.add_annotation(
-                    text=f"Total: {_fmt_money(net_liq_usd)}<br><span style='font-size:12px;color:rgba(17,24,39,.62);'>USD</span>",
-                    x=0.5,
-                    y=0.5,
-                    showarrow=False,
-                    font=dict(size=16),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception:
-                st.info("Allocation chart unavailable.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
-            # Equity trend (kept from previous UI)
-            st.markdown("<div class='dash-card'><div class='dash-section-title'>Equity Trend</div>", unsafe_allow_html=True)
-            try:
-                hdf = hist.copy() if hist is not None else pd.DataFrame()
-                if not hdf.empty and "snapshot_date" in hdf.columns and "total_equity" in hdf.columns:
-                    hdf["snapshot_date"] = pd.to_datetime(hdf["snapshot_date"], errors="coerce")
-                    hdf["total_equity"] = pd.to_numeric(hdf["total_equity"], errors="coerce")
-                    hdf = hdf.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date")
-                if hdf is None or hdf.empty:
-                    st.info("No equity history yet.")
-                else:
-                    try:
-                        import plotly.express as px
-                        fig2 = px.line(hdf, x="snapshot_date", y="total_equity")
-                        fig2.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=240, showlegend=False)
-                        fig2.update_xaxes(title=None)
-                        fig2.update_yaxes(title=None)
-                        st.plotly_chart(fig2, use_container_width=True)
-                    except Exception:
-                        st.line_chart(hdf.set_index("snapshot_date")["total_equity"])
-            except Exception:
-                st.info("No equity history yet.")
-            st.markdown("</div>", unsafe_allow_html=True)
-
+        st.markdown(
+            f"""
+            <table class="dash-table">
+              <thead>
+                <tr>
+                  <th>Asset</th>
+                  <th class="num">USD</th>
+                  <th class="num">CAD $</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows_html}
+              </tbody>
+            </table>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<div style='height:18px'></div>", unsafe_allow_html=True)
 
-        st.subheader("Performance Summary (Excluding Deposits/Withdrawals)")
+        # Performance Summary (Excluding Deposits/Withdrawals)")
         st.markdown(summ_html, unsafe_allow_html=True)
 
         # --- Win/Loss Weeks (from Weekly Snapshots) ---
@@ -2743,110 +2759,65 @@ def dashboard_page(active_user, view: str = "summary"):
         except Exception:
             _wk_stats_note = "Win/Loss chart unavailable (an error occurred while computing weekly stats)."
 
+        win_rate = (float(win_ct) / float(total_ct)) if total_ct else 0.0
+
         # Render (polished UI)
         
         st.subheader("Win/Loss Analysis")
 
-        # Polished container like the mockup
-        st.markdown("<div class='dash-card'>", unsafe_allow_html=True)
-
         if _wk_stats_note:
             st.info(_wk_stats_note)
 
-        wl_left, wl_right = st.columns([1.35, 1], gap="large")
+        wl_left, wl_right = st.columns([1.05, 1], gap="large")
 
-        # Left: small summary table + KPI tiles
+        # Left: KPI tiles (2x3) like the mockup
         with wl_left:
-            # KPI tiles
+            arrow_win = "<span class='wl-arrow wl-up'>▲</span>" if win_avg >= 0 else "<span class='wl-arrow wl-down'>▼</span>"
+            arrow_loss = "<span class='wl-arrow wl-up'>▲</span>" if loss_avg >= 0 else "<span class='wl-arrow wl-down'>▼</span>"
+
             st.markdown(
                 f"""
-                <div class="dash-mini-grid">
-                  <div class="dash-mini"><div class="t">Winning Weeks</div><div class="v">{int(win_ct)}</div></div>
-                  <div class="dash-mini"><div class="t">Losing Weeks</div><div class="v">{int(loss_ct)}</div></div>
-                  <div class="dash-mini"><div class="t">Avg loss return</div><div class="v">{_fmt_pct(loss_avg)}</div></div>
-                </div>
-                <div style="height:12px;"></div>
-                <div class="dash-mini-grid" style="grid-template-columns: repeat(3, 1fr);">
-                  <div class="dash-mini"><div class="t">Avg win return</div><div class="v">{_fmt_pct(win_avg)}</div></div>
-                  <div class="dash-mini"><div class="t">Win Rate</div><div class="v">{_fmt_pct(win_rate)}</div></div>
-                  <div class="dash-mini"><div class="t">Weeks tracked</div><div class="v">{int(total_ct)}</div></div>
+                <div class="wl-grid">
+                  <div class="wl-tile"><div class="k">Winning Weeks</div><div class="val">{int(win_ct)}</div></div>
+                  <div class="wl-tile"><div class="k">Losing Weeks</div><div class="val">{int(loss_ct)}</div></div>
+
+                  <div class="wl-tile"><div class="k">Avg win return</div><div class="val sm">{_fmt_pct(win_avg)} {arrow_win}</div></div>
+                  <div class="wl-tile"><div class="k">Avg loss return</div><div class="val sm">{_fmt_pct(loss_avg)} {arrow_loss}</div></div>
+
+                  <div class="wl-tile"><div class="k">Win Rate</div><div class="val sm">{_fmt_pct(win_rate)}</div></div>
+                  <div class="wl-tile"><div class="k">Weeks Tracked</div><div class="val">{int(total_ct)}</div></div>
                 </div>
                 """,
                 unsafe_allow_html=True,
             )
 
-            # Compact table (readable like the mockup)
-            st.markdown("<div style='height:14px;'></div>", unsafe_allow_html=True)
-            table_rows = [
-                ("Winning Weeks", int(win_ct)),
-                ("Losing Weeks", int(loss_ct)),
-                ("Win Rate", _fmt_pct(win_rate)),
-                ("Avg Win Return", _fmt_pct(win_avg)),
-                ("Avg Loss Return", _fmt_pct(loss_avg)),
-            ]
-            tr_html = "".join([f"<tr><td>{k}</td><td class='num'>{v}</td></tr>" for k, v in table_rows])
-            st.markdown(
-                f"""
-                <table class="dash-table">
-                  <thead>
-                    <tr>
-                      <th>Metric</th>
-                      <th class="num">Value</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {tr_html}
-                  </tbody>
-                </table>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        # Right: donut chart
+        # Right: donut (CSS, reliable on Streamlit Cloud) + legend below
         with wl_right:
-            try:
-                import plotly.express as px
-                pie_df = pd.DataFrame({"Outcome": ["Wins", "Losses"], "Weeks": [int(win_ct), int(loss_ct)]})
-                if int(pie_df["Weeks"].sum()) == 0:
-                    pie_df["Weeks"] = [1, 1]
-                fig = px.pie(pie_df, names="Outcome", values="Weeks", hole=0.64)
-                fig.update_traces(textinfo="none")
-                fig.update_layout(
-                    margin=dict(l=0, r=0, t=0, b=0),
-                    height=330,
-                    showlegend=True,
-                    legend=dict(orientation="h", y=-0.08, x=0.5, xanchor="center"),
-                )
-                fig.add_annotation(
-                    text=f"{win_rate*100:.0f}% Win Rate",
-                    x=0.5,
-                    y=0.5,
-                    showarrow=False,
-                    font=dict(size=18),
-                )
-                st.plotly_chart(fig, use_container_width=True)
-            except Exception:
-                try:
-                    pie_df = pd.DataFrame({"Outcome": ["Wins", "Losses"], "Weeks": [int(win_ct), int(loss_ct)]})
-                    arc = (
-                        alt.Chart(pie_df)
-                        .mark_arc(innerRadius=95, outerRadius=165, cornerRadius=10)
-                        .encode(
-                            theta=alt.Theta(field="Weeks", type="quantitative", stack=True),
-                            color=alt.Color(field="Outcome", type="nominal", legend=alt.Legend(orient="bottom", title=None)),
-                        )
-                        .properties(height=330)
-                    )
-                    center = (
-                        alt.Chart(pd.DataFrame({"t": [0]}))
-                        .mark_text(size=24, fontWeight="bold", color="black")
-                        .encode(text=alt.value(f"{win_rate*100:.0f}% Win Rate"))
-                    )
-                    st.altair_chart(arc + center, use_container_width=True)
-                except Exception:
-                    st.write(f"Wins: {win_ct}  |  Losses: {loss_ct}")
+            wins_color = "#f59e0b"     # amber
+            losses_color = "#2563eb"   # blue
+            wins_pct = (float(win_ct) / float(total_ct) * 100.0) if total_ct else 0.0
+            wins_pct = max(0.0, min(100.0, wins_pct))
+            win_rate_label = f"{wins_pct:.0f}% Win Rate"
 
-        st.markdown("</div>", unsafe_allow_html=True)
+            donut_bg = f"conic-gradient({wins_color} 0 {wins_pct:.4f}%, {losses_color} {wins_pct:.4f}% 100%)"
+
+            st.markdown(
+                f"""
+                <div class="wl-donut-card">
+                  <div class="wl-donut" style="background:{donut_bg};">
+                    <div class="wl-center">
+                      <div class="big">{win_rate_label}</div>
+                    </div>
+                  </div>
+
+                  <div class="wl-legend">
+                    <div><span class="wl-dot" style="background:{losses_color};"></span>Losses</div>
+                    <div><span class="wl-dot" style="background:{wins_color};"></span>Wins</div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         # --- Total Profit & Analysis (moved from Option Details) ---
         st.subheader("Total Profit & Analysis")
@@ -2964,20 +2935,19 @@ def dashboard_page(active_user, view: str = "summary"):
                         kpi_leap_usd = float((_q * 100.0 * _px).sum())
 
                     # Total portfolio = table market value + cash (cash is not part of the table).
-                    kpi_cash_itm_usd = float(float(cash_usd or 0.0) - float(itm_liability_usd or 0.0))
-                    kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + kpi_cash_itm_usd)
+                    kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + float(cash_usd or 0.0))
 
                     cards = [
                         ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
-                        ("Cash & ITM Balance", _fmt_money(float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)), f"{_fmt_money((float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)) * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
                 except Exception:
                     cards = [
                         ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)}", "CAD"),
-                        ("Cash & ITM Balance", _fmt_money(float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)), f"{_fmt_money((float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)) * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
                     ]
     
@@ -3075,32 +3045,37 @@ def dashboard_page(active_user, view: str = "summary"):
                     base_leap  = float(pd.to_numeric(out.get("LEAP Value", 0), errors="coerce").fillna(0.0).sum())
                     invested_val = float(base_stock + base_leap)
 
-                    # Cash (asset) and ITM (liability) are shown separately and rolled into Total Portfolio.
-                    # IMPORTANT: Stock Value and LEAP Value KPI cards should reflect INVESTED amounts only
-                    # (i.e., they should NOT include any portion of Cash or ITM allocation).
+                    # Cash (asset) and ITM (liability) must be reflected in the *Total* row.
+                    # The Total Holdings table allocates BOTH cash and ITM between Stock vs LEAP columns
+                    # based on their invested weights, so the KPI cards must mirror that allocation.
                     cash_val = float(cash_usd or 0.0)
 
-                    itm_amt = 0.0
                     try:
-                        itm_amt = float(itm_liability_usd or 0.0)
+                        itm_raw = float(itm_liability_usd) if ("itm_liability_usd" in locals() or "itm_liability_usd" in globals()) else 0.0
                     except Exception:
-                        itm_amt = 0.0
+                        itm_raw = 0.0
+                    itm_val = -abs(itm_raw) if itm_raw != 0 else 0.0  # liability (negative)
 
-                    # ITM is a liability: combine into cash so the 4 cards reconcile cleanly.
-                    kpi_cash_itm_usd = float(cash_val - itm_amt)
+                    alloc_denom = invested_val if invested_val else 0.0
+                    w_stock = (float(base_stock) / alloc_denom) if alloc_denom else 0.0
+                    w_leap  = (float(base_leap)  / alloc_denom) if alloc_denom else 0.0
 
-                    kpi_stock_usd = float(base_stock)
-                    kpi_leap_usd  = float(base_leap)
+                    # Allocate cash + ITM into Stock/LEAP columns to match the table TOTAL row
+                    cash_stock = float(cash_val) * w_stock
+                    cash_leap  = float(cash_val) * w_leap
+                    itm_stock  = float(itm_val)  * w_stock
+                    itm_leap   = float(itm_val)  * w_leap
 
-                    # Total Portfolio = invested + (cash - ITM)
-                    kpi_total_usd = float(invested_val + kpi_cash_itm_usd)
+                    kpi_stock_usd = float(base_stock) + cash_stock + itm_stock
+                    kpi_leap_usd  = float(base_leap)  + cash_leap  + itm_leap
 
-
+                    # Total Portfolio should match the Total row's Total Market Value (tickers + cash + ITM)
+                    kpi_total_usd = float(invested_val + float(cash_val) + float(itm_val))
 
                     cards = [
                         ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
-                        ("Cash & ITM Balance", _fmt_money(kpi_cash_itm_usd), f"{_fmt_money(kpi_cash_itm_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_val), f"{_fmt_money(cash_val * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
                     cols = st.columns(4, gap="large")
