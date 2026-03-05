@@ -2658,8 +2658,8 @@ def dashboard_page(active_user, view: str = "summary"):
             rows_html += f"""
               <tr>
                 <td>{str(r['Asset'])}</td>
-                <td class='{_td_class(usd_v)}'>{_fmt_money(usd_v)}</td>
-                <td class='{_td_class(cad_v)}'>CA$ {_fmt_money(cad_v).replace('$','')}</td>
+                <td class='{_td_class(usd_v)}' style="text-align:right;">{_fmt_money(usd_v)}</td>
+                <td class='{_td_class(cad_v)}' style="text-align:right;">CA$ {_fmt_money(cad_v).replace('$','')}</td>
               </tr>
             """
 
@@ -2669,8 +2669,8 @@ def dashboard_page(active_user, view: str = "summary"):
               <thead>
                 <tr>
                   <th>Asset</th>
-                  <th class="num">USD</th>
-                  <th class="num">CAD $</th>
+                  <th class="num" style="text-align:right;">USD</th>
+                  <th class="num" style="text-align:right;">CAD $</th>
                 </tr>
               </thead>
               <tbody>
