@@ -2934,21 +2934,26 @@ def dashboard_page(active_user, view: str = "summary"):
                         _px = pd.to_numeric(leaps_df.get('current_price', leaps_df.get('last_price', 0)), errors='coerce').fillna(0.0)
                         kpi_leap_usd = float((_q * 100.0 * _px).sum())
 
-                    # Total portfolio = table market value + cash (cash is not part of the table).
-                    kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + float(cash_usd or 0.0))
+                    # Cash & ITM Balance = cash reduced by any ITM intrinsic liability (so totals reconcile).
+                    kpi_cash_itm_usd = float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)
+
+                    # Total portfolio = table market value + (cash - ITM).
+                    kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + kpi_cash_itm_usd)
 
                     cards = [
                         ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
-                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
+                        ("Cash & ITM Balance", _fmt_money(kpi_cash_itm_usd), f"{_fmt_money(kpi_cash_itm_usd * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
                 except Exception:
+                    kpi_cash_itm_usd = float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)
+                    kpi_total_usd = float(stock_value_usd + leap_value_usd + kpi_cash_itm_usd)
                     cards = [
                         ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)}", "CAD"),
-                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
-                        ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
+                        ("Cash & ITM Balance", _fmt_money(kpi_cash_itm_usd), f"{_fmt_money(kpi_cash_itm_usd * fx)}", "CAD"),
+                        ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
     
     # (Holdings KPI cards are rendered later using the Total Holdings table totals so they always match.)
