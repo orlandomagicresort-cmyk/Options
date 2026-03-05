@@ -448,6 +448,67 @@ div[data-testid="stHorizontalBlock"] div[data-testid="column"] [data-baseweb="se
 }
 .wl-dot{ width: 14px; height: 14px; border-radius: 50%; display:inline-block; margin-right: 8px; transform: translateY(2px); }
 
+
+/* ---- Top navigation (mockup style) ---- */
+.topnav-shell{
+  position: relative;
+  background: rgba(255,255,255,0.70);
+  border: 1px solid rgba(15, 23, 42, 0.10);
+  box-shadow: 0 16px 48px rgba(15, 23, 42, 0.10);
+  border-radius: 18px;
+  padding: 12px 14px;
+  margin: 0.25rem 0 0.25rem 0;
+  backdrop-filter: blur(10px);
+}
+.topnav-inner{display:flex; align-items:center; gap:14px;}
+.topnav-brand{display:flex; align-items:center; gap:10px; font-weight:900; color:#0f172a; font-size:1.15rem; letter-spacing:-0.02em;}
+.topnav-logo{width:26px;height:26px;border-radius:999px;background: radial-gradient(circle at 30% 30%, #ffe6a6, #d8a52c); box-shadow:0 10px 24px rgba(216,165,44,0.35);}
+.topnav-spacer{flex:1}
+
+/* Tabs (st.radio) styled as nav links w/ underline */
+div[data-testid="stRadio"] div[role="radiogroup"]{
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  gap: 18px !important;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label{
+  border: none !important;
+  border-radius: 0 !important;
+  padding: 10px 6px !important;
+  background: transparent !important;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] label:hover{
+  background: transparent !important;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] input{display:none !important;}
+div[data-testid="stRadio"] div[role="radiogroup"] input + div{
+  color: rgba(15,23,42,0.72) !important;
+  font-weight: 700 !important;
+}
+div[data-testid="stRadio"] div[role="radiogroup"] input:checked + div{
+  color: #0f172a !important;
+  font-weight: 900 !important;
+  border-bottom: 3px solid #2f6fe4 !important;
+  padding-bottom: 7px !important;
+}
+
+/* Make the widget row visually sit inside shell */
+div[data-testid="stHorizontalBlock"]:has(div[data-testid="stRadio"]){
+  margin-top: -58px;
+  padding-top: 6px;
+}
+
+/* Account selector look */
+div[data-testid="stSelectbox"] > div{
+  background: rgba(255,255,255,0.70) !important;
+  border: 1px solid rgba(15, 23, 42, 0.12) !important;
+  border-radius: 999px !important;
+  box-shadow: 0 10px 26px rgba(15,23,42,0.10);
+}
+
 </style>
         """,
         unsafe_allow_html=True,
@@ -6388,120 +6449,98 @@ def main():
     st.sidebar.divider()
     pages = ["Dashboard", "Holdings", "Option Details", "Update LEAP Prices", "Weekly Snapshot", "Cash Management", "Enter Trade", "Ledger", "Import Data", "Profile", "Community", "Settings"]
 
-    # --- Top Navigation (mockup-style; functionality unchanged) ---
+    # --- Top navigation (mockup-style) ---
     u = st.session_state.get("user")
     email = getattr(u, "email", None) if u is not None else None
     if not email and isinstance(u, dict):
         email = u.get("email")
+
     acct_label = st.session_state.get("active_account_label", "My Account")
 
+    # Primary tabs shown in the top bar (others available under "More")
+    primary_tabs = ["Dashboard", "Holdings", "Weekly Snapshot", "Enter Trade", "Settings"]
+    more_tabs = [p for p in pages if p not in primary_tabs]
+
+    # Resolve current page (persisted)
+    current_page = st.session_state.get("_selected_page", "Dashboard")
+    if current_page not in pages:
+        current_page = "Dashboard"
+
+    # Render top bar
     st.markdown(
-        """
-        <style>
-        /* Top nav container */
-        .sp-topnav { 
-            position: sticky; top: 0; z-index: 999;
-            background: rgba(255,255,255,0.75);
-            backdrop-filter: blur(14px);
-            border: 1px solid rgba(18, 24, 40, 0.08);
-            box-shadow: 0 12px 40px rgba(16,24,40,0.10);
-            border-radius: 18px;
-            padding: 10px 14px;
-            margin: 4px 0 18px 0;
-        }
-        .sp-brand { display:flex; align-items:center; gap:10px; font-weight:800; font-size: 22px; color:#0f172a; }
-        .sp-coin { width:22px; height:22px; border-radius: 999px; background: radial-gradient(circle at 30% 30%, #ffd776, #f4b400); box-shadow: inset 0 0 0 2px rgba(0,0,0,0.05);}
-        .sp-right { display:flex; align-items:center; justify-content:flex-end; gap:10px; }
-        .sp-pill { border: 1px solid rgba(18,24,40,0.10); background: rgba(255,255,255,0.7); border-radius: 999px; padding: 8px 12px; font-weight: 700; }
-        /* Style the radio as tabs */
-        div[data-testid="stRadio"] > label { display:none; }
-        div[data-testid="stRadio"] div[role="radiogroup"] { 
-            display:flex; gap: 26px; align-items:center; 
-            padding: 0 6px; 
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label { 
-            margin: 0 !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] > label > div { 
-            background: transparent !important;
-            border: 0 !important;
-            padding: 0 !important;
-        }
-        div[data-testid="stRadio"] div[role="radiogroup"] span { 
-            font-weight: 700;
-            color: rgba(15,23,42,0.78);
-            padding: 10px 4px;
-        }
-        /* Hide radio circles */
-        div[data-testid="stRadio"] div[role="radiogroup"] input { display:none !important; }
-        /* Active tab underline (Streamlit marks checked label with aria-checked) */
-        div[data-testid="stRadio"] div[role="radiogroup"] label[aria-checked="true"] span {
-            color: #0f172a;
-            border-bottom: 3px solid #2f80ed;
-            padding-bottom: 9px;
-        }
-        </style>
-        """,
+        """<div class="topnav-shell">
+              <div class="topnav-inner">
+                <div class="topnav-brand"><span class="topnav-logo"></span><span>Stock Portfolio</span></div>
+                <div class="topnav-spacer"></div>
+              </div>
+            </div>""",
         unsafe_allow_html=True,
     )
 
-    # Accounts for header selector (unchanged behavior)
-    try:
-        accts_for_header = _get_accessible_accounts(u) if u is not None else [{"label": acct_label, "owner_user_id": None, "role": "editor"}]
-        header_labels = [a["label"] for a in accts_for_header] or [acct_label]
-    except Exception:
-        header_labels = [acct_label]
+    # Widgets row (tabs + account) — styled via CSS to sit inside the shell
+    _brand, _tabs, _acct = st.columns([2.2, 6.2, 2.6], vertical_alignment="center")
+    with _brand:
+        # keep empty; brand rendered in shell above (this column preserves alignment)
+        st.markdown("<div style='height:1px'></div>", unsafe_allow_html=True)
 
-    if "account_selector" not in st.session_state:
-        st.session_state["account_selector"] = st.session_state.get("active_account_label", header_labels[0])
-    if st.session_state.get("account_selector") not in header_labels:
-        st.session_state["account_selector"] = header_labels[0]
+    with _tabs:
+        tab_options = primary_tabs + ["More"]
+        default_tab = "More" if current_page in more_tabs else current_page
+        if default_tab not in tab_options:
+            default_tab = "Dashboard"
+        sel_tab = st.radio(
+            "",
+            tab_options,
+            horizontal=True,
+            index=tab_options.index(default_tab),
+            key="_top_nav_tab",
+            label_visibility="collapsed",
+        )
 
-    # Primary tabs shown in the mockup; other pages remain accessible via "More"
-    primary_tabs = ["Dashboard", "Holdings", "Weekly Snapshot", "Enter Trade", "Settings"]
-    secondary_tabs = [p for p in pages if p not in primary_tabs]
-    default_page = st.session_state.get("_selected_page", "Dashboard")
-    if default_page not in pages:
-        default_page = "Dashboard"
-
-    tab_default = default_page if default_page in primary_tabs else "More"
-    if "top_tab_primary" not in st.session_state:
-        st.session_state["top_tab_primary"] = tab_default
-    # Keep state consistent if user navigated via other means
-    st.session_state["top_tab_primary"] = tab_default
-
-    with st.container():
-        st.markdown('<div class="sp-topnav">', unsafe_allow_html=True)
-        _cL, _cM, _cR = st.columns([2.3, 5.7, 3.0], vertical_alignment="center")
-
-        with _cL:
-            st.markdown('<div class="sp-brand"><span class="sp-coin"></span><span>Stock Portfolio</span></div>', unsafe_allow_html=True)
-
-        with _cM:
-            # Add a "More" tab to keep full navigation without clutter
-            primary_plus = primary_tabs + (["More"] if secondary_tabs else [])
-            primary_sel = st.radio(
+        if sel_tab == "More":
+            # Keep access to all other pages without changing app functionality
+            default_more = current_page if current_page in more_tabs else more_tabs[0] if more_tabs else "Dashboard"
+            sel_more = st.selectbox(
                 "",
-                primary_plus,
-                horizontal=True,
-                key="top_tab_primary_radio",
-                index=primary_plus.index(tab_default),
+                more_tabs,
+                index=more_tabs.index(default_more) if default_more in more_tabs else 0,
+                key="_top_nav_more",
                 label_visibility="collapsed",
             )
+            page = sel_more
+        else:
+            page = sel_tab
 
-        with _cR:
-            _r1, _r2 = st.columns([4, 1], vertical_alignment="center")
-            with _r1:
-                sel_hdr = st.selectbox(
-                    "",
-                    header_labels,
-                    index=header_labels.index(st.session_state.get("account_selector")),
-                    key="account_selector",
-                    label_visibility="collapsed",
-                )
-                st.session_state["active_account_label"] = sel_hdr
-            with _r2:
-                if st.button("⎋", key="header_sign_out", help="Sign out"):
+    with _acct:
+        # Account dropdown + quick actions (visual match to mockup)
+        try:
+            accts_for_header = _get_accessible_accounts(u) if u is not None else [{"label": acct_label, "owner_user_id": None, "role": "editor"}]
+            header_labels = [a.get("label", "My Account") for a in accts_for_header] or [acct_label]
+        except Exception:
+            header_labels = [acct_label]
+
+        if "account_selector" not in st.session_state:
+            st.session_state["account_selector"] = st.session_state.get("active_account_label", header_labels[0])
+        if st.session_state.get("account_selector") not in header_labels:
+            st.session_state["account_selector"] = header_labels[0]
+
+        sel_hdr = st.selectbox(
+            "",
+            header_labels,
+            index=header_labels.index(st.session_state.get("account_selector")),
+            key="account_selector",
+            label_visibility="collapsed",
+        )
+        st.session_state["active_account_label"] = sel_hdr
+
+        # Quick menu (popover when available, otherwise expander)
+        menu_label = "My Account"
+        if hasattr(st, "popover"):
+            with st.popover(menu_label):
+                st.button("Notifications", disabled=True)
+                if st.button("Settings", key="topnav_settings"):
+                    page = "Settings"
+                if st.button("Sign out", key="topnav_signout"):
                     try:
                         supabase.auth.sign_out()
                     except Exception:
@@ -6515,32 +6554,38 @@ def main():
                         "active_role",
                         "read_only",
                         "active_account_display_name",
+                        "_selected_page",
+                    ]:
+                        if _k in st.session_state:
+                            del st.session_state[_k]
+                    st.rerun()
+        else:
+            with st.expander(menu_label):
+                st.button("Notifications", disabled=True)
+                if st.button("Settings", key="topnav_settings_exp"):
+                    page = "Settings"
+                if st.button("Sign out", key="topnav_signout_exp"):
+                    try:
+                        supabase.auth.sign_out()
+                    except Exception:
+                        pass
+                    for _k in [
+                        "user",
+                        "access_token",
+                        "active_account_label",
+                        "account_selector",
+                        "active_user_id",
+                        "active_role",
+                        "read_only",
+                        "active_account_display_name",
+                        "_selected_page",
                     ]:
                         if _k in st.session_state:
                             del st.session_state[_k]
                     st.rerun()
 
-        # Secondary menu (only when needed)
-        selected_page = None
-        if primary_sel == "More" and secondary_tabs:
-            # Preserve current page selection if it is secondary
-            sec_default = default_page if default_page in secondary_tabs else secondary_tabs[0]
-            sec_sel = st.selectbox(
-                "",
-                secondary_tabs,
-                index=secondary_tabs.index(sec_default),
-                key="top_tab_secondary",
-                label_visibility="collapsed",
-            )
-            selected_page = sec_sel
-        else:
-            selected_page = primary_sel
-
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # Persist selection
-    page = selected_page
     st.session_state["_selected_page"] = page
+
 
     user = st.session_state.user
     active_user = _set_active_account(user)
