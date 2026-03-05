@@ -2934,26 +2934,21 @@ def dashboard_page(active_user, view: str = "summary"):
                         _px = pd.to_numeric(leaps_df.get('current_price', leaps_df.get('last_price', 0)), errors='coerce').fillna(0.0)
                         kpi_leap_usd = float((_q * 100.0 * _px).sum())
 
-                    # Cash & ITM Balance = cash reduced by any ITM intrinsic liability (so totals reconcile).
-                    kpi_cash_itm_usd = float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)
-
-                    # Total portfolio = table market value + (cash - ITM).
-                    kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + kpi_cash_itm_usd)
+                    # Total portfolio = table market value + cash (cash is not part of the table).
+                    kpi_total_usd = float(kpi_stock_usd + kpi_leap_usd + float(cash_usd or 0.0))
 
                     cards = [
                         ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
-                        ("Cash & ITM Balance", _fmt_money(kpi_cash_itm_usd), f"{_fmt_money(kpi_cash_itm_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
                 except Exception:
-                    kpi_cash_itm_usd = float(cash_usd or 0.0) - float(itm_liability_usd or 0.0)
-                    kpi_total_usd = float(stock_value_usd + leap_value_usd + kpi_cash_itm_usd)
                     cards = [
                         ("Stock Value", _fmt_money(stock_value_usd), f"{_fmt_money(stock_value_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(leap_value_usd), f"{_fmt_money(leap_value_usd * fx)}", "CAD"),
-                        ("Cash & ITM Balance", _fmt_money(kpi_cash_itm_usd), f"{_fmt_money(kpi_cash_itm_usd * fx)}", "CAD"),
-                        ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
+                        ("Cash Balance", _fmt_money(cash_usd), f"{_fmt_money(cash_usd * fx)}", "CAD"),
+                        ("Total Portfolio", _fmt_money(net_liq_usd), f"{_fmt_money(net_liq_usd * fx)}", "CAD"),
                     ]
     
     # (Holdings KPI cards are rendered later using the Total Holdings table totals so they always match.)
@@ -3071,8 +3066,11 @@ def dashboard_page(active_user, view: str = "summary"):
                     itm_stock  = float(itm_val)  * w_stock
                     itm_leap   = float(itm_val)  * w_leap
 
-                    kpi_stock_usd = float(base_stock) + cash_stock + itm_stock
-                    kpi_leap_usd  = float(base_leap)  + cash_leap  + itm_leap
+                    kpi_stock_usd = float(base_stock)
+                    kpi_leap_usd  = float(base_leap)
+
+                    # Cash & ITM Balance combines cash plus ITM intrinsic amount (so the four cards reconcile to Total Portfolio).
+                    kpi_cash_itm_usd = float(cash_val) + float(itm_val)
 
                     # Total Portfolio should match the Total row's Total Market Value (tickers + cash + ITM)
                     kpi_total_usd = float(invested_val + float(cash_val) + float(itm_val))
@@ -3080,7 +3078,7 @@ def dashboard_page(active_user, view: str = "summary"):
                     cards = [
                         ("Stock Value", _fmt_money(kpi_stock_usd), f"{_fmt_money(kpi_stock_usd * fx)}", "CAD"),
                         ("LEAP Value", _fmt_money(kpi_leap_usd), f"{_fmt_money(kpi_leap_usd * fx)}", "CAD"),
-                        ("Cash Balance", _fmt_money(cash_val), f"{_fmt_money(cash_val * fx)}", "CAD"),
+                        ("Cash & ITM Balance", _fmt_money(kpi_cash_itm_usd), f"{_fmt_money(kpi_cash_itm_usd * fx)}", "CAD"),
                         ("Total Portfolio", _fmt_money(kpi_total_usd), f"{_fmt_money(kpi_total_usd * fx)}", "CAD"),
                     ]
                     cols = st.columns(4, gap="large")
