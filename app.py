@@ -2445,6 +2445,107 @@ def dashboard_page(active_user, view: str = "summary"):
         except Exception:
             return None
 
+
+def _rolling_nw_from_weekly_snapshot_pct(n_weeks: int):
+    """Return (profit_usd, pct) for trailing N weeks using the SAME Weekly % logic as the 52W row.
+    Includes the current (unfrozen) week from the last snapshot to today.
+    """
+    try:
+        n_weeks = int(n_weeks or 0)
+        if n_weeks <= 0:
+            return 0.0, 0.0
+
+        hist_df = get_portfolio_history(uid)
+        if hist_df is None or hist_df.empty:
+            return 0.0, 0.0
+
+        hist_df = normalize_columns(hist_df)
+        if "snapshot_date" not in hist_df.columns or "total_equity" not in hist_df.columns:
+            return 0.0, 0.0
+
+        hist_df = hist_df[["snapshot_date", "total_equity"]].copy()
+        hist_df["snapshot_date"] = pd.to_datetime(hist_df["snapshot_date"], errors="coerce")
+        hist_df["total_equity"] = pd.to_numeric(hist_df["total_equity"], errors="coerce")
+        hist_df = hist_df.dropna(subset=["snapshot_date", "total_equity"]).sort_values("snapshot_date", ascending=True)
+
+        if len(hist_df) < 2:
+            return 0.0, 0.0
+
+        # Transactions needed to compute Weekly % (flow-normalized) — USD only (same as 52W)
+        tx_res = supabase.table("transactions").select("transaction_date, amount, type, currency")\
+            .eq("user_id", uid).in_("type", ["DEPOSIT", "WITHDRAWAL"]).execute()
+        tx_df = pd.DataFrame(tx_res.data)
+        if not tx_df.empty:
+            tx_df = normalize_columns(tx_df)
+            tx_df["transaction_date"] = pd.to_datetime(tx_df["transaction_date"], errors="coerce")
+            tx_df["amount"] = pd.to_numeric(tx_df["amount"], errors="coerce")
+            tx_df = tx_df.dropna(subset=["transaction_date", "amount"])
+            if "currency" in tx_df.columns:
+                tx_df = tx_df[tx_df["currency"].astype(str).str.upper() == "USD"]
+        else:
+            tx_df = pd.DataFrame(columns=["transaction_date", "amount", "type", "currency"])
+
+        weekly_rets = []
+        weekly_profits = []
+        for i in range(len(hist_df)):
+            curr_date = hist_df.iloc[i]["snapshot_date"]
+            curr_eq = float(hist_df.iloc[i]["total_equity"])
+
+            if i == 0:
+                prev_date = pd.Timestamp.min
+                prev_eq = 0.0
+            else:
+                prev_date = hist_df.iloc[i-1]["snapshot_date"]
+                prev_eq = float(hist_df.iloc[i-1]["total_equity"])
+
+            net_flow = 0.0
+            if not tx_df.empty:
+                mask = (tx_df["transaction_date"] > prev_date) & (tx_df["transaction_date"] <= curr_date)
+                net_flow = float(tx_df.loc[mask, "amount"].sum())
+
+            base_capital = prev_eq + net_flow
+            weekly_profit = curr_eq - base_capital
+            weekly_ret = (weekly_profit / base_capital) if base_capital else 0.0
+
+            weekly_rets.append(float(weekly_ret))
+            weekly_profits.append(float(weekly_profit))
+
+        # Current (unfrozen) week from last snapshot to today
+        last_date = hist_df.iloc[-1]["snapshot_date"]
+        last_eq = float(hist_df.iloc[-1]["total_equity"])
+        cur_flow = 0.0
+        if not tx_df.empty:
+            mask_cur = tx_df["transaction_date"] > last_date
+            cur_flow = float(tx_df.loc[mask_cur, "amount"].sum())
+
+        cur_base = last_eq + cur_flow
+        cur_profit = float(net_liq_usd) - float(cur_base)
+        cur_ret = (cur_profit / cur_base) if cur_base not in (0, 0.0, None) else 0.0
+
+        # Trailing N weeks INCLUDING current week:
+        # take up to the last (N-1) snapshot weekly returns + current week = N periods
+        end_i = len(hist_df) - 1
+        start_k = max(0, end_i - (n_weeks - 2))
+
+        window_rets = [float(weekly_rets[k]) for k in range(start_k, end_i + 1)]
+        window_rets.append(float(cur_ret))
+
+        prod = 1.0
+        for r in window_rets:
+            if r is None or (isinstance(r, float) and (math.isinf(r) or math.isnan(r))):
+                r = 0.0
+            prod *= (1.0 + float(r))
+        pct_nw = float(prod - 1.0) if window_rets else 0.0
+
+        profit_nw = float(sum(weekly_profits[start_k:end_i + 1])) if (end_i >= start_k) else 0.0
+        profit_nw += float(cur_profit)
+
+        return profit_nw, pct_nw
+
+    except Exception:
+        return 0.0, 0.0
+
+
     _life = _lifetime_compound_from_weekly_snapshot_pct()
 
     if _life is not None:
@@ -2818,6 +2919,31 @@ def dashboard_page(active_user, view: str = "summary"):
                 """,
                 unsafe_allow_html=True,
             )
+        # --- Quarterly Performance (Rolling) ---
+        # Uses the SAME flow-normalized weekly return logic as the Profit/Loss table's 52W row.
+        st.subheader("Quarterly Performance")
+        try:
+            qp_specs = [
+                (13, "13W Rolling"),
+                (26, "26W Rolling"),
+                (39, "39W Rolling"),
+                (52, "52W Rolling"),
+            ]
+            qp_rows = []
+            for n_weeks, lbl in qp_specs:
+                _p, _pct = _rolling_nw_from_weekly_snapshot_pct(n_weeks)
+                _p = float(_p or 0.0)
+                _pct = float(_pct or 0.0)
+                qp_rows.append((lbl, _pct, _p, _p * fx))
+
+            qp_html = "<table class='finance-table'><thead><tr><th>Timeframe</th><th>%</th><th>US$</th><th>CA$</th></tr></thead><tbody>"
+            for lbl, pct, usd, cad in qp_rows:
+                cls = "pos-val" if usd >= 0 else "neg-val"
+                qp_html += f"<tr><td>{lbl}</td><td class='{cls}'>{_fmt_pct(pct)}</td><td class='{cls}'>{_fmt_money(usd)}</td><td class='{cls}'>{_fmt_money(cad)}</td></tr>"
+            qp_html += "</tbody></table>"
+            st.markdown(qp_html, unsafe_allow_html=True)
+        except Exception:
+            st.info("Quarterly Performance unavailable (need more Weekly Snapshots).")
 
         # --- Total Profit & Analysis (moved from Option Details) ---
         st.subheader("Total Profit & Analysis")
